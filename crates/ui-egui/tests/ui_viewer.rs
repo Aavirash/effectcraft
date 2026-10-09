@@ -1533,6 +1533,38 @@ fn handle_drags_snap_to_the_comp_edges() {
     assert!(close(s, [100.0, 100.0]), "{s:?}");
 }
 
+/// Each bounding-box handle shows the resize cursor along the direction it scales, turning with
+/// the layer (#393: every handle showed the north-west / south-east cursor).
+#[test]
+fn handle_cursors_follow_each_handle_and_the_layer_rotation() {
+    use egui::CursorIcon::{ResizeHorizontal as H, ResizeNeSw as NeSw, ResizeNwSe as NwSe, ResizeVertical as V};
+    let mut h = harness();
+    let box_id = h.state().session.active_comp().unwrap().layers[0].id.0;
+    let set = |h: &mut Harness<'_, EffectcraftApp>, path: &str, v: serde_json::Value| {
+        h.state_mut().session.execute("prop.set", json!({"layer": box_id, "path": path, "value": v})).unwrap();
+        h.run_steps(2);
+    };
+    let cursors = |h: &mut Harness<'_, EffectcraftApp>| {
+        (0..8)
+            .map(|i| {
+                let c = rect(h, &format!("viewer.handle.{box_id}.{i}")).center();
+                h.input_mut().events.push(Event::PointerMoved(c));
+                h.run_steps(2);
+                h.output().platform_output.cursor_icon
+            })
+            .collect::<Vec<_>>()
+    };
+    h.state_mut().session.execute("layer.select", json!({"layers": [box_id]})).unwrap();
+    // A wide box: its corners still take the diagonal cursors.
+    set(&mut h, "transform/scale", json!([300, 100, 100]));
+    // Corners clockwise from the top left, then the top, right, bottom and left edges.
+    assert_eq!(cursors(&mut h), [NwSe, NeSw, NwSe, NeSw, V, H, V, H]);
+    set(&mut h, "transform/rotation", json!(90));
+    assert_eq!(cursors(&mut h), [NeSw, NwSe, NeSw, NwSe, H, V, H, V], "turned a quarter");
+    set(&mut h, "transform/rotation", json!(45));
+    assert_eq!(cursors(&mut h), [V, H, V, H, NeSw, NwSe, NeSw, NwSe], "turned an eighth");
+}
+
 /// The arrow keys over the Composition panel nudge the selected layer 1 pixel at the viewer's
 /// magnification (half a comp pixel at 200 %), Shift+arrow 10, one undo step each (#290).
 #[test]

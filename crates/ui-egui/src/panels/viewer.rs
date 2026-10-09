@@ -295,6 +295,32 @@ fn handle_point(b: [f64; 4], handle: usize) -> [f64; 2] {
     }
 }
 
+/// The resize cursor over bounding-box handle `handle` of the on-screen box `sq` (corners
+/// clockwise from the top left, handles as in [`handle_point`]): along the direction the handle
+/// scales, so it turns with the layer, as in After Effects. A corner points between its two
+/// edges (the box's diagonal whatever its proportions), an edge handle across its edge.
+fn handle_cursor(sq: &[Pos2], handle: usize) -> egui::CursorIcon {
+    let at = |k: usize| sq.get(k % 4).copied().unwrap_or(Pos2::ZERO);
+    let dir = if handle < 4 {
+        let c = at(handle);
+        (c - at(handle + 3)).normalized() + (c - at(handle + 1)).normalized()
+    } else {
+        let e = at(handle - 3) - at(handle - 4);
+        vec2(-e.y, e.x)
+    };
+    // Screen y points down: 45° is the south-east diagonal.
+    let a = dir.y.atan2(dir.x).to_degrees().rem_euclid(180.0);
+    if !(22.5..157.5).contains(&a) {
+        egui::CursorIcon::ResizeHorizontal
+    } else if a < 67.5 {
+        egui::CursorIcon::ResizeNwSe
+    } else if a < 112.5 {
+        egui::CursorIcon::ResizeVertical
+    } else {
+        egui::CursorIcon::ResizeNeSw
+    }
+}
+
 /// The scale ratio (x, y) that puts the point grabbed at `start` (relative to the anchor, layer
 /// pixels) under the pointer at `cur`. `uniform` (Shift on a corner) keeps the aspect ratio,
 /// following the pointer along the handle's diagonal. Dragging past the anchor flips the layer,
@@ -748,7 +774,8 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
     }
     // Overlays + interaction.
     let selected = app.session.state.selected_layers.clone();
-    let mut handle_hits: Vec<(LayerId, usize, Pos2)> = Vec::new();
+    // Bounding-box handles: (layer, handle, screen point, its resize cursor).
+    let mut handle_hits: Vec<(LayerId, usize, Pos2, egui::CursorIcon)> = Vec::new();
     let mut vertex_hits: Vec<VertexHit> = Vec::new();
     let mut key_hits: Vec<ov::KeyHit> = Vec::new();
     let mut paths: Vec<ov::PathInfo> = Vec::new();
@@ -815,7 +842,7 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
                 let hr = Rect::from_center_size(hp, vec2(hs, hs));
                 painter.rect_filled(hr, 0.0, col);
                 painter.rect_stroke(hr, 0.0, Stroke::new(1.0, Color32::from_black_alpha(120)), StrokeKind::Outside);
-                handle_hits.push((l.id, i, hp));
+                handle_hits.push((l.id, i, hp, handle_cursor(&sq, i)));
                 app.auto.add(&format!("viewer.handle.{}.{i}", l.id.0), hr, "handle");
             }
             // Anchor point.
@@ -1036,8 +1063,8 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
                     egui::CursorIcon::Move
                 } else if let Some((_, vertical)) = vt::guide_at(app, &comp, &map, hp) {
                     if vertical { egui::CursorIcon::ResizeHorizontal } else { egui::CursorIcon::ResizeVertical }
-                } else if handle_hits.iter().any(|(_, _, h)| h.distance(hp) < HANDLE) {
-                    egui::CursorIcon::ResizeNwSe
+                } else if let Some((.., cursor)) = handle_hits.iter().find(|(_, _, h, _)| h.distance(hp) < HANDLE) {
+                    *cursor
                 } else {
                     egui::CursorIcon::Default
                 }
@@ -1213,7 +1240,7 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
             // far enough to count as a drag it may have left a small handle.
             Tool::Selection => {
                 let cpt = map.to_comp(press);
-                if let Some((lid, hi, _)) = handle_hits.iter().find(|(_, _, h)| h.distance(press) < HANDLE + 2.0).cloned() {
+                if let Some((lid, hi, ..)) = handle_hits.iter().find(|(_, _, h, _)| h.distance(press) < HANDLE + 2.0).cloned() {
                     let layer = comp.layer(lid).cloned();
                     layer.and_then(|layer| {
                         let tr = layer.transform()?;
