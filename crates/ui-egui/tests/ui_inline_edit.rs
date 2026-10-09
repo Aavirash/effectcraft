@@ -127,3 +127,49 @@ fn the_expression_pick_whip_inserts_at_the_cursor_while_editing() {
     whip(&mut h);
     assert_eq!(expr(&h), "transform.rotation");
 }
+
+/// A click at `p` with `modifiers` held.
+fn click_with(h: &mut Harness<'_, EffectcraftApp>, p: Pos2, modifiers: Modifiers) {
+    h.input_mut().events.push(Event::PointerMoved(p));
+    h.input_mut().events.push(Event::ModifiersChanged(modifiers));
+    h.step();
+    h.input_mut().events.push(Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: true, modifiers });
+    h.input_mut().events.push(Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: false, modifiers });
+    h.step();
+    h.input_mut().events.push(Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(3);
+}
+
+/// #370: Ctrl/Cmd-click on the current-time display (the Timeline's or the Composition
+/// panel's) toggles the Time Display Style between Timecode and Frames, one undo step each, as
+/// in After Effects; under the Timeline's display the other style shows.
+#[test]
+fn ctrl_click_on_the_time_display_toggles_timecode_and_frames() {
+    use effectcraft_engine::project::TimeDisplayStyle;
+    let (mut h, _) = harness();
+    h.state_mut().session.execute("time.set", json!({"frame": 30})).unwrap();
+    h.run_steps(2);
+    let shown = |h: &Harness<'_, EffectcraftApp>, id: &str| h.state().auto.find(id).unwrap().label.clone();
+    let style = |h: &Harness<'_, EffectcraftApp>| h.state().session.project.settings.time_display;
+    let undo = h.state().session.history.undo.len();
+    let at = center(&h, "timeline.timecode");
+    click_with(&mut h, at, Modifiers::COMMAND);
+    assert_eq!(style(&h), TimeDisplayStyle::Frames);
+    assert_eq!(shown(&h, "timeline.timecode"), "00030");
+    assert_eq!(h.state().session.history.undo.len(), undo + 1, "one undo step");
+    assert!(!h.ctx.egui_wants_keyboard_input(), "no time entry opened");
+    let at = center(&h, "viewer.timecode");
+    click_with(&mut h, at, Modifiers::COMMAND);
+    assert_eq!(style(&h), TimeDisplayStyle::Timecode);
+    assert_eq!(shown(&h, "timeline.timecode"), "0:00:01:06");
+    // A plain click changes nothing.
+    click_with(&mut h, at, Modifiers::NONE);
+    let at = center(&h, "timeline.timecode");
+    click_with(&mut h, at, Modifiers::NONE);
+    assert_eq!(style(&h), TimeDisplayStyle::Timecode);
+    // Feet + Frames goes to Timecode.
+    h.state_mut().session.execute("file.projectSettings", json!({"timeDisplay": "feet35"})).unwrap();
+    h.run_steps(2);
+    click_with(&mut h, at, Modifiers::COMMAND);
+    assert_eq!(style(&h), TimeDisplayStyle::Timecode);
+}

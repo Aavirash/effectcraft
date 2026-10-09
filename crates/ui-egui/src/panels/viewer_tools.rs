@@ -729,7 +729,9 @@ pub(crate) fn bottom_bar(app: &mut EffectcraftApp, ui: &mut egui::Ui, bar: Rect,
     let g = p.layout_no_wrap(tc, Tokens::mono(12.0), t.timecode);
     let tr = Rect::from_min_size(pos2(x + 4.0, cy - 9.0), g.size() + vec2(8.0, 4.0));
     p.galley(pos2(tr.min.x + 4.0, tr.min.y + 2.0), g, t.timecode);
+    let resp = ui.interact(tr, egui::Id::new("vw-timecode"), Sense::click());
     app.auto.add("viewer.timecode", tr, "Current time");
+    crate::panels::toggle_time_display(app, &resp);
     // Right: render time.
     let ms = app.frames.last_ms.lock().map(|v| *v).unwrap_or(0.0);
     if tr.max.x + 50.0 < bar.max.x {

@@ -1156,9 +1156,16 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
     let tc_rect = Rect::from_min_size(pos2(rect.min.x + 12.0, top + 6.0), vec2(150.0, 24.0));
     let tc_resp = ui.interact(tc_rect, egui::Id::new("tl-timecode"), Sense::click_and_drag());
     p.text(tc_rect.left_center(), Align2::LEFT_CENTER, &tc, Tokens::semibold(16.0), t.timecode);
-    let sub = format!("{:05} ({:.2} fps)", fr.frame_at(time) + app.session.project.settings.frame_start, fr.as_f64());
-    p.text(pos2(tc_rect.min.x, tc_rect.max.y + 8.0), Align2::LEFT_CENTER, sub, Tokens::ui(10.5), t.text_faint);
+    // Under it the other style (frames under timecode, timecode under frames) and the rate.
+    let settings = &app.session.project.settings;
+    let other = if settings.time_display == effectcraft_engine::project::TimeDisplayStyle::Timecode {
+        format!("{:05}", fr.frame_at(time) + settings.frame_start)
+    } else {
+        effectcraft_engine::time::format_timecode_ae(fr.frame_at(time + comp.display_start), fr, false)
+    };
+    p.text(pos2(tc_rect.min.x, tc_rect.max.y + 8.0), Align2::LEFT_CENTER, format!("{other} ({:.2} fps)", fr.as_f64()), Tokens::ui(10.5), t.text_faint);
     app.auto.add("timeline.timecode", tc_rect, &tc);
+    super::toggle_time_display(app, &tc_resp);
     if tc_resp.dragged() {
         let d = tc_resp.drag_delta().x as f64;
         let f = fr.frame_at(time) + (d * 0.5).round() as i64;

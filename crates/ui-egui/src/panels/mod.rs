@@ -84,6 +84,18 @@ pub fn timecode(session: &Session, comp: &Comp, t: Tick) -> String {
     effectcraft_engine::commands::time::display_time(session, comp, t)
 }
 
+/// Ctrl/Cmd-click on a current-time display toggles the project's Time Display Style between
+/// Timecode and Frames, as in After Effects (through Project Settings: one undo step).
+pub(crate) fn toggle_time_display(app: &mut EffectcraftApp, resp: &egui::Response) {
+    if !(resp.clicked() && resp.ctx.input(|i| i.modifiers.command)) {
+        return;
+    }
+    let timecode = app.session.project.settings.time_display == effectcraft_engine::project::TimeDisplayStyle::Timecode;
+    if let Err(e) = app.session.execute("file.projectSettings", serde_json::json!({"timeDisplay": if timecode { "frames" } else { "timecode" }})) {
+        app.ui.status = e.to_string();
+    }
+}
+
 /// Spacebar held outside a text field: the Hand tool (drags pan the viewer and scroll the
 /// Timeline).
 pub(crate) fn space_hand(ctx: &egui::Context) -> bool {
