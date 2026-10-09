@@ -164,6 +164,12 @@ fn pick_whip(s: &mut Session, p: &Value) -> Result<Value> {
     let r = reference(comp, from, target, tu, s.prefs.general.expression_pick_whip_compact).ok_or_else(|| bad("prop.pickWhip", "no such target property"))?;
     let (me, them) = (from.props.find(uid).ok_or(EngineError::NoComp)?, target.props.find(tu).ok_or(EngineError::NoComp)?);
     let (dm, dt) = (dims(from, me), dims(target, them));
+    // Dropped on one of the target's values: that dimension (`position[0]`), as in After Effects.
+    let (r, dt) = match t.get("dimension").and_then(Value::as_u64) {
+        Some(d) if d < dt as u64 => (format!("{r}[{d}]"), 1),
+        Some(d) => return Err(bad("prop.pickWhip", format!("the target has {dt} dimension(s), no dimension {d}"))),
+        None => (r, dt),
+    };
     // While the expression is being edited the reference goes in at the cursor, replacing the
     // selected text (After Effects): `expression` is the text being edited, `range` the
     // selection [start, end] in characters.
@@ -200,7 +206,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Pick Whip (Link Property)",
             [],
             None,
-            "{layer?, path|prop, target: {layer, path|prop}, expression?, range?: [start, end]} → sets an AE reference expression (with `expression`: inserts it there, replacing the characters in `range`, default the end)",
+            "{layer?, path|prop, target: {layer, path|prop, dimension?}, expression?, range?: [start, end]} → sets an AE reference expression (`dimension`: one of the target's values, `position[0]`; with `expression`: inserts it there, replacing the characters in `range`, default the end)",
             has_layers,
             pick_whip
         ),

@@ -128,6 +128,44 @@ fn the_expression_pick_whip_inserts_at_the_cursor_while_editing() {
     assert_eq!(expr(&h), "transform.rotation");
 }
 
+/// #363: dropped on one of a property's values the expression pick whip picks that dimension
+/// (`position[1]`), as in After Effects; on its name, the whole property.
+#[test]
+fn the_expression_pick_whip_picks_the_dimension_it_is_dropped_on() {
+    let (mut h, _) = harness();
+    let (layer, opacity, position, transform) = {
+        let s = &mut h.state_mut().session;
+        let l = s.execute("layer.newSolid", json!({"name": "Plate", "color": "#406080"})).unwrap()["layer"].as_u64().unwrap();
+        s.execute("prop.setExpression", json!({"layer": l, "path": "transform/opacity", "expression": "50"})).unwrap();
+        let tr = s.active_comp().unwrap().layer(effectcraft_engine::project::LayerId(l)).unwrap().props.sub("transform").unwrap().clone();
+        (l, tr.get("opacity").unwrap().uid, tr.get("position").unwrap().uid, tr.uid)
+    };
+    h.state_mut().ui.timeline.open_layers.insert(layer);
+    h.state_mut().ui.timeline.open_groups.insert(transform);
+    h.run_steps(3);
+    let expr = |h: &Harness<'_, EffectcraftApp>| {
+        let comp = h.state().session.active_comp().unwrap();
+        comp.layer(effectcraft_engine::project::LayerId(layer)).unwrap().props.find(opacity).unwrap().expr.as_ref().unwrap().text.clone()
+    };
+    let whip_to = |h: &mut Harness<'_, EffectcraftApp>, target: &str| {
+        let (from, to) = (center(h, &format!("timeline.prop.{opacity}.pickWhip")), center(h, target));
+        h.input_mut().events.push(Event::PointerMoved(from));
+        h.step();
+        h.input_mut().events.push(Event::PointerButton { pos: from, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+        h.step();
+        for k in 1..=8 {
+            h.input_mut().events.push(Event::PointerMoved(from + (to - from) * (k as f32 / 8.0)));
+            h.step();
+        }
+        h.input_mut().events.push(Event::PointerButton { pos: to, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+        h.run_steps(3);
+    };
+    whip_to(&mut h, &format!("timeline.prop.{position}.value.1"));
+    assert_eq!(expr(&h), "transform.position[1]");
+    whip_to(&mut h, &format!("timeline.prop.{position}.name"));
+    assert_eq!(expr(&h), "transform.position[0]", "the whole Position into one value: its first, as before");
+}
+
 /// #362: an expression pick whip held near the bottom or top of the Timeline's layers scrolls
 /// them (After Effects), so a property out of view can be picked.
 #[test]

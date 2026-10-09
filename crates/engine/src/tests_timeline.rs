@@ -482,6 +482,23 @@ fn pick_whip_generates_ae_reference_expressions() {
     assert!(s.execute("prop.pickWhip", json!({"layer": l, "path": "transform/opacity", "target": {"layer": l, "path": "transform/opacity"}})).is_err());
 }
 
+/// #363: dropped on one of the target's values the pick whip picks that dimension
+/// (`position[0]`), as in After Effects; a multi-dimension property follows it on every axis.
+#[test]
+fn pick_whip_picks_one_dimension_of_the_target() {
+    let (mut s, l) = setup();
+    let o = s.execute("layer.newSolid", json!({"name": "Other", "color": "#00ff00"})).unwrap()["layer"].as_u64().unwrap();
+    let whip = |s: &mut Session, path: &str, d: u64| {
+        s.execute("prop.pickWhip", json!({"layer": l, "path": path, "target": {"layer": o, "path": "transform/position", "dimension": d}}))
+    };
+    let r = "thisComp.layer(\"Other\").transform.position";
+    assert_eq!(whip(&mut s, "transform/rotation", 0).unwrap(), json!(format!("{r}[0]")));
+    assert_eq!(whip(&mut s, "transform/scale", 1).unwrap(), json!(format!("temp = {r}[1];\n[temp, temp]")));
+    assert_eq!(prop(&s, l, "transform/scale").expr.unwrap().text, format!("temp = {r}[1];\n[temp, temp]"));
+    // A 2D layer's Position has two.
+    assert!(whip(&mut s, "transform/rotation", 2).is_err());
+}
+
 /// #284: with the expression being edited, the pick whip puts the reference at the cursor,
 /// replacing the selected characters (After Effects), in one undo step.
 #[test]

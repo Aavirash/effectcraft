@@ -1599,6 +1599,8 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
     let outline_empty = ui.interact(outline_rect, egui::Id::new("tl-layer-bg"), Sense::click_and_drag());
     app.auto.add("timeline.layerMarquee", outline_rect, "Drag empty outline to select layers");
     let mut hit_rows: Vec<(Rect, Row)> = vec![];
+    // The value fields of multi-dimension properties (per dimension), for the pick whip.
+    let mut dim_hits: Vec<(u64, Vec<Rect>)> = vec![];
     for (ri, row) in rows.iter().enumerate() {
         // Outline widgets never spill into the time graph (narrow timelines).
         ui.set_clip_rect(left_clip);
@@ -2328,7 +2330,10 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
                 // Value editors.
                 let value = ectx.value(layer, prop);
                 let vx = (cw.switches + 4.0).max(name_x + 120.0);
-                value_editor(app, ui, &lp, layer, prop, &value, pos2(vx, cy), &mut actions);
+                let dims = value_editor(app, ui, &lp, layer, prop, &value, pos2(vx, cy), &mut actions);
+                if !dims.is_empty() {
+                    dim_hits.push((*uid, dims));
+                }
                 ui.set_clip_rect(right_clip);
                 // Expression text row hint.
                 if let Some(e) = prop.expr.as_ref().filter(|e| e.enabled && app.ui.timeline.expr_closed.contains(uid)) {
@@ -2560,6 +2565,10 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
                 }
                 (1, Some((_, Row { layer, kind: RowKind::Prop { uid }, .. }))) if uid != src_prop => {
                     let mut params = json!({"layer": src_layer, "prop": src_prop, "target": {"layer": layer.0, "prop": uid}});
+                    // On one of its values: that dimension (`position[0]`).
+                    if let Some(d) = dim_hits.iter().find(|(u, _)| *u == uid).and_then(|(_, rs)| rs.iter().position(|r| r.contains(ptr))) {
+                        params["target"]["dimension"] = json!(d);
+                    }
                     if let Some((text, [a, b])) = into {
                         // Into the expression being edited, which goes on being edited.
                         params["expression"] = json!(text);
@@ -3281,7 +3290,8 @@ fn constrained(c: &[f64], d: usize, v: f64) -> Vec<f64> {
         .collect()
 }
 
-/// Inline value editor for a property row; pushes `prop.set` actions.
+/// Inline value editor for a property row; pushes `prop.set` actions. Returns the rects of a
+/// multi-dimension value's fields, one per dimension (none for other values).
 fn value_editor(
     app: &mut EffectcraftApp,
     ui: &mut egui::Ui,
@@ -3291,9 +3301,10 @@ fn value_editor(
     value: &Value,
     at: Pos2,
     actions: &mut Vec<(String, serde_json::Value)>,
-) {
+) -> Vec<Rect> {
     let t = app.tokens;
     let uid = prop.uid;
+    let mut dims = vec![];
     let merge = format!("scrub-{uid}");
     let set = |actions: &mut Vec<(String, serde_json::Value)>, v: serde_json::Value| {
         actions.push(("prop.set".into(), json!({"layer": layer.id.0, "prop": uid, "value": v, "merge": merge})))
@@ -3348,6 +3359,7 @@ fn value_editor(
                 let suffix = if pct && d + 1 == n { "%" } else { "" };
                 let (r, nv, _) = widgets::hot_number_at(ui, pos2(x, y), egui::Id::new(("v", uid, d)), c[d], if pct { 0.5 } else { 1.0 }, range, 1, suffix, &t);
                 app.auto.add(&format!("timeline.prop.{uid}.value.{d}"), r, &prop.name);
+                dims.push(r);
                 if let Some(nv) = nv {
                     let mut nc = c.clone();
                     // Alt edits one value of a linked pair.
@@ -3424,6 +3436,7 @@ fn value_editor(
             p.text(pos2(x, at.y), Align2::LEFT_CENTER, s.chars().take(30).collect::<String>(), Tokens::ui(12.0), t.text_dim);
         }
     }
+    dims
 }
 
 #[cfg(test)]
