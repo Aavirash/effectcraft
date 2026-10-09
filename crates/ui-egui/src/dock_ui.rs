@@ -159,7 +159,9 @@ impl EffectcraftApp {
             panels::precomp::navigator(self, &mut child, nav);
             content.min.y = nav.max.y;
         }
-        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(content).id_salt(("panel", p.id())));
+        let mut child = ui.new_child(
+            egui::UiBuilder::new().max_rect(content).id_salt(("panel", p.id())).ui_stack_info(egui::UiStackInfo::default().with_tag(crate::widgets::PANEL_TAG)),
+        );
         child.set_clip_rect(content.intersect(ui.clip_rect()));
         panels::show(self, &mut child, p, content);
         if viewer && !self.ui.start_screen {

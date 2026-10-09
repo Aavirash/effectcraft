@@ -262,6 +262,74 @@ fn the_expression_field_grows_while_editing_and_drags_taller() {
     assert_eq!(h.state().ui.timeline.expr_lines.get(&opacity), Some(&1));
 }
 
+fn key_with(h: &mut Harness<'_, EffectcraftApp>, key: Key, modifiers: Modifiers) {
+    h.input_mut().events.push(Event::ModifiersChanged(modifiers));
+    h.input_mut().events.push(Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers });
+    h.input_mut().events.push(Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers });
+    h.step();
+    h.input_mut().events.push(Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(2);
+}
+
+/// #361: Tab in a value being typed commits it and types in the next value (the next dimension,
+/// then the next property's), Shift+Tab the previous, in the Timeline and in Effect Controls,
+/// as in After Effects. It used to drop the keyboard instead.
+#[test]
+fn tab_commits_a_value_and_moves_to_the_next() {
+    let (mut h, _) = harness();
+    let (layer, transform) = {
+        let s = &mut h.state_mut().session;
+        let l = s.execute("layer.newSolid", json!({"name": "Plate", "color": "#406080"})).unwrap()["layer"].as_u64().unwrap();
+        s.execute("layer.select", json!({"layers": [l]})).unwrap();
+        for fx in ["Point Control", "Slider Control"] {
+            s.execute("effect.apply", json!({"layers": [l], "effect": fx})).unwrap();
+        }
+        let tr = s.active_comp().unwrap().layer(effectcraft_engine::project::LayerId(l)).unwrap().props.sub("transform").unwrap().uid;
+        (l, tr)
+    };
+    h.state_mut().ui.timeline.open_layers.insert(layer);
+    h.state_mut().ui.timeline.open_groups.insert(transform);
+    h.state_mut().show_panel(effectcraft_ui_egui::dock::PanelKind::EffectControls);
+    h.run_steps(3);
+    let props =
+        |h: &Harness<'_, EffectcraftApp>| h.state().session.active_comp().unwrap().layer(effectcraft_engine::project::LayerId(layer)).unwrap().props.clone();
+    let value = |h: &Harness<'_, EffectcraftApp>, path: &str| props(h).prop(path).unwrap().value.components();
+    let uid = |h: &Harness<'_, EffectcraftApp>, path: &str| props(h).prop(path).unwrap().uid;
+    let (position, scale) = (uid(&h, "transform/position"), uid(&h, "transform/scale"));
+    let none = Modifiers::NONE;
+    // Timeline: Position X, Tab, Position Y, Tab, Scale (linked).
+    let p = center(&h, &format!("timeline.prop.{position}.value.0"));
+    click(&mut h, p, 1);
+    type_text(&mut h, "100");
+    key_with(&mut h, Key::Tab, none);
+    type_text(&mut h, "50");
+    key_with(&mut h, Key::Tab, none);
+    type_text(&mut h, "200");
+    key(&mut h, Key::Enter);
+    assert_eq!(value(&h, "transform/position")[..2], [100.0, 50.0]);
+    assert_eq!(value(&h, "transform/scale")[..2], [200.0, 200.0]);
+    assert!(!h.ctx.egui_wants_keyboard_input(), "Enter ends the typing");
+    // Shift+Tab: from Scale X back to Position Y.
+    let p = center(&h, &format!("timeline.prop.{scale}.value.0"));
+    click(&mut h, p, 1);
+    type_text(&mut h, "120");
+    key_with(&mut h, Key::Tab, Modifiers::SHIFT);
+    type_text(&mut h, "60");
+    key(&mut h, Key::Enter);
+    assert_eq!(value(&h, "transform/position")[..2], [100.0, 60.0]);
+    assert_eq!(value(&h, "transform/scale")[..2], [120.0, 120.0]);
+    // Effect Controls: Point Control's Y, Tab, Slider Control's Slider (the next effect).
+    let point = uid(&h, "effects/#1/point");
+    let p = center(&h, &format!("effectControls.prop.{point}.value.1"));
+    click(&mut h, p, 1);
+    type_text(&mut h, "7");
+    key_with(&mut h, Key::Tab, none);
+    type_text(&mut h, "42");
+    key(&mut h, Key::Enter);
+    assert_eq!(value(&h, "effects/#1/point")[1], 7.0);
+    assert_eq!(value(&h, "effects/#2/slider"), [42.0]);
+}
+
 /// A click at `p` with `modifiers` held.
 fn click_with(h: &mut Harness<'_, EffectcraftApp>, p: Pos2, modifiers: Modifiers) {
     h.input_mut().events.push(Event::PointerMoved(p));
