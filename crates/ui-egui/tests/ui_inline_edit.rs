@@ -211,6 +211,57 @@ fn the_pick_whip_scrolls_the_timeline_at_its_edges() {
     h.run_steps(3);
 }
 
+/// #371: the inline expression field grows with the text being typed (it used to keep the
+/// saved text's height until committed), and its bottom edge drags to any height in lines.
+#[test]
+fn the_expression_field_grows_while_editing_and_drags_taller() {
+    let (mut h, _) = harness();
+    let (layer, opacity, transform) = {
+        let s = &mut h.state_mut().session;
+        let l = s.execute("layer.newSolid", json!({"name": "Plate", "color": "#406080"})).unwrap()["layer"].as_u64().unwrap();
+        s.execute("prop.setExpression", json!({"layer": l, "path": "transform/opacity", "expression": "50"})).unwrap();
+        let tr = s.active_comp().unwrap().layer(effectcraft_engine::project::LayerId(l)).unwrap().props.sub("transform").unwrap().clone();
+        (l, tr.get("opacity").unwrap().uid, tr.uid)
+    };
+    h.state_mut().ui.timeline.open_layers.insert(layer);
+    h.state_mut().ui.timeline.open_groups.insert(transform);
+    h.run_steps(3);
+    let id = format!("timeline.prop.{opacity}.expression");
+    let height = |h: &Harness<'_, EffectcraftApp>| h.state().auto.find(&id).unwrap().rect[3];
+    let line = h.state().tokens.row_h;
+    let one = height(&h);
+    let p = center(&h, &id);
+    click(&mut h, p, 1);
+    key(&mut h, Key::End);
+    for more in ["+ 1", "+ 2"] {
+        key(&mut h, Key::Enter);
+        type_text(&mut h, more);
+    }
+    h.run_steps(2);
+    assert!((height(&h) - one - 2.0 * line).abs() < 0.5, "three lines while editing: {} from {one}", height(&h));
+    // Its bottom edge: dragged down 4 lines, then up past the top (one line).
+    let edge_id = format!("timeline.prop.{opacity}.expressionHeight");
+    let drag_edge = |h: &mut Harness<'_, EffectcraftApp>, dy: f32| {
+        let edge = center(h, &edge_id);
+        let to = edge + egui::vec2(0.0, dy);
+        h.input_mut().events.push(Event::PointerMoved(edge));
+        h.step();
+        h.input_mut().events.push(Event::PointerButton { pos: edge, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+        h.step();
+        for k in 1..=6 {
+            h.input_mut().events.push(Event::PointerMoved(edge + (to - edge) * (k as f32 / 6.0)));
+            h.step();
+        }
+        h.input_mut().events.push(Event::PointerButton { pos: to, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+        h.run_steps(3);
+    };
+    drag_edge(&mut h, 4.0 * line);
+    assert_eq!(h.state().ui.timeline.expr_lines.get(&opacity), Some(&7));
+    assert!((height(&h) - one - 6.0 * line).abs() < 0.5, "{}", height(&h));
+    drag_edge(&mut h, -20.0 * line);
+    assert_eq!(h.state().ui.timeline.expr_lines.get(&opacity), Some(&1));
+}
+
 /// A click at `p` with `modifiers` held.
 fn click_with(h: &mut Harness<'_, EffectcraftApp>, p: Pos2, modifiers: Modifiers) {
     h.input_mut().events.push(Event::PointerMoved(p));

@@ -413,6 +413,10 @@ pub struct TimelineState {
     /// Properties whose inline expression editor is collapsed.
     #[serde(default)]
     pub expr_closed: BTreeSet<u64>,
+    /// Inline expression editors given a height (in lines) by dragging their bottom edge;
+    /// the others grow with their text, up to 8 lines.
+    #[serde(default)]
+    pub expr_lines: BTreeMap<u64, usize>,
     /// Scale and Mask Feather properties whose chain link (Constrain Proportions, on by default)
     /// was turned off.
     #[serde(default)]
@@ -462,6 +466,7 @@ impl Default for TimelineState {
             graph_reference: false,
             graph_transform_box: true,
             expr_closed: BTreeSet::new(),
+            expr_lines: BTreeMap::new(),
             unlinked: BTreeSet::new(),
             columns: default_tl_columns(),
             source_name: false,

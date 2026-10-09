@@ -93,14 +93,26 @@ fn stripes(p: &egui::Painter, r: Rect, label: Color32) {
 /// Row height (expression editors grow with their text).
 fn row_height(row: &Row, rh: f32) -> f32 {
     match row.kind {
-        RowKind::Expr { lines, .. } => rh * lines.clamp(1, 8) as f32 + 6.0,
+        RowKind::Expr { lines, .. } => rh * lines as f32 + 6.0,
         RowKind::Waveform { .. } => rh * 3.0,
         _ => rh,
     }
 }
 
-/// Insert an expression editor row after every property that has an expression.
-fn with_expr_rows(rows: Vec<Row>, comp: &Comp, closed: &std::collections::BTreeSet<u64>) -> Vec<Row> {
+/// An inline expression editor grows with its text up to this many lines (After Effects)...
+const EXPR_AUTO_LINES: usize = 8;
+/// ...and its bottom edge drags it up to this many.
+const EXPR_MAX_LINES: usize = 100;
+
+/// The text of the expression being edited (while its editor has the keyboard).
+fn expr_buf_id(prop: u64) -> egui::Id {
+    egui::Id::new(("expr-buf", prop))
+}
+
+/// Insert an expression editor row after every property that has an expression: as many lines
+/// as its text (the text being edited, so it grows while typing), up to 8, or the height its
+/// bottom edge was dragged to.
+fn with_expr_rows(rows: Vec<Row>, comp: &Comp, tl: &crate::state::TimelineState, ctx: &egui::Context) -> Vec<Row> {
     let mut out = Vec::with_capacity(rows.len());
     // Rows come grouped by layer: look each layer up once (a linear search per property row
     // made twirling open many layers of a big comp quadratic).
@@ -108,15 +120,17 @@ fn with_expr_rows(rows: Vec<Row>, comp: &Comp, closed: &std::collections::BTreeS
     for r in rows {
         let mut extra = None;
         if let RowKind::Prop { uid } = r.kind
-            && !closed.contains(&uid)
+            && !tl.expr_closed.contains(&uid)
         {
             if cur.is_none_or(|l| l.id != r.layer) {
                 cur = comp.layer(r.layer);
             }
-            extra = cur.and_then(|l| l.props.find(uid)).and_then(|p| p.expr.as_ref()).map(|e| Row {
-                layer: r.layer,
-                depth: r.depth,
-                kind: RowKind::Expr { uid, lines: e.text.lines().count().max(1) },
+            extra = cur.and_then(|l| l.props.find(uid)).and_then(|p| p.expr.as_ref()).map(|e| {
+                let lines = tl.expr_lines.get(&uid).copied().unwrap_or_else(|| {
+                    let edited = ctx.data(|d| d.get_temp::<String>(expr_buf_id(uid)));
+                    edited.as_deref().unwrap_or(&e.text).split('\n').count().min(EXPR_AUTO_LINES)
+                });
+                Row { layer: r.layer, depth: r.depth, kind: RowKind::Expr { uid, lines: lines.clamp(1, EXPR_MAX_LINES) } }
             });
         }
         out.push(r);
@@ -1542,7 +1556,7 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
     let _ = cw.end;
 
     // ---- rows.
-    let rows = with_expr_rows(build_rows(app, &comp), &comp, &app.ui.timeline.expr_closed);
+    let rows = with_expr_rows(build_rows(app, &comp), &comp, &app.ui.timeline, &ctx);
     let rh = t.row_h;
     let total_h: f32 = rows.iter().map(|r| row_height(r, rh)).sum();
     let max_scroll = (total_h - rows_rect.height() + rh).max(0.0);
@@ -2104,6 +2118,7 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
             RowKind::Expr { uid, lines } => {
                 let Some(prop) = layer.props.find(*uid) else { continue };
                 let Some(ex) = prop.expr.clone() else { continue };
+                let (buf_id, edit_id) = (expr_buf_id(*uid), egui::Id::new(("expr-edit", uid)));
                 lp.rect_filled(left, 0.0, t.row_alt);
                 let indent = cw.name + 6.0 + 14.0 * row.depth as f32;
                 lp.text(pos2(indent + 12.0, cy), Align2::LEFT_CENTER, "Expression:", Tokens::ui(11.5), t.text_dim);
@@ -2132,9 +2147,9 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
                     // Pressed while the expression is being edited (its text is buffered while
                     // the editor has the focus): the reference will go in at the cursor,
                     // replacing the selection (#284).
-                    let into = ctx.data(|d| d.get_temp::<String>(egui::Id::new(("expr-buf", uid)))).map(|buf| {
+                    let into = ctx.data(|d| d.get_temp::<String>(buf_id)).map(|buf| {
                         let n = buf.chars().count();
-                        let sel = egui::text_edit::TextEditState::load(&ctx, egui::Id::new(("expr-edit", uid)))
+                        let sel = egui::text_edit::TextEditState::load(&ctx, edit_id)
                             .and_then(|st| st.cursor.char_range())
                             .map_or([n, n], |r| [r.primary.index.0.min(r.secondary.index.0).min(n), r.primary.index.0.max(r.secondary.index.0).min(n)]);
                         (buf, sel)
@@ -2181,8 +2196,6 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
                     }
                 });
                 if let Some(text) = picked {
-                    let edit_id = egui::Id::new(("expr-edit", uid));
-                    let buf_id = egui::Id::new(("expr-buf", uid));
                     let cur: String = ctx.data(|d| d.get_temp(buf_id)).unwrap_or_else(|| ex.text.clone());
                     let at = egui::text_edit::TextEditState::load(&ctx, edit_id)
                         .and_then(|st| st.cursor.char_range())
@@ -2199,8 +2212,6 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
                 ui.set_clip_rect(right_clip);
                 gp.rect_filled(Rect::from_min_max(pos2(graph_x0, r.min.y), r.max), 0.0, Color32::from_rgb(0x1a, 0x1a, 0x1a));
                 let er = Rect::from_min_max(pos2(graph_x0 + 8.0, r.min.y + 3.0), pos2(rect.max.x - 14.0, r.max.y - 3.0));
-                let buf_id = egui::Id::new(("expr-buf", uid));
-                let edit_id = egui::Id::new(("expr-edit", uid));
                 let mut buf: String = ctx.data(|d| d.get_temp(buf_id)).unwrap_or_else(|| ex.text.clone());
                 if let Some(after) = ctx.data_mut(|d| d.remove_temp::<usize>(expr_refocus_id(*uid))) {
                     // A pick whip just put a reference in: editing goes on in the new text,
@@ -2213,8 +2224,19 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
                 }
                 // Settings ▸ Scripting & Expressions ▸ Expressions Editor.
                 let sp = app.session.prefs.scripting.clone();
-                let resp = super::expr_editor::editor(ui, edit_id, &mut buf, er, &sp, if ex.enabled { expr_col } else { t.text_dim }, (*lines).clamp(1, 8), &t);
+                let resp = super::expr_editor::editor(ui, edit_id, &mut buf, er, &sp, if ex.enabled { expr_col } else { t.text_dim }, *lines, &t);
                 app.auto.add(&format!("timeline.prop.{uid}.expression"), er, &prop.name);
+                // Its bottom edge drags to set its height in whole lines, as in After Effects.
+                let edge = Rect::from_min_max(pos2(er.min.x, r.max.y - 4.0), pos2(er.max.x, r.max.y));
+                let eresp = ui.interact(edge, egui::Id::new(("expr-edge", uid)), Sense::drag());
+                app.auto.add(&format!("timeline.prop.{uid}.expressionHeight"), edge, "Expression field height");
+                if eresp.hovered() || eresp.dragged() {
+                    ctx.set_cursor_icon(egui::CursorIcon::ResizeVertical);
+                }
+                if let Some(py) = eresp.interact_pointer_pos().filter(|_| eresp.dragged()).map(|p| p.y) {
+                    let n = ((py - r.min.y - 6.0) / rh).round().clamp(1.0, EXPR_MAX_LINES as f32);
+                    app.ui.timeline.expr_lines.insert(*uid, n as usize);
+                }
                 let commit = resp.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter) && (i.modifiers.command || i.modifiers.ctrl));
                 if commit {
                     resp.surrender_focus();
