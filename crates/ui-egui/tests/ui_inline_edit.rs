@@ -128,6 +128,51 @@ fn the_expression_pick_whip_inserts_at_the_cursor_while_editing() {
     assert_eq!(expr(&h), "transform.rotation");
 }
 
+/// #362: an expression pick whip held near the bottom or top of the Timeline's layers scrolls
+/// them (After Effects), so a property out of view can be picked.
+#[test]
+fn the_pick_whip_scrolls_the_timeline_at_its_edges() {
+    let (mut h, _) = harness();
+    let (top, opacity, transform) = {
+        let s = &mut h.state_mut().session;
+        for i in 0..40 {
+            s.execute("layer.newSolid", json!({"name": format!("Layer {i}"), "color": "#406080"})).unwrap();
+        }
+        let l = s.execute("layer.newSolid", json!({"name": "Top", "color": "#406080"})).unwrap()["layer"].as_u64().unwrap();
+        s.execute("prop.setExpression", json!({"layer": l, "path": "transform/opacity", "expression": "50"})).unwrap();
+        let tr = s.active_comp().unwrap().layer(effectcraft_engine::project::LayerId(l)).unwrap().props.sub("transform").unwrap().clone();
+        (l, tr.get("opacity").unwrap().uid, tr.uid)
+    };
+    h.state_mut().ui.timeline.open_layers.insert(top);
+    h.state_mut().ui.timeline.open_groups.insert(transform);
+    h.run_steps(3);
+    let scroll = |h: &Harness<'_, EffectcraftApp>| h.state().ui.timeline.scroll_y;
+    let rows = h.state().auto.find("timeline.scroll").unwrap().rect;
+    let from = center(&h, &format!("timeline.prop.{opacity}.pickWhip"));
+    let (bottom, upper) = (pos2(from.x, rows[1] + rows[3] - 2.0), pos2(from.x, rows[1] + 2.0));
+    h.input_mut().events.push(Event::PointerMoved(from));
+    h.step();
+    h.input_mut().events.push(Event::PointerButton { pos: from, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.step();
+    for k in 1..=8 {
+        h.input_mut().events.push(Event::PointerMoved(from + (bottom - from) * (k as f32 / 8.0)));
+        h.step();
+    }
+    h.run_steps(20);
+    let down = scroll(&h);
+    assert!(down > 50.0, "held at the bottom edge the layers scroll up: {down}");
+    h.input_mut().events.push(Event::PointerMoved(upper));
+    h.run_steps(10);
+    assert!(scroll(&h) < down, "and at the top edge back down: {} after {down}", scroll(&h));
+    h.input_mut().events.push(Event::PointerMoved(pos2(from.x, rows[1] + rows[3] / 2.0)));
+    h.run_steps(2);
+    let still = scroll(&h);
+    h.run_steps(10);
+    assert_eq!(scroll(&h), still, "away from the edges it stays");
+    h.input_mut().events.push(Event::PointerButton { pos: upper, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(3);
+}
+
 /// A click at `p` with `modifiers` held.
 fn click_with(h: &mut Harness<'_, EffectcraftApp>, p: Pos2, modifiers: Modifiers) {
     h.input_mut().events.push(Event::PointerMoved(p));

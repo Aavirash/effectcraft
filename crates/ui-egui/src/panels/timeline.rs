@@ -132,6 +132,20 @@ fn pick_whip_id() -> egui::Id {
     egui::Id::new("tl-pickwhip")
 }
 
+/// Autoscroll speed (points per second, up negative) of a drag held at height `y` within
+/// `zone` of the top or bottom edge of `rows`, or past it: faster the deeper.
+fn edge_scroll_speed(rows: Rect, y: f32, zone: f32) -> f32 {
+    let zone = zone.min(rows.height() / 2.0).max(1.0);
+    let depth = if y < rows.min.y + zone {
+        y - (rows.min.y + zone)
+    } else if y > rows.max.y - zone {
+        y - (rows.max.y - zone)
+    } else {
+        return 0.0;
+    };
+    (depth / zone).clamp(-3.0, 3.0) * 400.0
+}
+
 /// The text of an expression being edited when its pick whip was pressed, and the selection in
 /// it (characters): the pick whip's reference goes in there.
 type WhipInto = (String, [usize; 2]);
@@ -1552,7 +1566,18 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
             }
         }
     }
-    app.ui.timeline.scroll_y = app.ui.timeline.scroll_y.min(max_scroll);
+    // A pick whip held near the top or bottom of the layers (or past it) scrolls them, as in
+    // After Effects.
+    if ctx.data(|d| d.get_temp::<PickWhip>(pick_whip_id())).is_some()
+        && let Some(ptr) = ctx.input(|i| i.pointer.latest_pos()).filter(|p| rect.x_range().contains(p.x))
+    {
+        let speed = edge_scroll_speed(rows_rect, ptr.y, rh);
+        if speed != 0.0 {
+            app.ui.timeline.scroll_y += speed * ctx.input(|i| i.stable_dt).min(0.1);
+            ctx.request_repaint();
+        }
+    }
+    app.ui.timeline.scroll_y = app.ui.timeline.scroll_y.clamp(0.0, max_scroll);
     let snap_project = app.session.project.clone();
     let snap_expr = app.session.expr.clone();
     let ectx = EvalCtx { project: &snap_project, comp_id: cid, comp: &comp, time, expr: snap_expr.as_deref(), footage: None };
