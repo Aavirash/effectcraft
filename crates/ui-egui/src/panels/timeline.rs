@@ -2349,6 +2349,7 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
                 if name_resp.clicked() {
                     actions.push(("prop.select".into(), json!({"layer": layer.id.0, "prop": uid, "add": ui.input(|i| i.modifiers.shift)})));
                 }
+                name_resp.context_menu(|ui| prop_menu(ui, &mut app.auto, cid, layer, prop, &mut actions));
                 // Value editors.
                 let value = ectx.value(layer, prop);
                 let vx = (cw.switches + 4.0).max(name_x + 120.0);
@@ -3221,6 +3222,43 @@ fn kind_name(k: MatteKind) -> &'static str {
         MatteKind::Luma => "luma",
         MatteKind::LumaInverted => "lumaInverted",
     }
+}
+
+/// Is property `uid` the layer's Position (or, separated, its X, Y or Z Position)?
+pub(crate) fn is_position(layer: &Layer, uid: u64) -> bool {
+    layer.transform().is_some_and(|tr| ["position", "positionX", "positionY", "positionZ"].iter().any(|m| tr.get(m).is_some_and(|p| p.uid == uid)))
+}
+
+/// A property's context menu (right-click its name in the Timeline), as in After Effects.
+fn prop_menu(
+    ui: &mut egui::Ui,
+    auto: &mut crate::automation::Registry,
+    comp: ItemId,
+    layer: &Layer,
+    prop: &Property,
+    actions: &mut Vec<(String, serde_json::Value)>,
+) {
+    let (l, uid) = (layer.id.0, prop.uid);
+    let mut item = |ui: &mut egui::Ui, key: &str, label: &str, selected: bool, cmd: &str, params: serde_json::Value| {
+        let resp = ui.add(egui::Button::new(label).selected(selected));
+        auto.add(&format!("timeline.prop.{uid}.menu.{key}"), resp.rect, label);
+        if resp.clicked() {
+            actions.push((cmd.into(), params));
+            ui.close();
+        }
+    };
+    item(ui, "reset", "Reset", false, "prop.reset", json!({"layer": l, "prop": uid}));
+    if matches!(prop.value, Value::Scalar(_) | Value::Vec2(_) | Value::Vec3(_)) {
+        item(ui, "editValue", "Edit Value…", false, "prop.set", json!({"layer": l, "prop": uid}));
+    }
+    if is_position(layer, uid) {
+        let separated = layer.transform().is_some_and(|tr| tr.get("positionX").is_some());
+        item(ui, "separateDimensions", "Separate Dimensions", separated, "prop.separateDimensions", json!({"layer": l, "value": !separated}));
+    }
+    ui.separator();
+    let (key, label) = if prop.expr.is_some() { ("removeExpression", "Remove Expression") } else { ("addExpression", "Add Expression") };
+    item(ui, key, label, false, "prop.setExpression", json!({"layer": l, "prop": uid}));
+    item(ui, "essentialGraphics", "Add Property to Essential Graphics", false, "essential.addProperty", json!({"comp": comp.0, "layer": l, "prop": uid}));
 }
 
 fn layer_context_menu(resp: &egui::Response, layer: &Layer, actions: &mut Vec<(String, serde_json::Value)>) {

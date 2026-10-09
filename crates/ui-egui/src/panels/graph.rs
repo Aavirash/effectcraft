@@ -489,12 +489,7 @@ pub(crate) fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, p: &egui::Painte
         app.ui.timeline.graph_transform_box = !tbox;
     }
     x += 6.0;
-    let pos_sel = app.session.state.selected_props.iter().find_map(|(l, u)| {
-        let layer = comp.layer(*l)?;
-        let tr = layer.transform()?;
-        (tr.get("position").is_some_and(|p| p.uid == *u) || ["positionX", "positionY", "positionZ"].iter().any(|m| tr.get(m).is_some_and(|p| p.uid == *u)))
-            .then_some(l.0)
-    });
+    let pos_sel = app.session.state.selected_props.iter().find_map(|(l, u)| super::timeline::is_position(comp.layer(*l)?, *u).then_some(l.0));
     if text_button(app, ui, p, &mut x, y, "Separate Dimensions", false, "separateDimensions", "Separate Dimensions (Position)")
         && let Some(l) = pos_sel.or(app.session.state.selected_layers.first().map(|l| l.0))
     {

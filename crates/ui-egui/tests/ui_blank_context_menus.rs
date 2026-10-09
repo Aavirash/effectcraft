@@ -1,4 +1,4 @@
-//! Right-click actions in the blank Project and Timeline areas.
+//! Right-click actions in the blank Project and Timeline areas, and on Timeline property names.
 use effectcraft_engine::Session;
 use effectcraft_ui_egui::{Dialog, EffectcraftApp};
 use egui::{Event, Modifiers, PointerButton, Pos2, Rect, pos2, vec2};
@@ -130,4 +130,68 @@ fn timeline_blank_menu_opens_composition_settings() {
     h.get_by_label("Composition Settings…").click();
     h.run_steps(3);
     assert_eq!(h.state().dialog, Some(Dialog::CompSettings));
+}
+
+/// #407: right-clicking a property's name in the Timeline opens After Effects' property menu:
+/// Reset, Edit Value…, Separate Dimensions (Position only, checked once separated), Add or
+/// Remove Expression and Add Property to Essential Graphics.
+#[test]
+fn timeline_property_names_have_the_property_menu() {
+    let mut h = harness();
+    let layer = h.state_mut().session.execute("layer.newSolid", json!({"name": "Plate", "color": "#406080"})).unwrap()["layer"].as_u64().unwrap();
+    h.state_mut().session.execute("prop.set", json!({"layer": layer, "path": "transform/rotation", "value": 30})).unwrap();
+    let props =
+        |h: &Harness<'_, EffectcraftApp>| h.state().session.active_comp().unwrap().layer(effectcraft_engine::project::LayerId(layer)).unwrap().props.clone();
+    let uid = |h: &Harness<'_, EffectcraftApp>, path: &str| props(h).prop(path).unwrap().uid;
+    h.state_mut().ui.timeline.open_layers.insert(layer);
+    let transform = props(&h).sub("transform").unwrap().uid;
+    h.state_mut().ui.timeline.open_groups.insert(transform);
+    h.run_steps(3);
+    let menu = |h: &mut Harness<'_, EffectcraftApp>, uid: u64| {
+        let p = rect(h, &format!("timeline.prop.{uid}.name")).center();
+        right_click(h, p);
+    };
+    let choose = |h: &mut Harness<'_, EffectcraftApp>, uid: u64, entry: &str| {
+        let p = rect(h, &format!("timeline.prop.{uid}.menu.{entry}")).center();
+        for pressed in [true, false] {
+            h.input_mut().events.push(Event::PointerMoved(p));
+            h.input_mut().events.push(Event::PointerButton { pos: p, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+            h.step();
+        }
+        h.run_steps(3);
+    };
+    // Reset: Rotation's default.
+    let rotation = uid(&h, "transform/rotation");
+    menu(&mut h, rotation);
+    assert!(h.query_by_label("Edit Value…").is_some());
+    assert!(h.query_by_label("Separate Dimensions").is_none(), "only Position separates");
+    choose(&mut h, rotation, "reset");
+    assert_eq!(props(&h).prop("transform/rotation").unwrap().value.as_f64(), 0.0);
+    // Separate Dimensions on Position; X Position's menu has it too, and joins them again.
+    let position = uid(&h, "transform/position");
+    menu(&mut h, position);
+    choose(&mut h, position, "separateDimensions");
+    assert!(props(&h).prop("transform/positionX").is_some(), "separated");
+    let x = uid(&h, "transform/positionX");
+    menu(&mut h, x);
+    choose(&mut h, x, "separateDimensions");
+    assert!(props(&h).prop("transform/positionX").is_none(), "joined");
+    // Add Expression, then Remove Expression.
+    let opacity = uid(&h, "transform/opacity");
+    menu(&mut h, opacity);
+    choose(&mut h, opacity, "addExpression");
+    assert_eq!(props(&h).prop("transform/opacity").unwrap().expr.as_ref().map(|e| e.text.clone()).as_deref(), Some("transform.opacity"));
+    menu(&mut h, opacity);
+    choose(&mut h, opacity, "removeExpression");
+    assert!(props(&h).prop("transform/opacity").unwrap().expr.is_none());
+    // Add Property to Essential Graphics.
+    menu(&mut h, opacity);
+    choose(&mut h, opacity, "essentialGraphics");
+    let comp = h.state().session.active_comp_id().unwrap();
+    assert_eq!(h.state().session.project.comp(comp).unwrap().essential.as_ref().map_or(0, |e| e.controls.len()), 1);
+    // Edit Value… opens the value dialog.
+    let scale = uid(&h, "transform/scale");
+    menu(&mut h, scale);
+    choose(&mut h, scale, "editValue");
+    assert_eq!(h.state().dialog, Some(Dialog::Form));
 }

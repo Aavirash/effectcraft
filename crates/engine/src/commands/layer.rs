@@ -1141,6 +1141,22 @@ pub(crate) fn update_position(tr: &mut PropGroup, lt: Tick, f: impl Fn([f64; 3])
     }
 }
 
+/// A Transform property's default (Reset) by match id: the anchor at the centre of the source
+/// (`w`×`h`), the position at the comp's (`cw`×`ch`), 100% scale and opacity, no rotation.
+pub(crate) fn transform_default(m: &str, (w, h): (f64, f64), (cw, ch): (f64, f64)) -> Option<KV> {
+    Some(match m {
+        "anchor" => KV::Vec3([w / 2.0, h / 2.0, 0.0]),
+        "position" => KV::Vec3([cw / 2.0, ch / 2.0, 0.0]),
+        "positionX" => KV::Scalar(cw / 2.0),
+        "positionY" => KV::Scalar(ch / 2.0),
+        "positionZ" | "rotation" | "rotationX" | "rotationY" => KV::Scalar(0.0),
+        "scale" => KV::Vec3([100.0; 3]),
+        "orientation" => KV::Vec3([0.0; 3]),
+        "opacity" => KV::Scalar(100.0),
+        _ => return None,
+    })
+}
+
 fn transform_op(s: &mut Session, p: &Value) -> Result<Value> {
     let (cid, ids) = layers_p(s, p)?;
     let ids = unlocked(s, cid, ids, "layer.transform")?;
@@ -1163,14 +1179,12 @@ fn transform_op(s: &mut Session, p: &Value) -> Result<Value> {
             };
             match op.as_str() {
                 "reset" => {
-                    set(tr, "anchor", KV::Vec3([w / 2.0, h / 2.0, 0.0]));
+                    for m in ["anchor", "scale", "rotation", "rotationX", "rotationY", "orientation", "opacity"] {
+                        if let Some(v) = transform_default(m, (w, h), (cw, ch)) {
+                            set(tr, m, v);
+                        }
+                    }
                     update_position(tr, lt, |_| [cw / 2.0, ch / 2.0, 0.0]);
-                    set(tr, "scale", KV::Vec3([100.0; 3]));
-                    set(tr, "rotation", KV::Scalar(0.0));
-                    set(tr, "rotationX", KV::Scalar(0.0));
-                    set(tr, "rotationY", KV::Scalar(0.0));
-                    set(tr, "orientation", KV::Vec3([0.0; 3]));
-                    set(tr, "opacity", KV::Scalar(100.0));
                 }
                 // Centred in the frame; a 3D layer keeps its depth.
                 "center" => update_position(tr, lt, |p| [cw / 2.0, ch / 2.0, p[2]]),

@@ -271,13 +271,40 @@ fn set_expr(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(r)
 }
 
+/// A property's default value, when it has a known one: an effect parameter's, or a Transform
+/// property's (not a camera's or light's).
+fn default_value(s: &Session, cid: ItemId, lid: LayerId, uid: Uid) -> Option<effectcraft_keyframe::Value> {
+    let comp = s.project.comp(cid)?;
+    let layer = comp.layer(lid)?;
+    let pr = layer.props.find(uid)?;
+    let effect = layer.props.node_chain(uid)?.into_iter().find_map(|n| match n {
+        effectcraft_project::Node::Group(g) => match &g.kind {
+            GroupKind::Effect { effect } => Some(effect.clone()),
+            _ => None,
+        },
+        _ => None,
+    });
+    if let Some(effect) = effect {
+        let ps = effectcraft_effects::find(&effect)?.params.iter().find(|ps| ps.id == pr.match_id)?;
+        return Some(effectcraft_effects::default_value(ps, effectcraft_render::effect_bounds(&s.project, comp, layer).0));
+    }
+    if matches!(layer.source, effectcraft_project::LayerSource::Camera | effectcraft_project::LayerSource::Light { .. })
+        || !layer.transform()?.props().any(|t| t.uid == uid)
+    {
+        return None;
+    }
+    let (w, h) = effectcraft_render::source_size(&s.project, layer);
+    super::layer::transform_default(&pr.match_id, (w as f64, h as f64), (comp.width as f64, comp.height as f64))
+}
+
 fn reset(s: &mut Session, p: &Value) -> Result<Value> {
     let (cid, lid, uid) = prop_ref(s, p, "prop.reset")?;
     let def = p.get("default").cloned();
+    let own = default_value(s, cid, lid, uid);
     with_prop(s, "Reset Property", None, cid, lid, uid, |pr, _| {
         pr.keys.clear();
         pr.expr = None;
-        if let Some(d) = def.as_ref().and_then(|d| pr.value.coerce_json(d)) {
+        if let Some(d) = def.as_ref().and_then(|d| pr.value.coerce_json(d)).or(own) {
             pr.value = d;
         }
         Ok(Value::Null)
@@ -783,7 +810,15 @@ pub fn specs() -> Vec<CommandSpec> {
             toggle_transform_key
         ),
         cmd!("prop.setExpression", "Add Expression", ["Animation"], Some("Alt+Shift+="), "{layer?, path|prop, expression?, enabled?}", has_layers, set_expr),
-        cmd!("prop.reset", "Reset Property", [], None, "{layer?, path|prop, default?}", has_layers, reset),
+        cmd!(
+            "prop.reset",
+            "Reset Property",
+            [],
+            None,
+            "{layer?, path|prop, default?} → removes keyframes and expression; the value becomes `default`, else the property's own (an effect parameter's, a Transform property's)",
+            has_layers,
+            reset
+        ),
         cmd!("prop.select", "Select Property", [], None, "{layer?, path|prop, add?, selectKeys?}", has_layers, select_prop),
         cmd!(
             "prop.convertExpressionToKeyframes",

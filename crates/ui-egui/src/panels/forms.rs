@@ -193,6 +193,17 @@ fn sequence_fields(app: &EffectcraftApp, runs: &[Vec<String>]) -> Vec<Field> {
     ]
 }
 
+/// Fields to type a numeric property value in (`value`, or `value[0]`… per dimension).
+fn value_fields(name: &str, v: &effectcraft_engine::keyframe::Value) -> Option<Vec<Field>> {
+    use effectcraft_engine::keyframe::Value as KV;
+    Some(match v {
+        KV::Scalar(v) => vec![Field::num("value", name, *v)],
+        KV::Vec2(v) => vec![Field::num("value[0]", "X", v[0]), Field::num("value[1]", "Y", v[1])],
+        KV::Vec3(v) => vec![Field::num("value[0]", "X", v[0]), Field::num("value[1]", "Y", v[1]), Field::num("value[2]", "Z", v[2])],
+        _ => return None,
+    })
+}
+
 /// If `id` is a dialog command invoked without its parameters, open its form and return true.
 pub fn open_form(app: &mut EffectcraftApp, id: &str, p: &Value) -> bool {
     let s = &app.session;
@@ -250,13 +261,14 @@ pub fn open_form(app: &mut EffectcraftApp, id: &str, p: &Value) -> bool {
             let t = p.get("time").and_then(Value::as_f64).map(effectcraft_engine::time::Tick::from_seconds_f64);
             let Some((pr, t)) = pr.zip(t) else { return false };
             let Some(k) = pr.keys.iter().min_by_key(|k| (k.time.0 - t.0).abs()) else { return false };
-            use effectcraft_engine::keyframe::Value as KV;
-            let fields = match &k.value {
-                KV::Scalar(v) => vec![Field::num("value", &pr.name, *v)],
-                KV::Vec2(v) => vec![Field::num("value[0]", "X", v[0]), Field::num("value[1]", "Y", v[1])],
-                KV::Vec3(v) => vec![Field::num("value[0]", "X", v[0]), Field::num("value[1]", "Y", v[1]), Field::num("value[2]", "Z", v[2])],
-                _ => return false,
-            };
+            let Some(fields) = value_fields(&pr.name, &k.value) else { return false };
+            (pr.name.clone(), fields)
+        }
+        // A property's context menu ▸ Edit Value…: its value at the current time.
+        "prop.set" if !has(p, &["value"]) => {
+            let l = p.get("layer").and_then(Value::as_u64).and_then(|l| comp?.layer(effectcraft_engine::project::LayerId(l)));
+            let Some((l, pr)) = l.and_then(|l| Some((l, l.props.find(p.get("prop").and_then(Value::as_u64)?)?))) else { return false };
+            let Some(fields) = value_fields(&pr.name, &pr.value_at(l.layer_time(t))) else { return false };
             (pr.name.clone(), fields)
         }
         "layer.setTransform" if !has(p, &["value"]) => {
