@@ -666,7 +666,7 @@ impl ParentFix {
             }
             if let Some(pose) = self.pose_3d {
                 if let Some(pr) = tr.get_mut("orientation") {
-                    pr.value = KV::Vec3(reexpress_static(pose.correction, pr.value.as_vec3()));
+                    reexpress_orientation(pose.correction, pr);
                 }
                 if let Some(pr) = tr.get_mut("scale") {
                     let factor = pose.factor;
@@ -757,10 +757,15 @@ fn uniform_rotation(m: effectcraft_geom::Mat4) -> Option<(effectcraft_geom::Mat4
     Some((rotation, factor))
 }
 
-/// Euler Orientation (degrees, Rz * Ry * Rx) of `correction * Orientation(orientation)`.
-fn euler_of(correction: effectcraft_geom::Mat4, orientation: [f64; 3]) -> [f64; 3] {
-    use effectcraft_geom::{Mat4, Vec3};
-    let r = (correction * Mat4::orientation(Vec3::from(orientation))).0;
+/// The turn (degrees) of a rotation about Z alone, or `None` for any other rotation.
+fn z_only_turn(correction: effectcraft_geom::Mat4) -> Option<f64> {
+    let m = correction.0;
+    let about_z = [m[0][2], m[1][2], m[2][0], m[2][1]].iter().all(|v| v.abs() < 1e-9) && (m[2][2] - 1.0).abs() < 1e-9;
+    about_z.then(|| m[1][0].atan2(m[0][0]).to_degrees())
+}
+
+/// ZYX Euler angles in degrees of a row-major rotation (`Rz * Ry * Rx`), safe at gimbal lock.
+fn euler_zyx(r: [[f64; 4]; 4]) -> [f64; 3] {
     // atan2 rather than asin: near ±90 degrees asin loses precision, while cos(y) stays exact.
     let cy = r[0][0].hypot(r[1][0]);
     let y = (-r[2][0]).atan2(cy);
@@ -768,13 +773,55 @@ fn euler_of(correction: effectcraft_geom::Mat4, orientation: [f64; 3]) -> [f64; 
     [x.to_degrees(), y.to_degrees(), z.to_degrees()]
 }
 
-/// Static Orientation re-expressed as `correction * Orientation`. An identity correction keeps the
-/// authored values unchanged.
-fn reexpress_static(correction: effectcraft_geom::Mat4, orientation: [f64; 3]) -> [f64; 3] {
-    if (0..4).all(|row| (0..4).all(|col| (correction.0[row][col] - if row == col { 1.0 } else { 0.0 }).abs() < 1e-12)) {
-        return orientation;
+/// The equivalent ZYX Euler triple nearest `reference`: each axis moved by whole turns, or the
+/// `(x + 180, 180 - y, z + 180)` form when that is nearer.
+fn nearest_euler(euler: [f64; 3], reference: [f64; 3]) -> [f64; 3] {
+    let near = |v: [f64; 3]| -> [f64; 3] { std::array::from_fn(|i| v[i] + ((reference[i] - v[i]) / 360.0).round() * 360.0) };
+    let natural = near(euler);
+    let flipped = near([euler[0] + 180.0, 180.0 - euler[1], euler[2] + 180.0]);
+    let distance = |v: [f64; 3]| v.iter().zip(reference.iter()).map(|(a, b)| (a - b).powi(2)).sum::<f64>();
+    if distance(flipped) < distance(natural) { flipped } else { natural }
+}
+
+/// The Euler Orientation of `correction * Orientation(o)`, in the form nearest `reference`.
+fn reexpress_euler(correction: effectcraft_geom::Mat4, o: [f64; 3], reference: [f64; 3]) -> [f64; 3] {
+    let world = correction * effectcraft_geom::Mat4::orientation(effectcraft_geom::Vec3::from(o));
+    nearest_euler(euler_zyx(world.0), reference)
+}
+
+/// Re-expresses Orientation (the value and every key) as `correction * Orientation`. A Z-only
+/// correction shifts Z exactly, so the keys and the paths between them stay exact. Other
+/// corrections keep each key's authored turns, so the Euler values stay continuous.
+fn reexpress_orientation(correction: effectcraft_geom::Mat4, pr: &mut effectcraft_project::Property) {
+    if let Some(turn) = z_only_turn(correction) {
+        // No turn (an identity correction) leaves every authored value as it is.
+        if turn.abs() <= 1e-12 {
+            return;
+        }
+        let shift = |value: &KV| {
+            let [x, y, z] = value.as_vec3();
+            KV::Vec3([x, y, z + turn])
+        };
+        pr.value = shift(&pr.value);
+        for key in &mut pr.keys {
+            key.value = shift(&key.value);
+        }
+        return;
     }
-    euler_of(correction, orientation)
+    let value = pr.value.as_vec3();
+    pr.value = KV::Vec3(reexpress_euler(correction, value, value));
+    let mut prev: Option<([f64; 3], [f64; 3])> = None;
+    for key in &mut pr.keys {
+        let o = key.value.as_vec3();
+        // Each key keeps the authored change from the previous key on top of its converted value.
+        let reference = match prev {
+            Some((before, after)) => [after[0] + o[0] - before[0], after[1] + o[1] - before[1], after[2] + o[2] - before[2]],
+            None => o,
+        };
+        let n = reexpress_euler(correction, o, reference);
+        key.value = KV::Vec3(n);
+        prev = Some((o, n));
+    }
 }
 
 /// Correction for a two-node rig's Orientation: after a uniform parent change its aim is
@@ -848,13 +895,10 @@ pub(crate) fn parent_fixes(s: &Session, cid: ItemId, ids: &[LayerId], parent: Op
                     let orientation = tr.get("orientation")?;
                     // Cameras and lights have no Scale; their Orientation is re-expressed alone.
                     let scale = tr.get("scale");
-                    // Animated Euler Orientation and auto-orient cannot be re-expressed by
-                    // prepending a constant Euler value. Expression-driven values stay authored.
-                    // Auto-orient replaces Orientation, except a two-node rig, whose roll is
-                    // re-expressed against its new aim.
+                    // Expression-driven values stay authored. Auto-orient replaces Orientation, except
+                    // a two-node rig, whose roll is re-expressed against its new aim.
                     let two_node = (layer.is_camera() || layer.is_light()) && effectcraft_render::three_d::camera::is_two_node(layer);
-                    if !orientation.keys.is_empty()
-                        || orientation.expr.is_some()
+                    if orientation.expr.is_some()
                         || scale.is_some_and(|scale| scale.expr.is_some())
                         || (layer.auto_orient != effectcraft_project::AutoOrient::Off && !two_node)
                     {
@@ -873,7 +917,10 @@ pub(crate) fn parent_fixes(s: &Session, cid: ItemId, ids: &[LayerId], parent: Op
                     } else {
                         rotation
                     };
-                    if !correction.0.iter().flatten().all(|v| v.is_finite()) || !orientation.value.as_vec3().iter().all(|v| v.is_finite()) {
+                    let orientation_finite = std::iter::once(&orientation.value)
+                        .chain(orientation.keys.iter().map(|key| &key.value))
+                        .all(|value| value.as_vec3().iter().all(|v| v.is_finite()));
+                    if !correction.0.iter().flatten().all(|v| v.is_finite()) || !orientation_finite {
                         return None;
                     }
                     if let Some(scale) = scale {

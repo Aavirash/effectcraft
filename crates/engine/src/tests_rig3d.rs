@@ -282,6 +282,24 @@ fn parented_point_light_keeps_its_direction_under_a_rotated_null() {
     assert!((eye1 - eye0).length() < 1e-6 && (f1 - f0).length() < 1e-6, "{eye0:?} {eye1:?} {f0:?} {f1:?}");
 }
 
+/// Keyed Orientation is re-expressed at each key under a rotated null, so the light keeps its
+/// direction at every key.
+#[test]
+fn keyed_orientation_is_re_expressed_at_each_key_under_a_rotated_null() {
+    let mut s = session();
+    let light = s.execute("layer.newLight", json!({"kind": "Point", "position": [320, 180, -500]})).unwrap()["layer"].as_u64().unwrap();
+    for (time, value) in [(0.0, json!([-8.0, 12.0, -13.0])), (1.0, json!([5.0, 18.0, 14.0]))] {
+        s.execute("prop.addKey", json!({"layer": light, "path": "transform/orientation", "time": time, "value": value})).unwrap();
+    }
+    let keys = [Tick::ZERO, Tick::from_seconds_f64(1.0)];
+    let before = keys.map(|t| frame_at(&s, light, t));
+    let nul = rotated_null(&mut s, [20.0, -35.0, 60.0], 30.0);
+    s.execute("layer.setParent", json!({"layers": [light], "parent": nul})).unwrap();
+    for (t, b) in keys.into_iter().zip(before) {
+        assert!(frames_match(b, frame_at(&s, light, t)), "keyed Orientation keeps the light's direction at each key");
+    }
+}
+
 // ---------------------------------------------------------------- from 3D model
 
 struct DiskModels;
