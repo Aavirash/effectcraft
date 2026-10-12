@@ -7,7 +7,7 @@ use std::sync::Arc;
 use effectcraft_geom::{Vec3, vec3};
 use effectcraft_keyframe::Value as KV;
 use effectcraft_project::{Footage, FootageKind, GroupKind, ItemId, Layer, LayerId, LayerSource, LightKind, Project};
-use effectcraft_render::three_d::camera::layer_frame;
+use effectcraft_render::three_d::camera::{is_two_node, layer_frame};
 use effectcraft_render::{EvalCtx, FootageSource, RenderOpts};
 use effectcraft_time::{FrameRate, Tick};
 use serde_json::{Value, json};
@@ -228,6 +228,58 @@ fn parented_camera_keeps_its_frame_under_an_offset_null() {
     let (eye2, f2) = frame(&s, cam);
     assert!((eye2 - (eye0 + vec3(40.0, 30.0, 0.0))).length() < 1e-6, "{eye2:?}");
     assert!((f2 - f0).length() < 1e-6, "{f2:?}");
+}
+
+/// World (eye, forward, down) of a layer in the active comp at time `t`.
+fn frame_at(s: &Session, id: u64, t: Tick) -> (Vec3, Vec3, Vec3) {
+    let c = cid(s);
+    let comp = s.project.comp(c).unwrap();
+    let ctx = EvalCtx { project: &s.project, comp_id: c, comp, time: t, expr: None, footage: None };
+    layer_frame(&ctx, comp.layer(LayerId(id)).unwrap())
+}
+
+/// Whether two frames agree on eye, forward and down.
+fn frames_match(a: (Vec3, Vec3, Vec3), b: (Vec3, Vec3, Vec3)) -> bool {
+    (a.0 - b.0).length() < 1e-6 && (a.1 - b.1).length() < 1e-6 && (a.2 - b.2).length() < 1e-6
+}
+
+/// A 3D null off-centre in the comp, with an Orientation and a Z rotation.
+fn rotated_null(s: &mut Session, orientation: [f64; 3], turn: f64) -> u64 {
+    let nul = s.execute("layer.newNull", json!({})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("layer.setSwitch", json!({"layers": [nul], "switch": "threeD", "value": true})).unwrap();
+    s.execute("prop.set", json!({"layer": nul, "path": "transform/position", "value": [100, 60, 40]})).unwrap();
+    s.execute("prop.set", json!({"layer": nul, "path": "transform/orientation", "value": orientation})).unwrap();
+    s.execute("prop.set", json!({"layer": nul, "path": "transform/rotation", "value": turn})).unwrap();
+    nul
+}
+
+/// A two-node camera under a rotated null keeps its eye, aim and roll: its Orientation is
+/// re-expressed against the new aim, so Up does not drift.
+#[test]
+fn two_node_camera_under_rotated_null_keeps_its_roll() {
+    let mut s = session();
+    let cam = camera(&mut s);
+    s.execute("prop.set", json!({"layer": cam, "path": "transform/rotation", "value": 25})).unwrap();
+    assert!(is_two_node(&layer_in(&s, cid(&s), cam)));
+    let before = frame_at(&s, cam, Tick::ZERO);
+    let nul = rotated_null(&mut s, [20.0, -35.0, 60.0], 30.0);
+    s.execute("layer.setParent", json!({"layers": [cam], "parent": nul})).unwrap();
+    let after = frame_at(&s, cam, Tick::ZERO);
+    assert!(frames_match(before, after), "{before:?} {after:?}");
+}
+
+#[test]
+fn parented_point_light_keeps_its_direction_under_a_rotated_null() {
+    let mut s = session();
+    let light = s.execute("layer.newLight", json!({"kind": "Point", "position": [320, 180, -500]})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("prop.set", json!({"layer": light, "path": "transform/orientation", "value": [30, 0, 0]})).unwrap();
+    let (eye0, f0) = frame(&s, light);
+    let nul = s.execute("layer.newNull", json!({})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("prop.set", json!({"layer": nul, "path": "transform/position", "value": [100, 60, 0]})).unwrap();
+    s.execute("prop.set", json!({"layer": nul, "path": "transform/rotation", "value": 30})).unwrap();
+    s.execute("layer.setParent", json!({"layers": [light], "parent": nul})).unwrap();
+    let (eye1, f1) = frame(&s, light);
+    assert!((eye1 - eye0).length() < 1e-6 && (f1 - f0).length() < 1e-6, "{eye0:?} {eye1:?} {f0:?} {f1:?}");
 }
 
 // ---------------------------------------------------------------- from 3D model

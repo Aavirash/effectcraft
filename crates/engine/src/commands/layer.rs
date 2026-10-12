@@ -594,8 +594,17 @@ pub(crate) struct ParentFix {
     /// 3D AV layers retain their world-space anchor, including Z. Cameras and lights also
     /// re-express their Point of Interest.
     position_3d: Option<effectcraft_geom::Mat4>,
-    /// A uniform relative parent transform can preserve static Orientation and Scale.
-    pose_3d: Option<([f64; 3], f64)>,
+    /// A uniform relative parent transform re-expresses static Orientation and Scale.
+    pose_3d: Option<Pose3d>,
+}
+
+/// A uniform relative parent transform, as it applies to a 3D layer's Orientation and Scale.
+#[derive(Clone, Copy)]
+struct Pose3d {
+    /// Rotation that Orientation is re-expressed under: `Orientation' = correction * Orientation`.
+    correction: effectcraft_geom::Mat4,
+    /// Uniform scale factor, multiplied into Scale (negative for a mirrored parent).
+    factor: f64,
 }
 
 impl ParentFix {
@@ -605,7 +614,7 @@ impl ParentFix {
         if let Some(m) = self.position_3d {
             // Spatial Position speed measures distance along its path. Its parent-space
             // unit changes even when the child's Orientation cannot be re-expressed.
-            let position_speed = uniform_parent_pose(m, [0.0; 3]).map(|(_, factor)| factor.abs());
+            let position_speed = uniform_rotation(m).map(|(_, factor)| factor.abs());
             let map_position = |v: &KV| {
                 let q = m.apply(effectcraft_geom::Vec3::from(v.as_vec3()));
                 KV::Vec3([q.x, q.y, q.z])
@@ -655,11 +664,12 @@ impl ParentFix {
             if let Some(pr) = tr.get_mut("poi") {
                 map_point(pr);
             }
-            if let Some((orientation, factor)) = self.pose_3d {
+            if let Some(pose) = self.pose_3d {
                 if let Some(pr) = tr.get_mut("orientation") {
-                    pr.value = KV::Vec3(orientation);
+                    pr.value = KV::Vec3(reexpress_static(pose.correction, pr.value.as_vec3()));
                 }
                 if let Some(pr) = tr.get_mut("scale") {
+                    let factor = pose.factor;
                     let scaled = |value: &KV| KV::Vec3(value.as_vec3().map(|v| v * factor));
                     pr.value = scaled(&pr.value);
                     for key in &mut pr.keys {
@@ -722,13 +732,10 @@ impl ParentFix {
     }
 }
 
-/// A uniform factor commutes with authored axis Rotation and Scale; prepend its orthogonal
-/// rotation to static Orientation using the existing Rz * Ry * Rx order.
-fn uniform_parent_pose(m: effectcraft_geom::Mat4, orientation: [f64; 3]) -> Option<([f64; 3], f64)> {
-    use effectcraft_geom::{Mat4, Vec3, vec3};
-    if !orientation.iter().all(|v| v.is_finite()) {
-        return None;
-    }
+/// The rotation and signed scale factor of a uniform parent transform's linear part (negative for a
+/// mirrored parent). `None` for a non-uniform or degenerate transform.
+fn uniform_rotation(m: effectcraft_geom::Mat4) -> Option<(effectcraft_geom::Mat4, f64)> {
+    use effectcraft_geom::{Mat4, vec3};
     let a = m.0;
     let columns = [vec3(a[0][0], a[1][0], a[2][0]), vec3(a[0][1], a[1][1], a[2][1]), vec3(a[0][2], a[1][2], a[2][2])];
     let magnitude = columns[0].x.hypot(columns[0].y).hypot(columns[0].z);
@@ -747,15 +754,47 @@ fn uniform_parent_pose(m: effectcraft_geom::Mat4, orientation: [f64; 3]) -> Opti
             rotation.0[row][col] = a[row][col] / factor;
         }
     }
-    if (0..3).all(|row| (0..3).all(|col| (rotation.0[row][col] - if row == col { 1.0 } else { 0.0 }).abs() < 1e-12)) {
-        return Some((orientation, factor));
-    }
-    let r = (rotation * Mat4::orientation(Vec3::from(orientation))).0;
+    Some((rotation, factor))
+}
+
+/// Euler Orientation (degrees, Rz * Ry * Rx) of `correction * Orientation(orientation)`.
+fn euler_of(correction: effectcraft_geom::Mat4, orientation: [f64; 3]) -> [f64; 3] {
+    use effectcraft_geom::{Mat4, Vec3};
+    let r = (correction * Mat4::orientation(Vec3::from(orientation))).0;
     // atan2 rather than asin: near ±90 degrees asin loses precision, while cos(y) stays exact.
     let cy = r[0][0].hypot(r[1][0]);
     let y = (-r[2][0]).atan2(cy);
     let (x, z) = if cy > 1e-9 { (r[2][1].atan2(r[2][2]), r[1][0].atan2(r[0][0])) } else { ((-r[1][2]).atan2(r[1][1]), 0.0) };
-    Some(([x.to_degrees(), y.to_degrees(), z.to_degrees()], factor))
+    [x.to_degrees(), y.to_degrees(), z.to_degrees()]
+}
+
+/// Static Orientation re-expressed as `correction * Orientation`. An identity correction keeps the
+/// authored values unchanged.
+fn reexpress_static(correction: effectcraft_geom::Mat4, orientation: [f64; 3]) -> [f64; 3] {
+    if (0..4).all(|row| (0..4).all(|col| (correction.0[row][col] - if row == col { 1.0 } else { 0.0 }).abs() < 1e-12)) {
+        return orientation;
+    }
+    euler_of(correction, orientation)
+}
+
+/// Correction for a two-node rig's Orientation: after a uniform parent change its aim is
+/// `rotation * aim`, so the roll is re-expressed against that aim. `None` for a degenerate aim.
+fn aim_correction(rotation: effectcraft_geom::Mat4, aim: [f64; 3]) -> Option<effectcraft_geom::Mat4> {
+    use effectcraft_geom::vec3;
+    use effectcraft_render::three_d::camera::basis_rotation;
+    let [x, y, z] = aim;
+    let length = (x * x + y * y + z * z).sqrt();
+    if !length.is_finite() || length <= 1e-9 {
+        return None;
+    }
+    let dir = vec3(x / length, y / length, z / length);
+    let turned = rotation.apply_vec(dir);
+    // A view along the up axis has no roll to keep, and its basis is undefined.
+    if 1.0 - dir.y * dir.y < 1e-12 || 1.0 - turned.y * turned.y < 1e-12 {
+        return None;
+    }
+    let up = vec3(0.0, 1.0, 0.0);
+    Some(basis_rotation(turned, up).transpose() * rotation * basis_rotation(dir, up))
 }
 
 /// A parent change retains 2D transforms and the world-space anchor of 3D AV layers. Position is
@@ -807,23 +846,46 @@ pub(crate) fn parent_fixes(s: &Session, cid: ItemId, ids: &[LayerId], parent: Op
             if m.0.iter().flatten().all(|v| v.is_finite()) {
                 let pose_3d = layer.transform().and_then(|tr| {
                     let orientation = tr.get("orientation")?;
-                    let scale = tr.get("scale")?;
+                    // Cameras and lights have no Scale; their Orientation is re-expressed alone.
+                    let scale = tr.get("scale");
                     // Animated Euler Orientation and auto-orient cannot be re-expressed by
                     // prepending a constant Euler value. Expression-driven values stay authored.
+                    // Auto-orient replaces Orientation, except a two-node rig, whose roll is
+                    // re-expressed against its new aim.
+                    let two_node = (layer.is_camera() || layer.is_light()) && effectcraft_render::three_d::camera::is_two_node(layer);
                     if !orientation.keys.is_empty()
                         || orientation.expr.is_some()
-                        || scale.expr.is_some()
-                        || layer.auto_orient != effectcraft_project::AutoOrient::Off
+                        || scale.is_some_and(|scale| scale.expr.is_some())
+                        || (layer.auto_orient != effectcraft_project::AutoOrient::Off && !two_node)
                     {
                         return None;
                     }
-                    let pose = uniform_parent_pose(m, orientation.value.as_vec3())?;
-                    let factor = pose.1;
-                    let values_finite = std::iter::once(&scale.value)
-                        .chain(scale.keys.iter().map(|key| &key.value))
-                        .all(|value| value.as_vec3().iter().all(|v| (v * factor).is_finite()));
-                    let speeds_finite = scale.keys.iter().flat_map(|key| key.in_ease.iter().chain(&key.out_ease)).all(|ease| (ease.speed * factor).is_finite());
-                    (values_finite && speeds_finite).then_some(pose)
+                    let (rotation, factor) = uniform_rotation(m)?;
+                    let correction = if two_node {
+                        // A mirrored parent flips the aim, which this correction does not model.
+                        if factor <= 0.0 {
+                            return None;
+                        }
+                        let (w, h) = (comp.width as f64, comp.height as f64);
+                        let pos = ectx.v3(layer, tr, "position", [w / 2.0, h / 2.0, -1000.0]);
+                        let poi = ectx.v3(layer, tr, "poi", [w / 2.0, h / 2.0, 0.0]);
+                        aim_correction(rotation, [poi[0] - pos[0], poi[1] - pos[1], poi[2] - pos[2]])?
+                    } else {
+                        rotation
+                    };
+                    if !correction.0.iter().flatten().all(|v| v.is_finite()) || !orientation.value.as_vec3().iter().all(|v| v.is_finite()) {
+                        return None;
+                    }
+                    if let Some(scale) = scale {
+                        let values_finite = std::iter::once(&scale.value)
+                            .chain(scale.keys.iter().map(|key| &key.value))
+                            .all(|value| value.as_vec3().iter().all(|v| (v * factor).is_finite()));
+                        let speeds_finite = scale.keys.iter().all(|key| key.in_ease.iter().chain(&key.out_ease).all(|ease| (ease.speed * factor).is_finite()));
+                        if !values_finite || !speeds_finite {
+                            return None;
+                        }
+                    }
+                    Some(Pose3d { correction, factor })
                 });
                 fixes.push(ParentFix { layer: layer.id, m: effectcraft_geom::Mat3::IDENTITY, rotation: 0.0, scale: [1.0; 2], position_3d: Some(m), pose_3d });
             }
