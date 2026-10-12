@@ -136,3 +136,23 @@ fn footage_changes_change_the_salt() {
     assert_ne!(k3, k2);
     assert_ne!(set_proxy(&mut s, false), k3);
 }
+
+/// Marker edits keep the disk key (the sound of a playing preview must not wait for frames to
+/// render again, #1083); an expression that reads markers makes them count.
+#[test]
+fn markers_keep_the_content_key_unless_an_expression_reads_them() {
+    let mut s = Session::default();
+    s.execute("comp.new", json!({"name": "M", "width": 8, "height": 8, "frameRate": 30, "duration": 2})).unwrap();
+    let cid = s.active_comp_id().unwrap();
+    let l = s.execute("layer.newSolid", json!({"color": "#ff0000"})).unwrap()["layer"].as_u64().unwrap();
+    let key = |s: &Session| effectcraft_render::disk_cache::comp_content_key(&s.project, cid);
+    let k0 = key(&s);
+    s.execute("comp.addMarker", json!({"time": 0.5, "comment": "beat"})).unwrap();
+    s.execute("markers.set", json!({"layer": l, "new": true, "time": 0.25})).unwrap();
+    assert_eq!(key(&s), k0, "markers");
+    s.execute("prop.setExpression", json!({"layer": l, "path": "transform/opacity", "expression": "thisComp.marker.numKeys"})).unwrap();
+    let k1 = key(&s);
+    assert_ne!(k1, k0);
+    s.execute("comp.addMarker", json!({"time": 1.0})).unwrap();
+    assert_ne!(key(&s), k1, "a marker read by an expression");
+}

@@ -291,18 +291,6 @@ pub fn comp_content(project: &Project, comp: ItemId) -> u64 {
     comp_content_with(project, comp, |_, c| Arc::as_ptr(c))
 }
 
-/// Some expression in the project mentions markers (`marker.key(1)`, `numKeys`, `nearestKey`…).
-/// Only then do the markers of its comps and layers affect what is rendered.
-fn reads_markers(project: &Project) -> bool {
-    fn group(g: &PropGroup) -> bool {
-        g.children.iter().any(|c| match c {
-            Node::Prop(p) => p.expr.as_ref().is_some_and(|e| e.text.to_ascii_lowercase().contains("marker")),
-            Node::Group(sub) => group(sub),
-        })
-    }
-    project.comps().any(|(_, c)| c.layers.iter().any(|l| group(&l.props)))
-}
-
 /// [`comp_content`] with each comp's address given by `addr`.
 fn comp_content_with(project: &Project, comp: ItemId, addr: impl Fn(ItemId, &Arc<Comp>) -> *const Comp) -> u64 {
     use std::hash::{Hash, Hasher};
@@ -716,7 +704,7 @@ impl Frames {
         let plain = comp_content(project, comp);
         let Ok(mut bases) = self.bases.lock() else { return (plain, None) };
         // Markers are pixels only to the expressions that read them (#1083).
-        let markers = reads_markers(project);
+        let markers = project.reads_markers();
         if let Some((base_id, base)) = bases.get(&comp.0)
             && *base_id != plain
             && comp_content_with(project, comp, |id, c| match base.item(id).map(|i| &i.kind) {

@@ -881,14 +881,30 @@ impl Comp {
     /// The comp with those switches and the Resolution at their defaults (borrowed when they
     /// already are), for keys that hash the whole comp.
     pub fn pixel_form(&self) -> std::borrow::Cow<'_, Comp> {
-        if !self.hide_shy && self.resolution.is_auto() && self.layers.iter().all(|l| l.switches == l.switches.pixels()) {
+        self.pixel_form_with(true)
+    }
+
+    /// [`Self::pixel_form`], also without the comp's and its layers' markers when not
+    /// `with_markers` (see [`Self::same_pixels_with`] and [`Project::reads_markers`]).
+    pub fn pixel_form_with(&self, with_markers: bool) -> std::borrow::Cow<'_, Comp> {
+        if !self.hide_shy
+            && self.resolution.is_auto()
+            && self.layers.iter().all(|l| l.switches == l.switches.pixels())
+            && (with_markers || (self.markers.is_empty() && self.layers.iter().all(|l| l.markers.is_empty())))
+        {
             return std::borrow::Cow::Borrowed(self);
         }
         let mut c = self.clone();
         c.hide_shy = false;
         c.resolution = Resolution::Auto;
+        if !with_markers {
+            c.markers.clear();
+        }
         for l in &mut c.layers {
             l.switches = l.switches.pixels();
+            if !with_markers {
+                l.markers.clear();
+            }
         }
         std::borrow::Cow::Owned(c)
     }
@@ -1339,6 +1355,21 @@ impl Default for Project {
 }
 
 impl Project {
+    /// Some expression mentions markers (`marker.key(1)`, `numKeys`, `nearestKey`...). Only then
+    /// do the markers of comps and layers affect what is rendered, so frame caches ignore them
+    /// otherwise.
+    pub fn reads_markers(&self) -> bool {
+        let mut found = false;
+        for (_, c) in self.comps() {
+            for l in &c.layers {
+                if !found {
+                    l.props.walk("", &mut |_, p| found |= p.expr.as_ref().is_some_and(|e| e.text.to_ascii_lowercase().contains("marker")));
+                }
+            }
+        }
+        found
+    }
+
     /// Allocate an id (items, layers and property uids share one counter).
     pub fn alloc(&mut self) -> u64 {
         let id = self.next_id;
