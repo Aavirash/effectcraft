@@ -751,9 +751,10 @@ fn uniform_parent_pose(m: effectcraft_geom::Mat4, orientation: [f64; 3]) -> Opti
         return Some((orientation, factor));
     }
     let r = (rotation * Mat4::orientation(Vec3::from(orientation))).0;
-    let sy = (-r[2][0]).clamp(-1.0, 1.0);
-    let y = sy.asin();
-    let (x, z) = if (1.0 - sy * sy).sqrt() > 1e-9 { (r[2][1].atan2(r[2][2]), r[1][0].atan2(r[0][0])) } else { ((-r[1][2]).atan2(r[1][1]), 0.0) };
+    // atan2 rather than asin: near ±90 degrees asin loses precision, while cos(y) stays exact.
+    let cy = r[0][0].hypot(r[1][0]);
+    let y = (-r[2][0]).atan2(cy);
+    let (x, z) = if cy > 1e-9 { (r[2][1].atan2(r[2][2]), r[1][0].atan2(r[0][0])) } else { ((-r[1][2]).atan2(r[1][1]), 0.0) };
     Some(([x.to_degrees(), y.to_degrees(), z.to_degrees()], factor))
 }
 

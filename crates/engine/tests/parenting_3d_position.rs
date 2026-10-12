@@ -383,6 +383,29 @@ fn parenting_static_orientation_handles_signed_uniform_scale_and_gimbal_order() 
     assert!(max_corners < 1e-8 && max_pixels < 2e-5, "static uniform pose must use the existing Euler order including signed scale and gimbal angles");
 }
 
+/// A static Orientation just off gimbal lock (Y within 1e-6 degrees of ±90) keeps its world pose
+/// under a uniform parent. Recovering Euler angles from the matrix must not lose precision there.
+#[test]
+fn parenting_static_orientation_is_exact_just_off_gimbal_lock() {
+    let mut max_corners = 0.0f64;
+    for factor in [120.0, -120.0] {
+        for y in [90.0 - 1e-6, -90.0 + 1e-6] {
+            let (mut s, p, c) = fixture(true, true);
+            set(&mut s, p, "transform/orientation", json!([0.0, 0.0, 0.0]));
+            set(&mut s, p, "transform/rotationX", json!(0.0));
+            set(&mut s, p, "transform/rotationY", json!(0.0));
+            set(&mut s, p, "transform/rotation", json!(42.0));
+            set(&mut s, p, "transform/scale", json!([factor, factor, factor]));
+            set(&mut s, c, "transform/orientation", json!([23.0, y, -37.0]));
+            set(&mut s, c, "transform/scale", json!([200.0, 160.0, 150.0]));
+            let before = world(&s, c, Tick::ZERO);
+            parent(&mut s, c, Some(p), true);
+            max_corners = max_corners.max(displacement(before, world(&s, c, Tick::ZERO)));
+        }
+    }
+    assert!(max_corners < 1e-9, "a static Orientation near gimbal lock must keep its world pose: corners {max_corners}");
+}
+
 #[test]
 fn parenting_animated_orientation_and_nonuniform_parent_keep_authored_pose_boundary() {
     for animated in [true, false] {
