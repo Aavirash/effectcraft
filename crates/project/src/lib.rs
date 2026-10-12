@@ -759,6 +759,12 @@ impl Switches {
 impl Layer {
     /// Draws the same pixels as `o`: equal but for the Audio, Lock and Shy switches.
     pub fn same_pixels(&self, o: &Layer) -> bool {
+        self.same_pixels_with(o, true)
+    }
+
+    /// [`Self::same_pixels`], with the markers counting only when `with_markers` (they are read by
+    /// expressions alone, so a project without any can edit them freely).
+    pub fn same_pixels_with(&self, o: &Layer, with_markers: bool) -> bool {
         // Every field (no `..`: a new field must be considered here); the property tree last.
         let Layer {
             id,
@@ -796,7 +802,7 @@ impl Layer {
             && *preserve_transparency == o.preserve_transparency
             && *track_matte == o.track_matte
             && *parent == o.parent
-            && *markers == o.markers
+            && (!with_markers || *markers == o.markers)
             && *markers_locked == o.markers_locked
             && *auto_orient == o.auto_orient
             && *environment == o.environment
@@ -809,6 +815,13 @@ impl Comp {
     /// Draws the same pixels as `o`: equal but for its layers' Audio, Lock and Shy switches, Hide
     /// Shy Layers and the viewer's Resolution.
     pub fn same_pixels(&self, o: &Comp) -> bool {
+        self.same_pixels_with(o, true)
+    }
+
+    /// [`Self::same_pixels`], with the comp's and its layers' markers counting only when
+    /// `with_markers`: only expressions read them, so while none does, adding or moving a marker
+    /// (even during playback) leaves every rendered frame valid.
+    pub fn same_pixels_with(&self, o: &Comp, with_markers: bool) -> bool {
         // Every field (no `..`: a new field must be considered here); the layers last.
         let Comp {
             width,
@@ -846,7 +859,7 @@ impl Comp {
             && *display_start == o.display_start
             && *background == o.background
             && *work_area == o.work_area
-            && *markers == o.markers
+            && (!with_markers || *markers == o.markers)
             && *shutter_angle == o.shutter_angle
             && *shutter_phase == o.shutter_phase
             && *motion_blur_samples == o.motion_blur_samples
@@ -862,7 +875,7 @@ impl Comp {
             && *guides == o.guides
             && *essential == o.essential
             && layers.len() == o.layers.len()
-            && layers.iter().zip(&o.layers).all(|(a, b)| a.same_pixels(b))
+            && layers.iter().zip(&o.layers).all(|(a, b)| a.same_pixels_with(b, with_markers))
     }
 
     /// The comp with those switches and the Resolution at their defaults (borrowed when they

@@ -291,6 +291,18 @@ pub fn comp_content(project: &Project, comp: ItemId) -> u64 {
     comp_content_with(project, comp, |_, c| Arc::as_ptr(c))
 }
 
+/// Some expression in the project mentions markers (`marker.key(1)`, `numKeys`, `nearestKey`…).
+/// Only then do the markers of its comps and layers affect what is rendered.
+fn reads_markers(project: &Project) -> bool {
+    fn group(g: &PropGroup) -> bool {
+        g.children.iter().any(|c| match c {
+            Node::Prop(p) => p.expr.as_ref().is_some_and(|e| e.text.to_ascii_lowercase().contains("marker")),
+            Node::Group(sub) => group(sub),
+        })
+    }
+    project.comps().any(|(_, c)| c.layers.iter().any(|l| group(&l.props)))
+}
+
 /// [`comp_content`] with each comp's address given by `addr`.
 fn comp_content_with(project: &Project, comp: ItemId, addr: impl Fn(ItemId, &Arc<Comp>) -> *const Comp) -> u64 {
     use std::hash::{Hash, Hasher};
@@ -703,10 +715,12 @@ impl Frames {
     fn identity(&self, project: &Arc<Project>, comp: ItemId) -> Identity {
         let plain = comp_content(project, comp);
         let Ok(mut bases) = self.bases.lock() else { return (plain, None) };
+        // Markers are pixels only to the expressions that read them (#1083).
+        let markers = reads_markers(project);
         if let Some((base_id, base)) = bases.get(&comp.0)
             && *base_id != plain
             && comp_content_with(project, comp, |id, c| match base.item(id).map(|i| &i.kind) {
-                Some(ItemKind::Comp(b)) if Arc::ptr_eq(b, c) || b.same_pixels(c) => Arc::as_ptr(b),
+                Some(ItemKind::Comp(b)) if Arc::ptr_eq(b, c) || b.same_pixels_with(c, markers) => Arc::as_ptr(b),
                 _ => Arc::as_ptr(c),
             }) == *base_id
         {
@@ -1969,5 +1983,37 @@ mod tests {
         assert_eq!(at(&s), o1, "a mute after a real edit keeps that edit's frames");
         switch(&mut s, inner, solid, "video", true);
         assert_ne!(at(&s), o1);
+    }
+
+    /// Adding, moving or deleting a marker (Num* while a preview plays) keeps the cached frames:
+    /// the sound would otherwise stop at the next frame that has to be rendered again (#1083).
+    /// Only expressions that read markers make them part of the pixels.
+    #[test]
+    fn markers_keep_the_frames_unless_an_expression_reads_them() {
+        use effectcraft_engine::Session;
+        use serde_json::json;
+        let mut s = Session::default();
+        let id = |v: serde_json::Value, k: &str| v[k].as_u64().unwrap();
+        let inner = ItemId(id(s.execute("comp.new", json!({"name": "Inner", "width": 8, "height": 8, "duration": 2})).unwrap(), "comp"));
+        let solid = id(s.execute("layer.newSolid", json!({"comp": inner.0, "color": "#ff0000"})).unwrap(), "layer");
+        let outer = ItemId(id(s.execute("comp.new", json!({"name": "Outer", "width": 8, "height": 8, "duration": 2})).unwrap(), "comp"));
+        id(s.execute("layer.addItem", json!({"comp": outer.0, "item": inner.0})).unwrap(), "layer");
+        let f = Frames::default();
+        let at = |s: &Session, c: ItemId| f.content_of(&s.project, s.revision, c);
+        let (o0, i0) = (at(&s, outer), at(&s, inner));
+        s.execute("comp.addMarker", json!({"comp": inner.0, "time": 0.5, "comment": "beat"})).unwrap();
+        s.execute("comp.addMarker", json!({"comp": outer.0, "time": 1.0})).unwrap();
+        s.execute("comp.addMarker", json!({"comp": outer.0, "time": 1.5})).unwrap();
+        assert_eq!((at(&s, outer), at(&s, inner)), (o0, i0), "comp markers");
+        s.execute("markers.set", json!({"comp": inner.0, "layer": solid, "new": true, "time": 0.25})).unwrap();
+        assert_eq!((at(&s, outer), at(&s, inner)), (o0, i0), "layer marker");
+        // An expression reading markers makes them count again.
+        s.execute("prop.setExpression", json!({"comp": inner.0, "layer": solid, "path": "transform/opacity", "expression": "thisComp.marker.numKeys"}))
+            .unwrap();
+        let (o1, i1) = (at(&s, outer), at(&s, inner));
+        assert_ne!(o1, o0);
+        s.execute("comp.addMarker", json!({"comp": inner.0, "time": 1.0})).unwrap();
+        assert_ne!(at(&s, inner), i1, "marker read by an expression");
+        assert_ne!(at(&s, outer), o1, "marker read by an expression in a nested comp");
     }
 }
