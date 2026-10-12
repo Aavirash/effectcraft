@@ -39,7 +39,7 @@ There is also a RISC-V 64-bit `.tar.gz` (it needs glibc 2.39 or newer) and a Fre
 
 ## In the browser
 
-`effectcraft-web-<version>.zip` is the web build. It is a static site that runs in a modern browser and needs to be hosted on a web server. Projects, media and settings stay in the browser and on your computer.
+`effectcraft-web-<version>.zip` is the web build. It is a static site that runs in a modern browser and needs to be hosted on a web server. Projects, media and settings stay in the browser's private storage and on your computer.
 
 ## Install through ArtCraft Launcher
 

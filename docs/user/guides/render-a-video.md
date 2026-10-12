@@ -7,6 +7,8 @@ verified: 0.8.0
 
 Select the composition, choose **Composition ▸ Add to Render Queue** (Ctrl+M), set the output file, then click **Render** in the Render Queue panel. The default format is H.264, saved as an `.mp4` file named after the composition.
 
+Shortcuts on this page use Ctrl. On macOS, use Cmd instead of Ctrl.
+
 ## Steps
 
 1. Select the composition in the Project panel or open it.
@@ -14,7 +16,8 @@ Select the composition, choose **Composition ▸ Add to Render Queue** (Ctrl+M),
 3. The queue lists the item with its **Comp Name**, **Status**, **Started** and **Render Time**. Twirl the item open to see **Render Settings:**, **Output Module:** and **Output To**.
 4. Click **Output Module:** and choose a format. The menu entries read **Format: H.264**, **Format: QuickTime (ProRes)** and so on.
 5. Click the file name next to **Output To** to choose where to save. Alt-click it to edit the name template instead.
-6. Click **Render**. The status changes to **Rendering** with a percentage. Click **Stop** to cancel.
+6. Check that the **Render** tick box at the left of the item is on. It is on by default, and only ticked items render.
+7. Click **Render**. The status changes to **Rendering** with a percentage. Click **Stop** to cancel.
 
 Tick **Notify** to get a sound and a notification when the queue finishes.
 

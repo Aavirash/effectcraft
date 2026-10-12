@@ -23,10 +23,10 @@ Projects are saved as `.ecproj` files. An `.ecproj` file is readable JSON, so it
 
 Choose **Composition ▸ Composition Settings...** to change the name, size, frame rate or duration. The dialog has **Basic**, **Advanced** and **3D Renderer** tabs.
 
+## Learn in the app
+
+The in-app tutorial **Animate a title** walks through a similar title animation. To open it, choose **Help ▸ In-App Tutorials...**.
+
 ## Next
 
 [Animate with keyframes](animate-with-keyframes.md).
-
-## Learn in the app
-
-The in-app tutorial **Animate a title** walks through these steps. To open it, choose **Help ▸ In-App Tutorials...**.

@@ -7,6 +7,8 @@ verified: 0.8.0
 
 Select a layer, then choose the effect from the **Effect** menu, or double-click it in the **Effects & Presets** panel. Change its settings in **Effect Controls** (F3).
 
+Shortcuts on this page use Ctrl. On macOS, use Cmd instead of Ctrl.
+
 ## Steps
 
 1. Select a layer in the Timeline.

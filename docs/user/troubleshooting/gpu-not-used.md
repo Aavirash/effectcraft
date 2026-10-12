@@ -5,7 +5,7 @@ order: 10
 verified: 0.8.0
 ---
 
-Open **Help ▸ System Compatibility Report...** and read the **GPU:** and **Window graphics:** lines. If the window runs on the wrong adapter, set **Window Graphics** to **Automatic** in the preferences and restart EffectCraft.
+Open **Help ▸ System Compatibility Report...** and read the **GPU:** and **Window graphics:** lines. If the window runs on the wrong adapter, set **Window Graphics** to **Automatic** in the preferences (**Edit ▸ Preferences ▸ Startup & Repair...**; on macOS: **EffectCraft ▸ Settings... ▸ Startup & Repair...**) and restart EffectCraft.
 
 ## Symptoms
 
@@ -16,7 +16,7 @@ Open **Help ▸ System Compatibility Report...** and read the **GPU:** and **Win
 
 1. Choose **Help ▸ System Compatibility Report...**. Copy the text.
 2. Look at the `Window graphics:` line. If it shows the wrong adapter, continue. If it shows your card, go to **Still stuck?** below.
-3. Choose **Edit ▸ Preferences ▸ Startup & Repair...**.
+3. Choose **Edit ▸ Preferences ▸ Startup & Repair...**. On macOS, choose **EffectCraft ▸ Settings... ▸ Startup & Repair...**.
 4. Set **Window Graphics** to **Automatic**. The other choice is **OpenGL (compatibility)**.
 5. Close EffectCraft and start it again. The change applies from the next launch.
 6. Open the report again and check that `Window graphics:` now names your card.
@@ -32,6 +32,8 @@ The **GPU Information...** button on the Previews page of the preferences shows 
 ## Windows 11 with DirectX 12
 
 On some Windows 11 PCs with NVIDIA GPUs, the GPU compositor fails to start on DirectX 12 because the FXC shader compiler rejects some of EffectCraft's GPU kernels. Two users reproduced this with an RTX 4060 laptop GPU and an RTX 3060. In their tests EffectCraft fell back to CPU compositing, and the same build started on Vulkan. This is open as [issue #613](https://github.com/storytold/effectcraft/issues/613). Check the issue for updates.
+
+The window can also take a long time to appear. On 0.8.0 with an RTX 5060 Ti, one user measured 69 seconds before the window showed on DirectX 12 without a working DXC shader compiler, against 3 seconds on Vulkan, which is what Automatic picked on that PC. If you close EffectCraft during that wait, the next launch uses OpenGL and has no GPU compositor until you set **Window Graphics** back to **Automatic** (steps above). So wait for the window on the first launch.
 
 ## Still stuck?
 

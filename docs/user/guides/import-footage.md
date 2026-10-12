@@ -7,6 +7,8 @@ verified: 0.8.0
 
 Choose **File ▸ Import ▸ File...** (Ctrl+I) and pick your files, or drop files on the EffectCraft window. Numbered stills such as `shot_0001.png` can import as one sequence that plays like a movie.
 
+Shortcuts on this page use Ctrl. On macOS, use Cmd instead of Ctrl.
+
 ## Import files
 
 1. Choose **File ▸ Import ▸ File...** to pick one file. Use **File ▸ Import ▸ Multiple Files...** to pick several.
@@ -20,7 +22,7 @@ You can also drop files or folders on the window. Files dropped on the Compositi
 1. Choose **File ▸ Import ▸ File...** and pick any one numbered file of the run.
 2. In the **Import Image Sequence** dialog, check the run it found. It also lists missing frames.
 3. Tick the sequence option, which is named after the file type, for example **PNG Sequence**. When it is off, the files import as separate stills. It is off by default.
-4. Set **Frame rate (fps)**. The default comes from **Sequence Footage** on the Import page of the preferences (**Edit ▸ Preferences ▸ Import...**), which is 30 fps.
+4. Set **Frame rate (fps)**. The default comes from **Sequence Footage** on the Import page of the preferences (**Edit ▸ Preferences ▸ Import...**; on macOS: **EffectCraft ▸ Settings... ▸ Import...**), which is 30 fps.
 5. Confirm. The run arrives as one footage item named like `shot_[0001-0250].png`.
 
 **Force alphabetical order** imports every image of that type in the folder in name order, whatever the numbering. Use it for files that are not numbered consistently.
