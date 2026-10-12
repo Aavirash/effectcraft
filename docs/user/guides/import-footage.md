@@ -7,7 +7,7 @@ verified: 0.8.0
 
 Choose **File ▸ Import ▸ File...** (Ctrl+I) and pick your files, or drop files on the EffectCraft window. Numbered stills such as `shot_0001.png` can import as one sequence that plays like a movie.
 
-Shortcuts on this page use Ctrl. On macOS, use Cmd instead of Ctrl.
+Shortcuts on this page use Ctrl. On macOS, use Cmd instead of Ctrl and Option instead of Alt.
 
 ## Import files
 

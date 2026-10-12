@@ -11,7 +11,7 @@ Yes, EffectCraft is free. It is open source, dual-licensed under MIT or Apache-2
 
 | Platform | Builds                                                                        |
 |----------|-------------------------------------------------------------------------------|
-| Windows  | x64, arm64 and x86, as MSI installers and portable zips                       |
+| Windows  | x64 and arm64, as MSI installers and portable zips                       |
 | macOS    | One universal app for Apple silicon and Intel                                 |
 | Linux    | x86_64 and aarch64 as AppImage, Flatpak, deb, rpm and tar.gz; riscv64 tar.gz  |
 | FreeBSD  | x86_64 tar.gz                                                                 |

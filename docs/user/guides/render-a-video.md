@@ -7,7 +7,7 @@ verified: 0.8.0
 
 Select the composition, choose **Composition ▸ Add to Render Queue** (Ctrl+M), set the output file, then click **Render** in the Render Queue panel. The default format is H.264, saved as an `.mp4` file named after the composition.
 
-Shortcuts on this page use Ctrl. On macOS, use Cmd instead of Ctrl.
+Shortcuts on this page use Ctrl. On macOS, use Cmd instead of Ctrl and Option instead of Alt.
 
 ## Steps
 

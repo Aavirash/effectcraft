@@ -14,9 +14,9 @@ The easiest way is the [EffectCraft page on getartcraft.com](https://getartcraft
 3. Run the file and follow the installer. It asks where to install EffectCraft and offers a **Create a desktop shortcut** box.
 4. Start **EffectCraft** from the Start menu.
 
-The release also has an `arm64` installer for Snapdragon and other ARM PCs, and an `x86` installer for 32-bit Windows. The installers are code-signed and install for all users. Later versions install into the same folder.
+The release also has an `arm64` installer for Snapdragon and other ARM PCs. The installers are code-signed and install for all users. Later versions install into the same folder.
 
-To run it without installing, download `effectcraft-<version>-windows-x64-portable.zip` instead. It contains `effectcraft.exe` and the command-line tool `effectcraft-cli.exe`. The `arm64` and `x86` builds have portable zips too.
+To run it without installing, download `effectcraft-<version>-windows-x64-portable.zip` instead. It contains `effectcraft.exe` and the command-line tool `effectcraft-cli.exe`. The `arm64` build has a portable zip too.
 
 ## macOS
 

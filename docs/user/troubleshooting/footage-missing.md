@@ -7,7 +7,7 @@ verified: 0.8.0
 
 Choose **File ▸ Dependencies ▸ Relink Missing Footage...** and pick the folder where your files are now. For files that stay missing, choose **File ▸ Replace Footage ▸ File...**.
 
-Shortcuts on this page use Ctrl. On macOS, use Cmd instead of Ctrl.
+Shortcuts on this page use Ctrl. On macOS, use Cmd instead of Ctrl and Option instead of Alt.
 
 ## Symptoms
 

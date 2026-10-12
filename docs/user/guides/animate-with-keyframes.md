@@ -9,7 +9,7 @@ Click the stopwatch beside a property to start animating it, move the current-ti
 
 You need a composition with a layer. See [Make your first composition](make-a-composition.md).
 
-Shortcuts on this page use Ctrl. On macOS, use Cmd instead of Ctrl.
+Shortcuts on this page use Ctrl. On macOS, use Cmd instead of Ctrl and Option instead of Alt.
 
 ## Steps
 
