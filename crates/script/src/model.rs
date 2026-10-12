@@ -402,6 +402,38 @@ fn alias(k: &str) -> Option<&'static str> {
     })
 }
 
+/// How many groups below a property group a string key may search (#1063: Pro Levels2's Alpha
+/// controls sit one group down, under Alpha).
+const NESTED_CHILD_DEPTH: u8 = 3;
+
+/// The child of `g` that a string key names. The direct children are searched first, then the
+/// groups nested below them, up to `depth` levels.
+fn find_child<'a>(l: &'a Layer, g: &'a PropGroup, k: &str, depth: u8) -> Option<&'a Node> {
+    let chain_of = |n: &Node| -> String {
+        let mut ch = if g.uid == l.props.uid { vec![] } else { chain(l, g.uid).unwrap_or_default() };
+        ch.push(n);
+        matchnames::node(&ch)
+    };
+    let lk = loose(k);
+    g.children
+        .iter()
+        .find(|n| chain_of(n) == k)
+        .or_else(|| g.children.iter().find(|n| n.name() == k))
+        .or_else(|| g.children.iter().find(|n| n.match_id() == k))
+        .or_else(|| g.children.iter().find(|n| n.name().eq_ignore_ascii_case(k)))
+        .or_else(|| g.children.iter().find(|n| loose(n.name()) == lk || loose(n.match_id()) == lk))
+        .or_else(|| alias(&lk).and_then(|m| g.children.iter().find(|n| n.match_id() == m)))
+        .or_else(|| {
+            if depth == 0 {
+                return None;
+            }
+            g.children.iter().find_map(|n| match n {
+                Node::Group(sub) => find_child(l, sub, k, depth - 1),
+                Node::Prop(_) => None,
+            })
+        })
+}
+
 fn child(s: &Session, a: &J) -> R {
     let (_, c, l) = layer_of(s, a)?;
     let uid = u(a, "uid").unwrap_or(0);
@@ -409,22 +441,7 @@ fn child(s: &Session, a: &J) -> R {
     let key = a.get("key").cloned().unwrap_or(J::Null);
     let found = match &key {
         J::Number(n) => n.as_u64().and_then(|i| g.children.get((i as usize).checked_sub(1)?)),
-        J::String(k) => {
-            let chain_of = |n: &Node| -> String {
-                let mut ch = if uid == 0 || uid == l.props.uid { vec![] } else { chain(l, uid).unwrap_or_default() };
-                ch.push(n);
-                matchnames::node(&ch)
-            };
-            let lk = loose(k);
-            g.children
-                .iter()
-                .find(|n| chain_of(n) == *k)
-                .or_else(|| g.children.iter().find(|n| n.name() == k))
-                .or_else(|| g.children.iter().find(|n| n.match_id() == k))
-                .or_else(|| g.children.iter().find(|n| n.name().eq_ignore_ascii_case(k)))
-                .or_else(|| g.children.iter().find(|n| loose(n.name()) == lk || loose(n.match_id()) == lk))
-                .or_else(|| alias(&lk).and_then(|m| g.children.iter().find(|n| n.match_id() == m)))
-        }
+        J::String(k) => find_child(l, g, k, NESTED_CHILD_DEPTH),
         _ => None,
     };
     match found {
