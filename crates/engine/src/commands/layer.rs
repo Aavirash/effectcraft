@@ -591,7 +591,8 @@ pub(crate) struct ParentFix {
     rotation: f64,
     /// Multiply Scale.
     scale: [f64; 2],
-    /// 3D AV layers retain their world-space anchor, including Z.
+    /// 3D AV layers retain their world-space anchor, including Z. Cameras and lights also
+    /// re-express their Point of Interest.
     position_3d: Option<effectcraft_geom::Mat4>,
     /// A uniform relative parent transform can preserve static Orientation and Scale.
     pose_3d: Option<([f64; 3], f64)>,
@@ -626,7 +627,8 @@ impl ParentFix {
                     }
                 }
             }
-            if let Some(pr) = tr.get_mut("position") {
+            // Position and a camera's or light's Point of Interest are both points in the parent's space.
+            let map_point = |pr: &mut effectcraft_project::Property| {
                 pr.value = map_position(&pr.value);
                 for key in &mut pr.keys {
                     key.value = map_position(&key.value);
@@ -646,6 +648,12 @@ impl ParentFix {
                         }
                     }
                 }
+            };
+            if let Some(pr) = tr.get_mut("position") {
+                map_point(pr);
+            }
+            if let Some(pr) = tr.get_mut("poi") {
+                map_point(pr);
             }
             if let Some((orientation, factor)) = self.pose_3d {
                 if let Some(pr) = tr.get_mut("orientation") {
@@ -793,7 +801,7 @@ pub(crate) fn parent_fixes(s: &Session, cid: ItemId, ids: &[LayerId], parent: Op
         })
     };
     if let Some(inv) = space_3d(parent).inverse().filter(|m| m.0.iter().flatten().all(|v| v.is_finite())) {
-        for layer in comp.layers.iter().filter(|l| ids.contains(&l.id) && l.is_3d() && !l.is_camera() && !l.is_light() && l.parent != parent) {
+        for layer in comp.layers.iter().filter(|l| ids.contains(&l.id) && l.is_3d() && l.parent != parent) {
             let m = inv * space_3d(layer.parent);
             if m.0.iter().flatten().all(|v| v.is_finite()) {
                 let pose_3d = layer.transform().and_then(|tr| {

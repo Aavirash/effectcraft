@@ -207,6 +207,29 @@ fn control_light_with_camera_follows_and_releases() {
     assert!(s.execute("light.controlWithCamera", json!({"layers": [cam]})).is_err());
 }
 
+/// Parenting keeps a camera where it is (After Effects' Parent & Link): Position and Point of
+/// Interest are re-expressed in the null's space, so the frame does not move.
+#[test]
+fn parented_camera_keeps_its_frame_under_an_offset_null() {
+    let mut s = session();
+    let cam = camera(&mut s);
+    let (eye0, f0) = frame(&s, cam);
+    let nul = s.execute("layer.newNull", json!({})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("prop.set", json!({"layer": nul, "path": "transform/position", "value": [100, 60, 0]})).unwrap();
+    s.execute("layer.setParent", json!({"layers": [cam], "parent": nul})).unwrap();
+    let (eye1, f1) = frame(&s, cam);
+    assert!((eye1 - eye0).length() < 1e-6 && (f1 - f0).length() < 1e-6, "{eye0:?} {eye1:?}");
+    // The null's origin is Position minus its default anchor (50, 50): (50, 10) in the comp.
+    let c = layer_in(&s, cid(&s), cam);
+    assert!(close3(v3(&c, "transform/position"), [270.0, 170.0, -800.0], 1e-6), "{:?}", v3(&c, "transform/position"));
+    assert!(close3(v3(&c, "transform/poi"), [270.0, 170.0, 0.0], 1e-6), "{:?}", v3(&c, "transform/poi"));
+    // Moving the null carries the camera and keeps its aim.
+    s.execute("prop.set", json!({"layer": nul, "path": "transform/position", "value": [140, 90, 0]})).unwrap();
+    let (eye2, f2) = frame(&s, cam);
+    assert!((eye2 - (eye0 + vec3(40.0, 30.0, 0.0))).length() < 1e-6, "{eye2:?}");
+    assert!((f2 - f0).length() < 1e-6, "{f2:?}");
+}
+
 // ---------------------------------------------------------------- from 3D model
 
 struct DiskModels;
