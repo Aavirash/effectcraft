@@ -506,3 +506,41 @@ fn parenting_uniform_parent_preserves_eased_position_at_quarter_times_and_undo()
     }
     assert!(maximum_error < 1e-8, "3D uniform parent compensation must preserve eased Position at quarter and three-quarter times");
 }
+
+/// Parenting a two-node camera to a default null keeps its world frame (eye, forward, down):
+/// Position and Point of Interest are re-expressed in the null's space (#1010, #1020).
+#[test]
+fn parenting_camera_to_default_null_preserves_framing() {
+    use effectcraft_engine::render::three_d::camera::layer_frame;
+    let mut s = Session::default();
+    command(&mut s, "comp.new", json!({"name":"Camera","width":640,"height":360,"duration":2,"frameRate":24}));
+    let cam = command(&mut s, "layer.newCamera", json!({"name":"Camera 1"}))["layer"].as_u64().unwrap();
+    let null = command(&mut s, "layer.newNull", json!({"name":"Null 1"}))["layer"].as_u64().unwrap();
+    let frame = |s: &Session| {
+        let cid = s.active_comp_id().unwrap();
+        let c = s.project.comp(cid).unwrap();
+        let ctx = EvalCtx::new(&s.project, cid, c, Tick::ZERO);
+        layer_frame(&ctx, c.layer(LayerId(cam)).unwrap())
+    };
+    let authored = |s: &Session, path: &str| {
+        let cid = s.active_comp_id().unwrap();
+        s.project.comp(cid).unwrap().layer(LayerId(cam)).unwrap().props.prop(path).unwrap().value.as_vec3()
+    };
+    let (eye0, fwd0, down0) = frame(&s);
+    let (pos0, poi0) = (authored(&s, "transform/position"), authored(&s, "transform/poi"));
+    let frame_error = |(a0, b0, c0): (Vec3, Vec3, Vec3), (a1, b1, c1): (Vec3, Vec3, Vec3)| {
+        [(a0 - a1).length(), (b0 - b1).length(), (c0 - c1).length()].into_iter().fold(0.0, f64::max)
+    };
+    let undo = s.history.undo.len();
+    parent(&mut s, cam, Some(null), true);
+    assert!(frame_error(frame(&s), (eye0, fwd0, down0)) < 1e-9, "the camera frame must not move");
+    // Compensation rewrote the authored values, not just the parent pointer.
+    assert!((authored(&s, "transform/position")[0] - pos0[0]).abs() > 1.0, "position is re-expressed in the null's space");
+    assert!((authored(&s, "transform/poi")[0] - poi0[0]).abs() > 1.0, "point of interest follows it");
+    assert_eq!(s.history.undo.len(), undo + 1, "parent compensation is one undo action");
+    // Unparenting restores the authored transform and the same frame.
+    parent(&mut s, cam, None, true);
+    assert!(frame_error(frame(&s), (eye0, fwd0, down0)) < 1e-9);
+    assert_eq!(authored(&s, "transform/position"), pos0, "unparenting restores position");
+    assert_eq!(authored(&s, "transform/poi"), poi0, "unparenting restores point of interest");
+}
