@@ -772,7 +772,7 @@ fn a_rejected_texture_fails_the_frame_not_the_compositor() {
             (kept, rejected.create_view(&Default::default()))
         })
         .expect_err("the rejected texture fails the frame");
-    assert!(err.contains("deliberately too wide"), "{err}");
+    assert!(matches!(&err, crate::FrameError::Validation(e) if e.contains("deliberately too wide")), "{err:?}");
     assert!(g.ctx.check_health().is_ok(), "the compositor stays on: {:?}", g.ctx.check_health());
     let (hits, _) = g.ctx.pool_stats();
     let img = g.within_memory(|| crate::context::Enc::new(&g.ctx).image(64, 32)).expect("the next frame renders");

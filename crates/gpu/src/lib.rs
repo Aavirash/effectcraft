@@ -96,6 +96,29 @@ pub use wgpu;
 
 use crate::context::Enc;
 
+/// Why [`Gpu::within_memory`] discarded a frame.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FrameError {
+    /// The GPU context is retired (device lost, a readback timed out, an uncaptured error).
+    Retired(String),
+    /// Out of video memory (or a driver reporting a failed allocation as an internal error),
+    /// with any validation errors it went on to cause.
+    Memory(String),
+    /// The device rejected a command with no allocation failure before it (an invalid texture
+    /// or parameters, #1319): a compositor bug, not memory pressure.
+    Validation(String),
+}
+
+impl std::fmt::Display for FrameError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FrameError::Retired(e) | FrameError::Memory(e) | FrameError::Validation(e) => f.write_str(e),
+        }
+    }
+}
+
+impl std::error::Error for FrameError {}
+
 /// The GPU compositor (cheap to clone; one device shared by all clones).
 #[derive(Clone)]
 pub struct Gpu {
@@ -273,8 +296,8 @@ impl Gpu {
     /// instead of retiring the GPU compositor for the session as an uncaptured error.
     /// Browser callers use the host/owned-device failure bridge and bounded readbacks instead
     /// of blocking their event loop on an error-scope future.
-    pub fn within_memory<T>(&self, f: impl FnOnce() -> T) -> Result<T, String> {
-        self.ctx.check_health()?;
+    pub fn within_memory<T>(&self, f: impl FnOnce() -> T) -> Result<T, FrameError> {
+        self.ctx.check_health().map_err(FrameError::Retired)?;
         #[cfg(not(target_arch = "wasm32"))]
         {
             let oom = self.ctx.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
@@ -284,20 +307,22 @@ impl Gpu {
             let validation = pollster::block_on(validation.pop());
             let internal = pollster::block_on(internal.pop());
             let oom = pollster::block_on(oom.pop());
+            let memory = oom.is_some() || internal.is_some();
             // The allocation failure first: a validation error is often its consequence.
             let errors: Vec<String> = [oom, internal, validation].into_iter().flatten().map(|e| e.to_string()).collect();
             if errors.is_empty() {
-                return self.ctx.check_health().map(|()| out);
+                return self.ctx.check_health().map(|()| out).map_err(FrameError::Retired);
             }
             // Its textures go back to the pool when dropped: drop them before emptying it.
             drop(out);
             self.ctx.discard_kept();
-            Err(errors.join("; then: "))
+            let errors = errors.join("; then: ");
+            Err(if memory { FrameError::Memory(errors) } else { FrameError::Validation(errors) })
         }
         #[cfg(target_arch = "wasm32")]
         {
             let out = f();
-            self.ctx.check_health().map(|()| out)
+            self.ctx.check_health().map(|()| out).map_err(FrameError::Retired)
         }
     }
 
