@@ -467,7 +467,37 @@ pub struct Comp {
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Guide {
     pub vertical: bool,
+    /// Comp pixels, or percent of the comp's width (vertical) / height (horizontal) when
+    /// [`Guide::percent`] is set.
     pub position: f64,
+    /// A percentage guide (After Effects 26.5): `position` is a percent of the comp's size, so the
+    /// guide keeps its relative place when the comp is resized. Absent in older projects.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub percent: bool,
+}
+
+impl Guide {
+    /// The comp's extent along this guide's axis, never zero.
+    fn extent(&self, width: u32, height: u32) -> f64 {
+        f64::from(if self.vertical { width } else { height }).max(1.0)
+    }
+
+    /// The guide's position in comp pixels for a comp of this size.
+    pub fn px(&self, width: u32, height: u32) -> f64 {
+        if self.percent { self.position / 100.0 * self.extent(width, height) } else { self.position }
+    }
+
+    /// Place the guide at `px` comp pixels, keeping its unit.
+    pub fn set_px(&mut self, px: f64, width: u32, height: u32) {
+        self.position = if self.percent { px / self.extent(width, height) * 100.0 } else { px };
+    }
+
+    /// Switch between pixels and percent without moving the guide on the comp.
+    pub fn set_percent(&mut self, percent: bool, width: u32, height: u32) {
+        let px = self.px(width, height);
+        self.percent = percent;
+        self.set_px(px, width, height);
+    }
 }
 
 fn yes() -> bool {
@@ -749,6 +779,16 @@ impl Default for Switches {
 // What a frame's pixels depend on. Caches key on it: the Audio, Lock and Shy switches and Hide
 // Shy Layers don't change pixels, so toggling them keeps cached frames (#103).
 
+/// A protected time marker with a duration sets the comp's timing (Responsive Design), so it is
+/// part of the pixels even where plain markers are not.
+fn is_timing_marker(m: &Marker) -> bool {
+    m.protected && m.duration > Tick::ZERO
+}
+
+fn timing_markers(m: &[Marker]) -> impl Iterator<Item = (Tick, Tick)> + '_ {
+    m.iter().filter(|m| is_timing_marker(m)).map(|m| (m.time, m.duration))
+}
+
 impl Switches {
     /// These switches with Audio, Lock and Shy at their defaults.
     pub fn pixels(&self) -> Switches {
@@ -820,7 +860,8 @@ impl Comp {
 
     /// [`Self::same_pixels`], with the comp's and its layers' markers counting only when
     /// `with_markers`: only expressions read them, so while none does, adding or moving a marker
-    /// (even during playback) leaves every rendered frame valid.
+    /// (even during playback) leaves every rendered frame valid. Protected time markers with a
+    /// duration set the timing (Responsive Design), so those always count.
     pub fn same_pixels_with(&self, o: &Comp, with_markers: bool) -> bool {
         // Every field (no `..`: a new field must be considered here); the layers last.
         let Comp {
@@ -859,7 +900,7 @@ impl Comp {
             && *display_start == o.display_start
             && *background == o.background
             && *work_area == o.work_area
-            && (!with_markers || *markers == o.markers)
+            && (if with_markers { *markers == o.markers } else { timing_markers(markers).eq(timing_markers(&o.markers)) })
             && *shutter_angle == o.shutter_angle
             && *shutter_phase == o.shutter_phase
             && *motion_blur_samples == o.motion_blur_samples
@@ -884,13 +925,13 @@ impl Comp {
         self.pixel_form_with(true)
     }
 
-    /// [`Self::pixel_form`], also without the comp's and its layers' markers when not
+    /// [`Self::pixel_form`], also without the comp's plain markers and its layers' markers when not
     /// `with_markers` (see [`Self::same_pixels_with`] and [`Project::reads_markers`]).
     pub fn pixel_form_with(&self, with_markers: bool) -> std::borrow::Cow<'_, Comp> {
         if !self.hide_shy
             && self.resolution.is_auto()
             && self.layers.iter().all(|l| l.switches == l.switches.pixels())
-            && (with_markers || (self.markers.is_empty() && self.layers.iter().all(|l| l.markers.is_empty())))
+            && (with_markers || (self.markers.iter().all(|m| !is_timing_marker(m)) && self.layers.iter().all(|l| l.markers.is_empty())))
         {
             return std::borrow::Cow::Borrowed(self);
         }
@@ -898,7 +939,7 @@ impl Comp {
         c.hide_shy = false;
         c.resolution = Resolution::Auto;
         if !with_markers {
-            c.markers.clear();
+            c.markers.retain(is_timing_marker);
         }
         for l in &mut c.layers {
             l.switches = l.switches.pixels();
@@ -1187,6 +1228,11 @@ impl Footage {
         self.linear_light && !self.preserve_rgb
     }
 
+    /// How long the footage plays: its duration times Interpret Footage ▸ Loop.
+    pub fn looped_duration(&self) -> Tick {
+        Tick(self.duration.0.saturating_mul(self.loop_count.max(1) as i64))
+    }
+
     /// Source time as the footage's timecode: its frame `frame` from Start Timecode
     /// (`0:00:41:20`), as the Footage panel shows it.
     pub fn timecode(&self, frame: i64) -> String {
@@ -1310,7 +1356,7 @@ impl Item {
     pub fn duration(&self) -> Option<Tick> {
         match &self.kind {
             ItemKind::Comp(c) => Some(c.duration),
-            ItemKind::Footage(f) if f.kind != FootageKind::Still => Some(f.duration),
+            ItemKind::Footage(f) if f.kind != FootageKind::Still => Some(f.looped_duration()),
             _ => None,
         }
     }
@@ -1355,15 +1401,15 @@ impl Default for Project {
 }
 
 impl Project {
-    /// Some expression mentions markers (`marker.key(1)`, `numKeys`, `nearestKey`...). Only then
-    /// do the markers of comps and layers affect what is rendered, so frame caches ignore them
-    /// otherwise.
+    /// Some layer has an expression, which can read markers (`marker.key(1)`, `numKeys`,
+    /// `nearestKey`...). Only then do the markers of comps and layers affect what is rendered, so
+    /// frame caches ignore them otherwise.
     pub fn reads_markers(&self) -> bool {
         let mut found = false;
         for (_, c) in self.comps() {
             for l in &c.layers {
                 if !found {
-                    l.props.walk("", &mut |_, p| found |= p.expr.as_ref().is_some_and(|e| e.text.to_ascii_lowercase().contains("marker")));
+                    l.props.walk("", &mut |_, p| found |= p.expr.is_some());
                 }
             }
         }
@@ -1419,12 +1465,42 @@ impl Project {
     pub fn find_by_name(&self, name: &str) -> Option<&Item> {
         self.items.values().find(|i| i.name == name)
     }
+    /// A numbered name for a copy of `base` that no project item has (Edit ▸ Duplicate): its
+    /// trailing number is dropped and the lowest free one from 2 is added (`Comp 1` → `Comp 2`,
+    /// `Name` → `Name 2`, then `Name 3`). Items for which `ignore` holds don't count.
+    pub fn numbered_item_name(&self, base: &str, ignore: impl Fn(&Item) -> bool) -> String {
+        let stem = base.trim_end_matches(|c: char| c.is_ascii_digit()).trim_end();
+        let taken = |n: &str| self.items.values().any(|i| i.name == n && !ignore(i));
+        (2u64..).map(|k| format!("{stem} {k}")).find(|n| !taken(n)).unwrap_or_default()
+    }
+    /// `base` when no project item has that name, else the next free numbered name as
+    /// [`Project::numbered_item_name`] gives it. Items for which `ignore` holds don't count.
+    pub fn unique_item_name(&self, base: &str, ignore: impl Fn(&Item) -> bool) -> String {
+        if self.items.values().any(|i| i.name == base && !ignore(i)) { self.numbered_item_name(base, ignore) } else { base.to_string() }
+    }
     pub fn folder_named(&self, name: &str) -> Option<ItemId> {
         self.items.values().find(|i| i.is_folder() && i.name == name).map(|i| i.id)
     }
     /// Find the comp that contains `layer`.
     pub fn comp_of_layer(&self, layer: LayerId) -> Option<ItemId> {
         self.comps().find(|(_, c)| c.layer(layer).is_some()).map(|(id, _)| *id)
+    }
+    /// The compositions whose layers use `item` as their source (footage, solid, 3D model or
+    /// precomp), each with how many of its layers do, ordered by comp name then id. Only direct
+    /// layers count, as in After Effects' Project panel ("used 3 times"): a solid inside a precomp
+    /// is used by the precomp, not by the comps that nest it. The total is the sum of the counts.
+    pub fn item_users(&self, item: ItemId) -> Vec<(ItemId, usize)> {
+        let mut users: Vec<(ItemId, String, usize)> = self
+            .items
+            .iter()
+            .filter_map(|(id, it)| {
+                let comp = it.as_comp()?;
+                let n = comp.layers.iter().filter(|l| l.source.item() == Some(item)).count();
+                (n > 0).then(|| (*id, it.name.to_lowercase(), n))
+            })
+            .collect();
+        users.sort_by(|a, b| a.1.cmp(&b.1).then(a.0.cmp(&b.0)));
+        users.into_iter().map(|(id, _, n)| (id, n)).collect()
     }
     /// Whether comp `inner` is (transitively) nested inside comp `outer` (to prevent cycles).
     pub fn comp_contains(&self, outer: ItemId, inner: ItemId) -> bool {
@@ -1438,10 +1514,11 @@ impl Project {
     pub fn fix_next_id(&mut self) {
         let mut m = self.next_id;
         for (id, it) in &self.items {
-            m = m.max(id.0 + 1);
+            // Saturating: a damaged file's ids must not overflow (the import then refuses it).
+            m = m.max(id.0.saturating_add(1));
             if let ItemKind::Comp(c) = &it.kind {
                 for l in &c.layers {
-                    m = m.max(l.id.0 + 1).max(l.props.max_uid() + 1);
+                    m = m.max(l.id.0.saturating_add(1)).max(l.props.max_uid().saturating_add(1));
                 }
             }
         }

@@ -561,7 +561,8 @@ async fn fill(s: &mut Session, plan: crate::commands::content_fill::FillPlan, po
 /// Roto Brush propagation in a worker: the segmentations stream back (at most every 250 ms)
 /// as they are computed, so stopping the job keeps what was propagated.
 async fn propagate(s: &mut Session, comp: ItemId, layer: LayerId, effect: Uid, dir: crate::roto::Direction, post: Post) -> Result<(), String> {
-    let keys: Vec<u64> = s.roto_chain(comp, layer, effect).map(|c| c.keys.values().copied().collect()).ok_or("no Roto Brush strokes")?;
+    let keys: Vec<u64> =
+        s.roto_keys(comp, layer, effect).map(|k| k.into_iter().map(|(_, k)| k).collect()).ok_or("no Roto Brush strokes or Object Matte prompt")?;
     let sent = Rc::new(RefCell::new(std::collections::HashSet::new()));
     let (p, k2, s2) = (post.clone(), keys.clone(), sent.clone());
     let mut last = None::<web_time::Instant>;

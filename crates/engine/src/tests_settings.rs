@@ -375,6 +375,89 @@ fn defaults_have_no_conflicts_and_match_the_menus() {
     assert!(t.bindables.len() > 500);
 }
 
+/// Each Fast Previews and Show Channel mode is a command with a default key.
+#[test]
+fn fast_previews_and_show_channel_modes_have_default_keys() {
+    let s = Session::default();
+    let t = s.shortcuts();
+    for (id, key) in [
+        ("view.fastPreviews.off", "Cmd+Alt+1"),
+        ("view.fastPreviews.adaptive", "Cmd+Alt+2"),
+        ("view.fastPreviews.draft", "Cmd+Alt+3"),
+        ("view.fastPreviews.fastDraft", "Cmd+Alt+4"),
+        ("view.fastPreviews.wireframe", "Cmd+Alt+5"),
+        ("view.channel.red", "Alt+1"),
+        ("view.channel.green", "Alt+2"),
+        ("view.channel.blue", "Alt+3"),
+        ("view.channel.alpha", "Alt+4"),
+        ("view.channel.redColorized", "Alt+Shift+1"),
+        ("view.channel.greenColorized", "Alt+Shift+2"),
+        ("view.channel.blueColorized", "Alt+Shift+3"),
+        ("view.channel.rgbStraight", "Alt+Shift+4"),
+    ] {
+        assert_eq!(t.shortcut_of(id, &json!(null)), Some(key), "{id}");
+    }
+    assert!(t.all_conflicts().is_empty(), "{:?}", t.all_conflicts());
+    // The commands set their mode; a channel's key again is RGB.
+    let mut s = Session::default();
+    s.execute("view.fastPreviews.fastDraft", json!({})).unwrap();
+    assert_eq!(s.state.viewer.fast_previews.id(), "fastDraft");
+    s.execute("view.channel.redColorized", json!({})).unwrap();
+    assert_eq!((s.state.viewer.channel.id(), s.state.viewer.colorized), ("red", true));
+    s.execute("view.channel.green", json!({})).unwrap();
+    assert_eq!((s.state.viewer.channel.id(), s.state.viewer.colorized), ("green", false));
+    s.execute("view.channel.green", json!({})).unwrap();
+    assert_eq!(s.state.viewer.channel.id(), "rgb");
+    // Grayscale and colorized of one channel replace each other; the same again is RGB.
+    s.execute("view.channel.redColorized", json!({})).unwrap();
+    s.execute("view.channel.red", json!({})).unwrap();
+    assert_eq!((s.state.viewer.channel.id(), s.state.viewer.colorized), ("red", false));
+    s.execute("view.channel.redColorized", json!({})).unwrap();
+    assert_eq!((s.state.viewer.channel.id(), s.state.viewer.colorized), ("red", true));
+    s.execute("view.channel.redColorized", json!({})).unwrap();
+    assert_eq!(s.state.viewer.channel.id(), "rgb");
+}
+
+/// Default keys for commands and menu entries that had none.
+#[test]
+fn default_keys_for_commands_that_had_none() {
+    let s = Session::default();
+    let t = s.shortcuts();
+    for (id, params, key) in [
+        ("edit.pasteReversedKeyframes", json!(null), "Cmd+Shift+V"),
+        ("edit.purge", json!({"what": "snapshot"}), "Cmd+Shift+F5"),
+        ("layer.sampling", json!({"sampling": "bilinear", "toggle": true}), "Alt+B"),
+        ("layer.sampling", json!({"sampling": "bicubic", "toggle": true}), "Alt+Shift+B"),
+        ("view.res.custom", json!(null), "Cmd+Alt+J"),
+        ("file.setProxy", json!(null), "Cmd+Alt+P"),
+        ("file.openRecent", json!(null), "Cmd+Alt+Shift+P"),
+        ("anim.applyRecentPreset", json!(null), "Cmd+Alt+Shift+F"),
+    ] {
+        assert_eq!(t.shortcut_of(id, &params), Some(key), "{id} {params}");
+    }
+    assert!(t.all_conflicts().is_empty(), "{:?}", t.all_conflicts());
+}
+
+/// Second default keys: on the command, or after a comma in a menu line with bound parameters.
+#[test]
+fn second_default_keys() {
+    let s = Session::default();
+    let t = s.shortcuts();
+    for (key, want) in [
+        ("edit.deselectAll", ["Cmd+Shift+A", "F2"]),
+        ("time.start", ["Home", "Cmd+Alt+ArrowLeft"]),
+        ("time.end", ["End", "Cmd+Alt+ArrowRight"]),
+        ("renderQueue.add", ["Cmd+M", "Cmd+Shift+/"]),
+        (r#"window.panel {"panel":"effectControls"}"#, ["F3", "Cmd+Shift+T"]),
+    ] {
+        assert_eq!(t.keys.get(key).map(Vec::as_slice), Some(want.map(String::from).as_slice()), "{key}");
+    }
+    // The menus keep showing the first key.
+    assert_eq!(t.shortcut_of("window.panel", &json!({"panel": "effectControls"})), Some("F3"));
+    assert_eq!(t.shortcut_of("edit.deselectAll", &json!(null)), Some("Cmd+Shift+A"));
+    assert!(t.all_conflicts().is_empty(), "{:?}", t.all_conflicts());
+}
+
 /// Cmd+Left / Cmd+Right Arrow step a frame like Page Up / Page Down (Shift: 10 frames).
 #[test]
 fn cmd_arrows_step_frames_like_page_keys() {

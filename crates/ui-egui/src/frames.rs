@@ -2004,4 +2004,30 @@ mod tests {
         assert_ne!(at(&s, inner), i1, "marker read by an expression");
         assert_ne!(at(&s, outer), o1, "marker read by an expression in a nested comp");
     }
+
+    /// A protected time marker with a duration sets the comp's timing (Responsive Design), so it
+    /// changes the frames even though plain markers do not; and any expression, which can read
+    /// markers, makes every marker count.
+    #[test]
+    fn timing_markers_and_expressions_still_change_the_frames() {
+        use effectcraft_engine::Session;
+        use serde_json::json;
+        let mut s = Session::default();
+        let id = |v: serde_json::Value, k: &str| v[k].as_u64().unwrap();
+        let outer = ItemId(id(s.execute("comp.new", json!({"name": "Outer", "width": 8, "height": 8, "duration": 1})).unwrap(), "comp"));
+        let solid = id(s.execute("layer.newSolid", json!({"comp": outer.0, "color": "#ff0000"})).unwrap(), "layer");
+        let f = Frames::default();
+        let at = |s: &Session| f.content_of(&s.project, s.revision, outer);
+        let o0 = at(&s);
+        s.execute("layer.addMarker", json!({"comp": outer.0, "layers": [solid], "time": 0.5, "comment": "beat"})).unwrap();
+        assert_eq!(at(&s), o0, "a plain marker changes no pixels, so it keeps the frames");
+        s.execute("comp.addMarker", json!({"comp": outer.0, "time": 0.25})).unwrap();
+        s.execute("markers.set", json!({"comp": outer.0, "index": 0, "duration": 0.25, "protected": true})).unwrap();
+        let o1 = at(&s);
+        assert_ne!(o1, o0, "a protected time marker with a duration sets the timing");
+        s.execute("prop.setExpression", json!({"comp": outer.0, "layer": solid, "path": "transform/opacity", "expression": "1"})).unwrap();
+        let o2 = at(&s);
+        s.execute("layer.addMarker", json!({"comp": outer.0, "layers": [solid], "time": 0.75})).unwrap();
+        assert_ne!(at(&s), o2, "an expression can read the marker, so the frames change");
+    }
 }
