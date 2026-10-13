@@ -271,3 +271,26 @@ fn a_dragged_expression_value_stays_red() {
         hover(&mut h, pos2(5.0, 5.0));
     }
 }
+
+/// Separate Dimensions: X Position and Y Position are separate scalars, so an expression on X Position
+/// turns only X red, in the Timeline and Properties panel and both themes; Y Position stays blue.
+#[test]
+fn separated_position_colours_each_dimension_on_its_own() {
+    let (mut h, ids) = setup();
+    h.state_mut().session.execute("prop.separateDimensions", json!({"layer": ids.layer, "value": true})).unwrap();
+    let uid = |h: &Harness<'_, EffectcraftApp>, path: &str| {
+        let s = &h.state().session;
+        s.active_comp().unwrap().layer(LayerId(ids.layer)).unwrap().props.prop(path).unwrap_or_else(|| panic!("no {path}")).uid
+    };
+    const LAYER: &[&str] = &[TIMELINE, PROPERTIES];
+    let x = Checked { uid: uid(&h, "transform/positionX"), kind: Kind::Scalar, panels: LAYER };
+    let y = Checked { uid: uid(&h, "transform/positionY"), kind: Kind::Scalar, panels: LAYER };
+    set_expression(&mut h, &ids, x.uid, &json!({"expression": "value"}));
+    h.run_steps(3);
+    for theme in [ThemeKind::Dark, ThemeKind::Light] {
+        set_theme(&mut h, theme);
+        let t = h.state().tokens;
+        assert_all(&h, &[x], t.expr_text, &format!("{theme:?} X Position (expression)"));
+        assert_all(&h, &[y], t.hot_text, &format!("{theme:?} Y Position (none)"));
+    }
+}
