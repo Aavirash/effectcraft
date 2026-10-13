@@ -327,11 +327,10 @@ fn startup_finishes_at_any_ram_preview_budget() {
     }
 }
 
-/// Extended Viewer frames render larger than the comp: a budget that would hold `ahead` comp-sized
-/// frames holds fewer of them, and the start waits only for as many as really fit (#947).
-#[test]
-fn startup_finishes_when_extended_viewer_frames_are_larger() {
-    let fake = Fake::default();
+/// An audible 160×120 comp with a 3D layer and Draft 3D, Extended Viewer on: its viewer frames
+/// render the pasteboard too, larger than the comp. Returns the harness once the first frame has
+/// rendered, the comp, and that frame's size.
+fn extended_viewer(fake: &Fake) -> (Harness<'static, EffectcraftApp>, ItemId, [usize; 2]) {
     let mut s = Session::default();
     s.execute("comp.new", json!({"name": "E", "width": 160, "height": 120, "frameRate": 30, "duration": 8})).unwrap();
     let cid = s.active_comp_id().unwrap();
@@ -344,7 +343,6 @@ fn startup_finishes_when_extended_viewer_frames_are_larger() {
     let mut app = EffectcraftApp::new(s);
     let f = fake.clone();
     app.hooks.audio_device = Some(Box::new(move |_| Some(Box::new(f.clone()) as Box<dyn AudioDevice>)));
-    let ahead = (app.frames.parallelism() * 2).max(4);
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 30.0).build_eframe(|_| app);
     // The viewer shows the pasteboard: frames render the extended region.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
@@ -358,6 +356,16 @@ fn startup_finishes_when_extended_viewer_frames_are_larger() {
         std::thread::sleep(std::time::Duration::from_millis(5));
     };
     assert!(h.state().ui.viewer.extended.is_some(), "Extended Viewer is on");
+    (h, cid, size)
+}
+
+/// Extended Viewer frames render larger than the comp: a budget that would hold `ahead` comp-sized
+/// frames holds fewer of them, and the start waits only for as many as really fit (#947).
+#[test]
+fn startup_finishes_when_extended_viewer_frames_are_larger() {
+    let fake = Fake::default();
+    let (mut h, cid, size) = extended_viewer(&fake);
+    let ahead = (h.state().frames.parallelism() * 2).max(4);
     let (comp_bytes, real_bytes) = (160 * 120 * 4, size[0] * size[1] * 4);
     // Room for `ahead` comp-sized frames (and a half), which is fewer real ones.
     let budget = ((ahead as f64 + 0.5) * comp_bytes as f64 / 0.9) as usize;
@@ -449,4 +457,50 @@ fn a_started_preview_follows_its_sound() {
     h.step();
     assert!(h.state().audio.is_none() && h.state().playback.audio_held && h.state().playback.playing, "a stall stops the sound");
     *device.0.lock().unwrap() = true;
+}
+
+/// A RAM preview that can't hold even one frame (none, or half of one): the start doesn't wait
+/// for frames that can never be cached; the sound starts at once from the first frame.
+#[test]
+fn startup_does_not_wait_when_the_ram_preview_holds_no_frame() {
+    for budget in [0, 9216 / 2] {
+        let fake = Fake::default();
+        let (app, _) = setup_long(true, &fake, 8.0);
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 30.0).build_eframe(|_| app);
+        h.run_steps(2);
+        h.state().frames.set_budget(budget);
+        h.state().frames.clear();
+        let now = h.ctx.input(|i| i.time);
+        h.state_mut().play(now);
+        h.step();
+        assert!(!h.state().playback.starting, "budget {budget}: no wait");
+        assert!(fake.0.lock().unwrap().0.is_some(), "budget {budget}: the sound started");
+        assert!(h.state().playback.playing);
+    }
+}
+
+/// A frame that never gets cached although the estimate says one fits (an Extended Viewer frame
+/// larger than the whole budget): the start gives up after a short wait instead of holding the
+/// first frame for ever, and the sound starts from it.
+#[test]
+fn startup_gives_up_after_a_short_wait() {
+    let fake = Fake::default();
+    let (mut h, cid, size) = extended_viewer(&fake);
+    let (comp_bytes, real_bytes) = (160 * 120 * 4, size[0] * size[1] * 4);
+    assert!(real_bytes > comp_bytes * 2, "Extended Viewer frames ({size:?}) are larger than the comp");
+    // Room for a comp-sized frame but not a real one: the current frame can never be cached.
+    let budget = (comp_bytes + real_bytes) / 2;
+    h.state().frames.set_budget(budget);
+    h.state().frames.clear();
+    let start = h.ctx.input(|i| i.time);
+    h.state_mut().play(start);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while h.state().playback.starting && std::time::Instant::now() < deadline {
+        assert_eq!(frame(&h, cid), 0, "it holds the first frame while it waits");
+        h.step();
+    }
+    let waited = h.ctx.input(|i| i.time) - start;
+    assert!(!h.state().playback.starting, "it gave up waiting");
+    assert!((1.9..4.0).contains(&waited), "after about two seconds ({waited:.2} s)");
+    assert!(fake.0.lock().unwrap().0.is_some(), "and the sound started");
 }

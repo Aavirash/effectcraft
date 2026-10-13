@@ -52,6 +52,12 @@ const SCREENSHOT_TIMEOUT_S: f64 = 4.0;
 /// [`EffectcraftApp::editing`]).
 const EDIT_QUIET: f64 = 0.3;
 
+/// Longest a preview with sound holds its first frame waiting for frames (seconds, #947). A frame
+/// that never gets cached (larger than the RAM preview, which the size estimate can't always
+/// tell) mustn't hold it for ever: the sound starts from the first frame anyway, and the preview
+/// goes on as a stalled one does.
+const STARTUP_WAIT: f64 = 2.0;
+
 /// How many frames from the first a preview with sound waits for before it starts (#947): the
 /// prefetch's `ahead`, but no more than its `window` requests from the current frame (offsets
 /// `0..window`), and no more than fit in the RAM preview `budget` (90 %, as for the prefetch) at
@@ -234,6 +240,8 @@ pub struct Playback {
     /// while they rendered and the sound started at the later frame, so the opening was lost.
     /// A stall later on still falls back to [`Playback::audio_held`].
     pub starting: bool,
+    /// When the preview started (seconds): [`Playback::starting`] gives up after [`STARTUP_WAIT`].
+    pub starting_since: f64,
     /// When the last frames were shown (seconds, the last second's worth): the achieved rate.
     pub shown_at: std::collections::VecDeque<f64>,
 }
@@ -1022,6 +1030,7 @@ impl EffectcraftApp {
             audio_frame: (!plan.video).then_some(plan.first),
             audio_held: false,
             starting: false,
+            starting_since: now,
             shown_at: Default::default(),
         };
         if !self.playback.caching {
@@ -1298,7 +1307,10 @@ impl EffectcraftApp {
                 let [w, h] = img.size();
                 startup_frames(ahead, window, self.frames.budget(), w.saturating_mul(h).saturating_mul(4))
             });
-            if !need.is_some_and(|n| self.cached_ahead(&p, &series, cur, n)) {
+            // Don't wait for frames the RAM preview can't hold (not even one frame fits), nor for
+            // longer than STARTUP_WAIT (a frame that never gets cached).
+            let give_up = (self.frames.budget() as f64) < self.frame_bytes(&c, scale) || now - self.playback.starting_since >= STARTUP_WAIT;
+            if !give_up && !need.is_some_and(|n| self.cached_ahead(&p, &series, cur, n)) {
                 self.playback.waiting = true;
                 ctx.request_repaint();
                 return;
@@ -1467,9 +1479,13 @@ impl EffectcraftApp {
     }
 
     fn frames_that_fit(&self, comp: &effectcraft_engine::project::Comp, scale: f64) -> i64 {
+        ((self.frames.budget() as f64 * 0.9 / self.frame_bytes(comp, scale)) as i64).max(1)
+    }
+
+    /// Bytes of one comp-sized viewer frame at `scale` (Extended Viewer frames are larger).
+    fn frame_bytes(&self, comp: &effectcraft_engine::project::Comp, scale: f64) -> f64 {
         let side = |n: u32| (n as f64 * scale).ceil().max(1.0);
-        let frame = side(comp.width) * side(comp.height) * 4.0;
-        ((self.frames.budget() as f64 * 0.9 / frame) as i64).max(1)
+        side(comp.width) * side(comp.height) * 4.0
     }
 
     fn frames_parallelism(&self) -> usize {
