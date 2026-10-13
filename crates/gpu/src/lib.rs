@@ -264,10 +264,13 @@ impl Gpu {
         }
     }
 
-    /// Run work in native thread-local out-of-memory and internal-error scopes. A failed
-    /// result is discarded and cached allocations are released; callers can retry with a fresh
-    /// CPU renderer. Some drivers report a failed allocation as an internal error rather than
-    /// out-of-memory (Adreno's `ERROR_INITIALIZATION_FAILED`, #591), so both count.
+    /// Run work in native thread-local out-of-memory, internal-error and validation scopes. A
+    /// failed result is discarded and the textures and buffers kept for reuse are released;
+    /// callers can retry with a fresh CPU renderer. Some drivers report a failed allocation as an
+    /// internal error rather than out-of-memory (Adreno's `ERROR_INITIALIZATION_FAILED`, #591),
+    /// so both count. A failed allocation leaves an invalid texture whose use is then a
+    /// validation error (`Texture::create_view`, #1319): caught here, it fails this frame only
+    /// instead of retiring the GPU compositor for the session as an uncaptured error.
     /// Browser callers use the host/owned-device failure bridge and bounded readbacks instead
     /// of blocking their event loop on an error-scope future.
     pub fn within_memory<T>(&self, f: impl FnOnce() -> T) -> Result<T, String> {
@@ -276,16 +279,20 @@ impl Gpu {
         {
             let oom = self.ctx.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
             let internal = self.ctx.device.push_error_scope(wgpu::ErrorFilter::Internal);
+            let validation = self.ctx.device.push_error_scope(wgpu::ErrorFilter::Validation);
             let out = f();
+            let validation = pollster::block_on(validation.pop());
             let internal = pollster::block_on(internal.pop());
             let oom = pollster::block_on(oom.pop());
-            match internal.or(oom) {
-                Some(e) => {
-                    self.ctx.clear_uploads();
-                    Err(e.to_string())
-                }
-                None => self.ctx.check_health().map(|()| out),
+            // The allocation failure first: a validation error is often its consequence.
+            let errors: Vec<String> = [oom, internal, validation].into_iter().flatten().map(|e| e.to_string()).collect();
+            if errors.is_empty() {
+                return self.ctx.check_health().map(|()| out);
             }
+            // Its textures go back to the pool when dropped: drop them before emptying it.
+            drop(out);
+            self.ctx.discard_kept();
+            Err(errors.join("; then: "))
         }
         #[cfg(target_arch = "wasm32")]
         {
