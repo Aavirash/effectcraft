@@ -111,14 +111,6 @@ Shared real-file test corpora (Photoshop-authored PSDs, etc.) live in
 Never commit large binary fixtures to this repo; fetch them pinned by commit and sha256-verified,
 as PhotoCraft does with `cargo xtask corpus`.
 
-## 4. User docs
-
-User docs live in `docs/user/` and are published at https://getartcraft.com/docs/effectcraft. If a
-change alters something a user sees or does (menu or dialog labels, install, file formats, errors),
-update the matching page in `docs/user/` in the same PR, or add one. Rules: `docs/user/AGENTS.md`.
-Pages describe the latest release. For a change that is not released yet, write that it was added
-after <version> and is not in a release yet, or update the page when the release ships.
-
 
 ## See also
 
