@@ -789,9 +789,10 @@ fn reexpress_euler(correction: effectcraft_geom::Mat4, o: [f64; 3], reference: [
     nearest_euler(euler_zyx(world.0), reference)
 }
 
-/// Re-expresses Orientation (the value and every key) as `correction * Orientation`. A Z-only
-/// correction shifts Z exactly, so the keys and the paths between them stay exact. Other
-/// corrections keep each key's authored turns, so the Euler values stay continuous.
+/// Re-expresses Orientation as `correction * Orientation`. A Z-only correction shifts Z exactly in the
+/// value and every key, so the paths between keys stay exact too. Any other correction is applied
+/// only to a static value (`parent_fixes` leaves keyed Orientation alone then): Euler angles are
+/// blended between keys, which no re-expression of the keys can reproduce.
 fn reexpress_orientation(correction: effectcraft_geom::Mat4, pr: &mut effectcraft_project::Property) {
     if let Some(turn) = z_only_turn(correction) {
         // No turn (an identity correction) leaves every authored value as it is.
@@ -810,18 +811,6 @@ fn reexpress_orientation(correction: effectcraft_geom::Mat4, pr: &mut effectcraf
     }
     let value = pr.value.as_vec3();
     pr.value = KV::Vec3(reexpress_euler(correction, value, value));
-    let mut prev: Option<([f64; 3], [f64; 3])> = None;
-    for key in &mut pr.keys {
-        let o = key.value.as_vec3();
-        // Each key keeps the authored change from the previous key on top of its converted value.
-        let reference = match prev {
-            Some((before, after)) => [after[0] + o[0] - before[0], after[1] + o[1] - before[1], after[2] + o[2] - before[2]],
-            None => o,
-        };
-        let n = reexpress_euler(correction, o, reference);
-        key.value = KV::Vec3(n);
-        prev = Some((o, n));
-    }
 }
 
 /// Correction for a two-node rig's Orientation: after a uniform parent change its aim is
@@ -921,6 +910,10 @@ pub(crate) fn parent_fixes(s: &Session, cid: ItemId, ids: &[LayerId], parent: Op
                         .chain(orientation.keys.iter().map(|key| &key.value))
                         .all(|value| value.as_vec3().iter().all(|v| v.is_finite()));
                     if !correction.0.iter().flatten().all(|v| v.is_finite()) || !orientation_finite {
+                        return None;
+                    }
+                    // Keys can only follow a Z-only correction exactly; otherwise they stay authored.
+                    if !orientation.keys.is_empty() && z_only_turn(correction).is_none() {
                         return None;
                     }
                     if let Some(scale) = scale {

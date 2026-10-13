@@ -282,22 +282,38 @@ fn parented_point_light_keeps_its_direction_under_a_rotated_null() {
     assert!((eye1 - eye0).length() < 1e-6 && (f1 - f0).length() < 1e-6, "{eye0:?} {eye1:?} {f0:?} {f1:?}");
 }
 
-/// Keyed Orientation is re-expressed at each key under a rotated null, so the light keeps its
-/// direction at every key.
+/// Keyed Orientation under a Z-only turn is shifted exactly, so the light keeps its direction at
+/// every time, between the keys too.
 #[test]
-fn keyed_orientation_is_re_expressed_at_each_key_under_a_rotated_null() {
+fn keyed_orientation_under_a_z_turn_keeps_the_direction_at_every_time() {
     let mut s = session();
     let light = s.execute("layer.newLight", json!({"kind": "Point", "position": [320, 180, -500]})).unwrap()["layer"].as_u64().unwrap();
     for (time, value) in [(0.0, json!([-8.0, 12.0, -13.0])), (1.0, json!([5.0, 18.0, 14.0]))] {
         s.execute("prop.addKey", json!({"layer": light, "path": "transform/orientation", "time": time, "value": value})).unwrap();
     }
-    let keys = [Tick::ZERO, Tick::from_seconds_f64(1.0)];
-    let before = keys.map(|t| frame_at(&s, light, t));
+    let times = [0.0, 0.25, 0.5, 0.75, 1.0].map(Tick::from_seconds_f64);
+    let before = times.map(|t| frame_at(&s, light, t));
+    let nul = rotated_null(&mut s, [0.0, 0.0, 0.0], 30.0);
+    s.execute("layer.setParent", json!({"layers": [light], "parent": nul})).unwrap();
+    for (t, b) in times.into_iter().zip(before) {
+        assert!(frames_match(b, frame_at(&s, light, t)), "a Z-only turn keeps the light's direction");
+    }
+}
+
+/// Under a tilted null the keys cannot follow exactly (Euler angles are blended between them), so
+/// keyed Orientation stays as authored rather than changing the motion between the keys.
+#[test]
+fn keyed_orientation_under_a_tilted_null_stays_authored() {
+    let mut s = session();
+    let light = s.execute("layer.newLight", json!({"kind": "Point", "position": [320, 180, -500]})).unwrap()["layer"].as_u64().unwrap();
+    for (time, value) in [(0.0, json!([-8.0, 12.0, -13.0])), (1.0, json!([5.0, 18.0, 14.0]))] {
+        s.execute("prop.addKey", json!({"layer": light, "path": "transform/orientation", "time": time, "value": value})).unwrap();
+    }
+    let keys_before = layer_in(&s, cid(&s), light).props.prop("transform/orientation").unwrap().keys.iter().map(|k| k.value.as_vec3()).collect::<Vec<_>>();
     let nul = rotated_null(&mut s, [20.0, -35.0, 60.0], 30.0);
     s.execute("layer.setParent", json!({"layers": [light], "parent": nul})).unwrap();
-    for (t, b) in keys.into_iter().zip(before) {
-        assert!(frames_match(b, frame_at(&s, light, t)), "keyed Orientation keeps the light's direction at each key");
-    }
+    let keys_after = layer_in(&s, cid(&s), light).props.prop("transform/orientation").unwrap().keys.iter().map(|k| k.value.as_vec3()).collect::<Vec<_>>();
+    assert_eq!(keys_before, keys_after);
 }
 
 // ---------------------------------------------------------------- from 3D model
