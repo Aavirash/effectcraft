@@ -746,40 +746,6 @@ fn within_memory_returns_the_work_when_there_is_room() {
     assert_eq!((img.width, img.height), (64, 32));
 }
 
-/// A texture the device rejects, then used in the frame guard (its view: "Texture with '' label
-/// is invalid", #1319), fails that frame only. The validation error doesn't reach the device's
-/// handler (which retires the compositor for the session, and panics in tests), the frame's
-/// textures don't go back to the pool, and the next frame renders on the GPU.
-#[test]
-fn a_rejected_texture_fails_the_frame_not_the_compositor() {
-    hold_gpu_lock();
-    let Some(g) = Gpu::headless() else { return };
-    let too_wide = g.ctx.device.limits().max_texture_dimension_2d.saturating_add(1);
-    let err = g
-        .within_memory(|| {
-            let mut e = crate::context::Enc::new(&g.ctx);
-            let kept = e.image(64, 32);
-            let rejected = g.ctx.device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("deliberately too wide"),
-                size: wgpu::Extent3d { width: too_wide, height: 1, depth_or_array_layers: 1 },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8Unorm,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING,
-                view_formats: &[],
-            });
-            (kept, rejected.create_view(&Default::default()))
-        })
-        .expect_err("the rejected texture fails the frame");
-    assert!(matches!(&err, crate::FrameError::Validation(e) if e.contains("deliberately too wide")), "{err:?}");
-    assert!(g.ctx.check_health().is_ok(), "the compositor stays on: {:?}", g.ctx.check_health());
-    let (hits, _) = g.ctx.pool_stats();
-    let img = g.within_memory(|| crate::context::Enc::new(&g.ctx).image(64, 32)).expect("the next frame renders");
-    assert_eq!((img.width, img.height), (64, 32));
-    assert_eq!(g.ctx.pool_stats().0, hits, "the failed frame's texture wasn't reused");
-}
-
 /// A texture the device rejected (deliberately too wide), made outside any frame under a scope
 /// of its own: the view a frame then makes of it is the reported validation error.
 fn rejected_texture(g: &Gpu) -> wgpu::Texture {
@@ -797,6 +763,28 @@ fn rejected_texture(g: &Gpu) -> wgpu::Texture {
     });
     assert!(pollster::block_on(scope.pop()).is_some(), "the device rejected the texture");
     t
+}
+
+/// A frame that makes a view of an invalid texture ("Texture with '' label is invalid", #1319)
+/// fails alone: the validation error doesn't reach the device's handler (which retires the
+/// compositor for the session, and panics in tests), and the next frame composites on the GPU,
+/// read back, like the CPU.
+#[test]
+fn a_view_of_an_invalid_texture_fails_the_frame_not_the_compositor() {
+    hold_gpu_lock();
+    let Some(g) = Gpu::headless() else { return };
+    let rejected = rejected_texture(&g);
+    let err = g.within_memory(|| rejected.create_view(&Default::default())).expect_err("the frame fails");
+    assert!(matches!(&err, crate::FrameError::Validation(e) if e.contains("deliberately too wide")), "{err:?}");
+    assert!(g.ctx.check_health().is_ok(), "the compositor stays on: {:?}", g.ctx.check_health());
+    let s = blend_scene(BitDepth::Bpc32, BlendMode::Normal);
+    let cpu = Renderer::new(&s.p, &Pattern, RenderOpts { backend: Backend::Cpu, ..opts() }).comp_frame_cpu(s.cid, Tick::ZERO);
+    let mut r = Renderer::new(&s.p, &Pattern, RenderOpts { backend: Backend::Gpu, ..opts() });
+    r.accel = Some(&g);
+    let img = g.within_memory(|| g.render(&r, s.cid, Tick::ZERO)).expect("the next frame isn't rejected").expect("the GPU renders it");
+    let mut d = diff(&cpu, &img, tolerance(BitDepth::Bpc32));
+    d.quantized = false;
+    check("after a rejected frame", Some(d), 0.0);
 }
 
 /// No texture of a failed frame is reused: not one released while another encoder is still
