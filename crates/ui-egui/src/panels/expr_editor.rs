@@ -1,7 +1,6 @@
 //! The expression editor of the Timeline, following Settings ▸ Scripting & Expressions:
 //! Font Size, Syntax Highlighting, Line Numbers, Auto-complete (Tab accepts), Bracket Matching
-//! and Word Wrap; and the Composition panel's expression error banner (Show Expression Error
-//! Banner).
+//! and Word Wrap. The Composition viewer uses the shared diagnostics in `expr_bar`.
 
 use effectcraft_engine::prefs::Scripting;
 use egui::text::{LayoutJob, TextFormat};
@@ -379,48 +378,6 @@ pub fn editor(ui: &mut egui::Ui, id: egui::Id, buf: &mut String, rect: Rect, p: 
         }
     }
     out.response.response
-}
-
-/// Settings ▸ Scripting & Expressions ▸ Show Expression Error Banner: the first failing
-/// expression of the comp at the current time, in a banner along the bottom of the viewer
-/// (click it to reveal the property).
-pub fn error_banner(app: &mut crate::EffectcraftApp, ui: &egui::Ui, area: Rect) {
-    if !app.session.prefs.scripting.error_banner {
-        return;
-    }
-    let Some(cid) = app.session.active_comp_id() else { return };
-    let key = (app.session.revision, cid.0, app.session.time().0);
-    let id = egui::Id::new("expr-error-banner");
-    let cached: Option<((u64, u64, i64), Vec<serde_json::Value>)> = ui.ctx().data(|d| d.get_temp(id));
-    let errors = match cached {
-        Some((k, e)) if k == key => e,
-        _ => {
-            let e = app.session.expression_errors(cid);
-            ui.ctx().data_mut(|d| d.insert_temp(id, (key, e.clone())));
-            e
-        }
-    };
-    let Some(first) = errors.first() else { return };
-    let layer = first["layer"].as_u64().unwrap_or(0);
-    let lname = app.session.active_comp().and_then(|c| c.layer(effectcraft_engine::project::LayerId(layer))).map(|l| l.name.clone()).unwrap_or_default();
-    let msg = format!(
-        "⚠ Expression error{}: {} ▸ {}: {}",
-        if errors.len() > 1 { format!(" (1 of {})", errors.len()) } else { String::new() },
-        lname,
-        first["name"].as_str().unwrap_or(""),
-        first["error"].as_str().unwrap_or("").lines().next().unwrap_or("")
-    );
-    let r = Rect::from_min_max(pos2(area.min.x, area.max.y - 22.0), area.max);
-    let p = ui.painter();
-    p.rect_filled(r, 0.0, Color32::from_rgb(0xf0, 0xc0, 0x30));
-    p.text(pos2(r.min.x + 8.0, r.center().y), egui::Align2::LEFT_CENTER, msg, Tokens::ui(11.5), Color32::BLACK);
-    app.auto.add("viewer.expressionErrorBanner", r, "Expression error banner");
-    if ui.interact(r, id.with("click"), egui::Sense::click()).clicked() {
-        let p = serde_json::json!({"props": [{"layer": layer, "prop": first["prop"]}]});
-        if let Err(e) = crate::menus::invoke(app, ui.ctx(), "timeline.revealProps", p) {
-            app.ui.status = e;
-        }
-    }
 }
 
 #[cfg(test)]

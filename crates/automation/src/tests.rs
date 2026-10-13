@@ -681,6 +681,12 @@ fn list_fonts_lists_families_with_styles() {
     assert!(matched.len() < fams.len(), "the query filters: {one}");
     let mono = matched.iter().find(|f| f["family"] == "JetBrains Mono").unwrap_or_else(|| panic!("{one}"));
     assert!(mono["styles"].as_array().unwrap().contains(&json!("Regular")), "{one}");
+    assert_eq!(mono["variable"], false, "{one}");
+    // `variable` keeps only the variable fonts (the font menu's filter); the static bundled
+    // families drop out.
+    let var = call_json(&mut s, "list_fonts", json!({"variable": true}));
+    let listed = var["families"].as_array().unwrap();
+    assert!(listed.iter().all(|f| f["variable"] == true && f["family"] != "Inter"), "{var}");
 }
 
 /// Trained models over MCP (Roto Brush and face tracking): listed with their authors and

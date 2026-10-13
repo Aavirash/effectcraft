@@ -194,15 +194,38 @@ pub struct VertexRef {
     pub index: usize,
 }
 
+/// One composition's selection. The active comp's copy lives in [`EditorState::selected_layers`]
+/// (and the property, key, and vertex lists); every other comp keeps its own here (#1001).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct CompSelection {
+    pub layers: Vec<LayerId>,
+    pub props: Vec<(LayerId, Uid)>,
+    pub keys: Vec<KeyRef>,
+    pub vertices: Vec<VertexRef>,
+}
+
+impl CompSelection {
+    fn is_empty(&self) -> bool {
+        self.layers.is_empty() && self.props.is_empty() && self.keys.is_empty() && self.vertices.is_empty()
+    }
+}
+
 /// Editing state that commands depend on (headless-relevant, serde for agents).
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct EditorState {
     pub active_comp: Option<ItemId>,
     /// Open compositions (viewer/timeline tabs), in tab order.
     pub open_comps: Vec<ItemId>,
+    /// Compositions that were active before the current one, most recent first (Shift+Esc).
+    #[serde(default)]
+    pub recent_comps: Vec<ItemId>,
     /// Current time per comp (the CTI).
     pub times: std::collections::BTreeMap<ItemId, Tick>,
+    /// Layer selection of the active comp. Other comps' selections are in [`Self::comp_selections`].
     pub selected_layers: Vec<LayerId>,
+    /// Selections of comps that are not active, keyed by comp id (#1001).
+    #[serde(default)]
+    pub comp_selections: std::collections::BTreeMap<ItemId, CompSelection>,
     /// Selected properties / groups (by uid) of selected layers.
     pub selected_props: Vec<(LayerId, Uid)>,
     pub selected_keys: Vec<KeyRef>,
@@ -220,8 +243,8 @@ pub struct EditorState {
     /// Paste sets the same properties of the selected layers.
     #[serde(skip)]
     pub value_clipboard: Vec<(String, effectcraft_keyframe::Value)>,
-    /// Copied effect instances (Edit ▸ Copy with effects selected); Paste adds them to the
-    /// selected layers.
+    /// Copied effect instances, with comp-time key offsets from the earliest copied key.
+    /// Paste adds them to the selected layers at the destination comp's CTI.
     #[serde(skip)]
     pub effect_clipboard: Vec<effectcraft_project::PropGroup>,
     /// Copied shape items (Edit ▸ Copy with groups, paths, paints or path operations selected in
@@ -350,6 +373,15 @@ pub enum Event {
     },
     /// Drop cached frames / renders (Edit ▸ Purge).
     PurgeCaches,
+    /// Put an image on the system clipboard (Composition ▸ Copy Frame to Clipboard): `rgba` is
+    /// `width` × `height` straight-alpha RGBA8 rows. Headless sessions ignore it; the pixels are
+    /// not serialized.
+    CopyImage {
+        width: u32,
+        height: u32,
+        #[serde(skip)]
+        rgba: Vec<u8>,
+    },
 }
 
 pub struct Session {
@@ -698,9 +730,38 @@ impl Session {
         self.events.push(Event::ProjectChanged { revision: self.revision });
     }
 
+    /// Set a comp's Resolution. As in After Effects it is saved with the project (which becomes
+    /// modified) but is no undo step, and it changes no pixels: the comp's cached frames stay
+    /// valid ([`effectcraft_project::Comp::same_pixels`]).
+    pub fn set_resolution(&mut self, comp: ItemId, r: effectcraft_project::Resolution) -> Result<()> {
+        if self.project.comp(comp).ok_or(EngineError::NoComp)?.resolution == r {
+            return Ok(());
+        }
+        Arc::make_mut(&mut self.project).comp_mut(comp).ok_or(EngineError::NoComp)?.resolution = r;
+        self.bump();
+        Ok(())
+    }
+
+    /// Keep what lives outside the undo history (each comp's Resolution) as it is in `from`, the
+    /// project before undo, redo or a history jump restored another state.
+    pub(crate) fn keep_view_settings(&mut self, from: &Project) {
+        let keep: Vec<(ItemId, effectcraft_project::Resolution)> =
+            self.project.comps().filter_map(|(id, c)| from.comp(*id).map(|f| (*id, f.resolution)).filter(|(_, r)| *r != c.resolution)).collect();
+        if keep.is_empty() {
+            return;
+        }
+        let p = Arc::make_mut(&mut self.project);
+        for (id, r) in keep {
+            if let Some(c) = p.comp_mut(id) {
+                c.resolution = r;
+            }
+        }
+    }
+
     pub fn undo(&mut self) -> bool {
         let Some((label, p)) = self.history.undo.pop() else { return false };
         let cur = std::mem::replace(&mut self.project, p);
+        self.keep_view_settings(&cur);
         self.history.redo.push((label, cur));
         self.history.merge_key = None;
         self.sanitize_state();
@@ -711,6 +772,7 @@ impl Session {
     pub fn redo(&mut self) -> bool {
         let Some((label, p)) = self.history.redo.pop() else { return false };
         let cur = std::mem::replace(&mut self.project, p);
+        self.keep_view_settings(&cur);
         self.history.undo.push((label, cur));
         self.history.merge_key = None;
         self.sanitize_state();
@@ -718,12 +780,26 @@ impl Session {
         true
     }
 
-    /// Drop selections that no longer exist.
+    /// Drop selections that no longer exist. Each comp keeps its own selection (#1001); a layer id
+    /// counts only inside the comp that owns it, so the active comp never sees another comp's layers.
     pub fn sanitize_state(&mut self) {
         let p = self.project.clone();
         self.state.open_comps.retain(|c| p.comp(*c).is_some());
+        self.state.comp_selections.retain(|cid, sel| {
+            let Some(c) = p.comp(*cid) else { return false };
+            let ids: Vec<LayerId> = c.layers.iter().map(|l| l.id).collect();
+            sel.layers.retain(|l| ids.contains(l));
+            sel.props.retain(|(l, _)| ids.contains(l));
+            sel.keys.retain(|k| ids.contains(&k.layer));
+            sel.vertices.retain(|v| ids.contains(&v.layer));
+            !sel.is_empty()
+        });
         if self.state.active_comp.is_some_and(|c| p.comp(c).is_none()) {
+            self.clear_live_selection();
             self.state.active_comp = self.state.open_comps.first().copied();
+            if let Some(id) = self.state.active_comp {
+                self.recall_selection(id);
+            }
         }
         if let Some(c) = self.active_comp() {
             let ids: Vec<LayerId> = c.layers.iter().map(|l| l.id).collect();
@@ -831,6 +907,59 @@ impl Session {
         }
     }
 
+    /// Make `id` the active comp, parking the previous comp's selection and restoring this one's.
+    pub fn activate_comp(&mut self, id: ItemId) {
+        if self.project.comp(id).is_none() || self.state.active_comp == Some(id) {
+            return;
+        }
+        self.remember_selection();
+        self.state.active_comp = Some(id);
+        self.recall_selection(id);
+        self.state.current_track = None;
+    }
+
+    /// Leave no comp active, keeping the one that was active in [`EditorState::comp_selections`].
+    pub fn activate_comp_none(&mut self) {
+        self.remember_selection();
+        self.state.active_comp = None;
+        self.clear_live_selection();
+        self.state.current_track = None;
+    }
+
+    fn remember_selection(&mut self) {
+        let Some(id) = self.state.active_comp else { return };
+        let sel = CompSelection {
+            layers: self.state.selected_layers.clone(),
+            props: self.state.selected_props.clone(),
+            keys: self.state.selected_keys.clone(),
+            vertices: self.state.selected_vertices.clone(),
+        };
+        if sel.is_empty() {
+            self.state.comp_selections.remove(&id);
+        } else {
+            self.state.comp_selections.insert(id, sel);
+        }
+    }
+
+    fn recall_selection(&mut self, id: ItemId) {
+        match self.state.comp_selections.remove(&id) {
+            Some(sel) => {
+                self.state.selected_layers = sel.layers;
+                self.state.selected_props = sel.props;
+                self.state.selected_keys = sel.keys;
+                self.state.selected_vertices = sel.vertices;
+            }
+            None => self.clear_live_selection(),
+        }
+    }
+
+    fn clear_live_selection(&mut self) {
+        self.state.selected_layers.clear();
+        self.state.selected_props.clear();
+        self.state.selected_keys.clear();
+        self.state.selected_vertices.clear();
+    }
+
     /// Open a comp in the viewer/timeline and make it active.
     pub fn open_comp(&mut self, id: ItemId) {
         if self.project.comp(id).is_none() {
@@ -840,14 +969,35 @@ impl Session {
             self.state.open_comps.push(id);
         }
         if self.state.active_comp != Some(id) {
-            self.state.active_comp = Some(id);
-            self.state.selected_layers.clear();
-            self.state.selected_props.clear();
-            self.state.selected_keys.clear();
-            self.state.selected_vertices.clear();
-            self.state.current_track = None;
+            let previous = self.state.active_comp;
+            self.state.recent_comps.retain(|c| *c != id && Some(*c) != previous);
+            if let Some(previous) = previous {
+                self.state.recent_comps.insert(0, previous);
+                self.state.recent_comps.truncate(32);
+            }
         }
+        self.activate_comp(id);
         self.events.push(Event::OpenComp(id));
+    }
+
+    /// The open compositions, as a project file records them ([`effectcraft_project::SavedView`]).
+    pub fn saved_view(&self) -> effectcraft_project::SavedView {
+        effectcraft_project::SavedView { active_comp: self.state.active_comp, open_comps: self.state.open_comps.clone() }
+    }
+
+    /// Reopen the compositions a project file was saved with (#748). Ids that no longer name a
+    /// comp are skipped; with none left the project stays on the comp [`Session::replace_project`]
+    /// opened (its first), as files from before the view was saved do.
+    pub fn restore_view(&mut self, view: &effectcraft_project::SavedView) {
+        let mut open: Vec<ItemId> = Vec::new();
+        for id in view.open_comps.iter().copied().filter(|id| self.project.comp(*id).is_some()) {
+            if !open.contains(&id) {
+                open.push(id);
+            }
+        }
+        let Some(active) = view.active_comp.filter(|id| self.project.comp(*id).is_some()).or_else(|| open.first().copied()) else { return };
+        self.state.open_comps = open;
+        self.open_comp(active);
     }
 
     pub fn toast(&mut self, msg: impl Into<String>) {
@@ -957,6 +1107,15 @@ impl Session {
         Ok((img.width, img.height, img.to_rgba8()))
     }
 
+    /// Make the media layer and the layer cache let go of what they decoded from `footage`'s
+    /// files (it keys frames by path, so an overwritten file would keep showing its old pixels).
+    pub(crate) fn forget_decoded(&self, footage: &effectcraft_project::Footage) {
+        for p in std::iter::once(&footage.path).chain(&footage.sequence) {
+            self.footage.forget(p);
+        }
+        self.layer_cache.clear();
+    }
+
     /// Replace the whole project (open/new), resetting history and state.
     pub fn replace_project(&mut self, mut p: Project, path: Option<String>) {
         if self.stop_render()
@@ -980,8 +1139,17 @@ impl Session {
         self.roto_job = None;
         self.roto_pending.clear();
         self.drop_tasks();
+        self.script_ui.project_epoch = self.script_ui.project_epoch.wrapping_add(1);
         p.fix_next_id();
         upgrade_effects(&mut p);
+        // The media layer keys decoded frames by path: files of the new project may have changed
+        // since an earlier project decoded them (#1070).
+        for it in p.items.values() {
+            if let effectcraft_project::ItemKind::Footage(f) = &it.kind {
+                self.forget_decoded(f);
+            }
+        }
+        self.layer_cache.clear();
         self.project = Arc::new(p);
         self.history = History::default();
         self.state = EditorState { snapping: true, view_layout: 1, ..Default::default() };
@@ -1046,6 +1214,8 @@ mod tests;
 #[cfg(test)]
 mod tests_3d;
 #[cfg(test)]
+mod tests_anim_presets;
+#[cfg(test)]
 mod tests_anim_tools;
 #[cfg(test)]
 mod tests_camera_track;
@@ -1068,9 +1238,15 @@ mod tests_fidelity;
 #[cfg(test)]
 mod tests_frame_export;
 #[cfg(test)]
+mod tests_fuzz_open;
+#[cfg(test)]
+mod tests_import_project;
+#[cfg(test)]
 mod tests_key_metadata_order;
 #[cfg(test)]
 mod tests_keylight;
+#[cfg(test)]
+mod tests_limits;
 #[cfg(test)]
 mod tests_lottie;
 #[cfg(test)]
@@ -1092,11 +1268,15 @@ mod tests_project_items;
 #[cfg(test)]
 mod tests_proxy;
 #[cfg(test)]
+mod tests_quick_offset;
+#[cfg(test)]
 mod tests_rig3d;
 #[cfg(test)]
 mod tests_sequence;
 #[cfg(test)]
 mod tests_settings;
+#[cfg(test)]
+mod tests_shortcut_cmds;
 #[cfg(test)]
 mod tests_stubs;
 #[cfg(test)]
@@ -1122,6 +1302,11 @@ mod tests_viewer;
 /// Text animation presets: (id, name), for menus.
 pub fn text_presets() -> Vec<(String, String)> {
     commands::text_preset_list()
+}
+
+/// Built-in animation presets (Effects & Presets ▸ * Animation Presets): (id, name, category).
+pub fn animation_presets() -> Vec<(String, String, String)> {
+    commands::builtin_preset_list()
 }
 
 pub fn text_families() -> Vec<String> {
@@ -1153,6 +1338,8 @@ pub struct FontRow {
     /// Settings ▸ Type ▸ Show Font Names in English is off.
     pub display: String,
     pub recent: bool,
+    /// A variable font (the menu's Variable Fonts filter keeps only these).
+    pub variable: bool,
 }
 
 /// Outline polylines of "Sample" set in `family` at `size` px (baseline at y = 0, y down), for
@@ -1193,14 +1380,21 @@ pub fn font_preview(family: &str, size: f64) -> Vec<Vec<[f32; 2]>> {
 }
 
 /// The Character panel's font menu: the recent fonts (Settings ▸ Type ▸ Number of Recent Fonts
-/// to Display), a separator, then every family.
+/// to Display), a separator, then every family. Each row says whether the family is variable,
+/// for the menu's Variable Fonts filter.
 pub fn font_menu(prefs: &prefs::Prefs) -> Vec<FontRow> {
     let all = text_families();
     let native = if prefs.type_.font_names_in_english { Default::default() } else { effectcraft_text::fonts::native_families() };
-    let row = |f: &String, recent: bool| FontRow { family: f.clone(), display: native.get(f).cloned().unwrap_or_else(|| f.clone()), recent };
+    let variable = effectcraft_text::fonts::variable_families();
+    let row = |f: &String, recent: bool| FontRow {
+        family: f.clone(),
+        display: native.get(f).cloned().unwrap_or_else(|| f.clone()),
+        recent,
+        variable: variable.contains(f),
+    };
     let mut out: Vec<FontRow> = prefs.recent_fonts_shown().iter().filter(|f| all.contains(f)).map(|f| row(f, true)).collect();
     if !out.is_empty() {
-        out.push(FontRow { family: String::new(), display: "-".into(), recent: false });
+        out.push(FontRow { family: String::new(), display: "-".into(), recent: false, variable: false });
     }
     out.extend(all.iter().map(|f| row(f, false)));
     out

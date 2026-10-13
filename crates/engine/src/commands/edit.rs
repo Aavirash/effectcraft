@@ -531,6 +531,42 @@ fn paste(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!(new.iter().map(|l| l.0).collect::<Vec<_>>()))
 }
 
+/// Largest SVG text `edit.pasteSvg` reads (a clipboard can hold anything).
+const MAX_SVG_PASTE: usize = 64 << 20;
+
+/// `edit.pasteSvg`: SVG markup (the system clipboard's, copied from a browser, Illustrator or a
+/// design tool) as a new shape layer above the selected layer, its canvas centred in the comp:
+/// After Effects 26.3 pastes copied vector artwork as shape layers. Edit ▸ Paste runs it when
+/// the system clipboard holds SVG copied after anything copied in the app.
+fn paste_svg(s: &mut Session, p: &Value) -> Result<Value> {
+    let c = "edit.pasteSvg";
+    let text = str_p(p, "svg").ok_or_else(|| super::bad(c, "missing `svg` (SVG markup)"))?;
+    if text.len() > MAX_SVG_PASTE {
+        return Err(super::bad(c, format!("the SVG is larger than {} MB", MAX_SVG_PASTE >> 20)));
+    }
+    if !crate::vector::is_svg_text(text) {
+        return Err(super::bad(c, "the text is not SVG markup"));
+    }
+    let doc = effectcraft_svg::parse(text.as_bytes()).map_err(|e| super::bad(c, format!("cannot read the SVG: {e}")))?;
+    if doc.flatten().is_empty() {
+        return Err(super::bad(c, "the SVG has no shapes"));
+    }
+    let cid = super::comp_id(s, p)?;
+    let comp = s.project.comp(cid).ok_or(EngineError::NoComp)?.clone();
+    let name = match str_p(p, "name") {
+        Some(n) => n.to_string(),
+        None => {
+            let count = comp.layers.iter().filter(|l| matches!(l.source, LayerSource::Shape)).count();
+            comp.unique_layer_name(&format!("Shape Layer {}", count.saturating_add(1)))
+        }
+    };
+    let id = s.edit("Paste", None, |proj, st| {
+        let l = crate::vector::shapes_from_svg(proj, &comp, &doc, &name);
+        super::layer::insert_layer(proj, st, cid, l)
+    })?;
+    Ok(json!({"layer": id.0, "skipped": doc.skipped}))
+}
+
 fn split(s: &mut Session, p: &Value) -> Result<Value> {
     let (cid, ids) = layers_p(s, p)?;
     let t = s.time();
@@ -773,7 +809,7 @@ fn original_path(s: &Session) -> Option<String> {
 
 fn edit_original(s: &mut Session, _: &Value) -> Result<Value> {
     let path = original_path(s).ok_or_else(|| super::bad("edit.editOriginal", "select a footage item or layer"))?;
-    let url = format!("file://{path}");
+    let url = super::layer_menu::file_url(&path);
     s.events.push(crate::Event::OpenUrl(url.clone()));
     Ok(json!({"url": url}))
 }
@@ -818,14 +854,31 @@ pub fn specs() -> Vec<CommandSpec> {
             has_clip,
             paste
         ),
-        cmd!("edit.pasteReversedKeyframes", "Paste Reversed Keyframes", ["Edit"], None, "{layers?, prop?|path?, time?}", has_key_clip, paste_reversed),
+        cmd!(
+            "edit.pasteSvg",
+            "Paste SVG as Shapes",
+            [],
+            None,
+            "{svg: SVG markup, name?, comp?} → {layer, skipped} (Edit ▸ Paste runs it for SVG on the system clipboard)",
+            has_comp,
+            paste_svg
+        ),
+        cmd!(
+            "edit.pasteReversedKeyframes",
+            "Paste Reversed Keyframes",
+            ["Edit"],
+            Some("Cmd+Shift+V"),
+            "{layers?, prop?|path?, time?}",
+            has_key_clip,
+            paste_reversed
+        ),
         cmd!("edit.clear", "Clear", ["Edit"], Some("Delete"), "{layers?}", layers_or_keys, delete),
         cmd!("edit.duplicate", "Duplicate", ["Edit"], Some("Cmd+D"), "{layers?} (effects or shape items when they are selected)", has_layers, duplicate),
         cmd!("edit.splitLayer", "Split Layer", ["Edit"], Some("Cmd+Shift+D"), "{layers?}", has_layers, split),
         cmd!("edit.liftWorkArea", "Lift Work Area", ["Edit"], None, "{layers?}", has_comp, lift),
         cmd!("edit.extractWorkArea", "Extract Work Area", ["Edit"], None, "{layers?}", has_comp, extract),
         cmd!("edit.selectAll", "Select All", ["Edit"], Some("Cmd+A"), "{}", has_comp, select_all),
-        cmd!("edit.deselectAll", "Deselect All", ["Edit"], Some("Cmd+Shift+A"), "{}", always_ok, deselect_all),
+        cmd!("edit.deselectAll", "Deselect All", ["Edit"], ["Cmd+Shift+A", "F2"], "{}", always_ok, deselect_all),
         cmd!("edit.label", "Label", ["Edit", "Label"], None, "{label: Red|Yellow|Aqua|…, layers?, keys?, target?: layers}", always_ok, label),
         cmd!("edit.selectLabelGroup", "Select Label Group", ["Edit", "Label"], None, "{}", has_props_or_layers_or_items, select_label_group),
         cmd!("edit.purgeUndo", "Undo", ["Edit", "Purge"], None, "{}", always_ok, purge),
@@ -892,4 +945,26 @@ fn layers_or_keys(s: &Session) -> std::result::Result<(), String> {
 
 fn always_ok(_: &Session) -> std::result::Result<(), String> {
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    /// Edit Original opens the footage as a well-formed `file://` URL, whatever its name contains.
+    #[test]
+    fn edit_original_opens_an_encoded_file_url() {
+        let mut s = crate::Session::default();
+        let id = s
+            .edit("add", None, |p, _| {
+                let f = effectcraft_project::Footage { path: "/clips/take #1.mov".into(), ..Default::default() };
+                Ok(p.add_item("take", effectcraft_color::Label::Lavender, None, effectcraft_project::ItemKind::Footage(f)))
+            })
+            .unwrap();
+        s.state.project_selection = vec![id];
+        s.drain_events();
+        let r = s.execute("edit.editOriginal", json!({})).unwrap();
+        assert_eq!(r["url"], "file:///clips/take%20%231.mov");
+        assert!(s.drain_events().iter().any(|e| matches!(e, crate::Event::OpenUrl(u) if u == "file:///clips/take%20%231.mov")));
+    }
 }

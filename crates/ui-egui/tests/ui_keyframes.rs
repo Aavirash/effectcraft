@@ -168,10 +168,12 @@ fn a_key_clicked_in_the_timeline_shows_in_the_graph_editor() {
 #[test]
 fn graph_editor_drags_move_every_selected_key_and_shift_keeps_an_axis() {
     let (mut h, id, uid) = harness();
+    // Opened before selecting, so it fits all graphs (the whole comp) rather than the two keys.
+    h.state_mut().ui.timeline.graph_editor = true;
+    h.run_steps(2);
     let s = &mut h.state_mut().session;
     s.execute("prop.select", json!({"layer": id.0, "prop": uid})).unwrap();
     s.execute("keys.selectAll", json!({})).unwrap();
-    h.state_mut().ui.timeline.graph_editor = true;
     h.run_steps(4);
     let at = |h: &Harness<'_, EffectcraftApp>, i: usize| {
         let e = h.state().auto.find(&format!("timeline.graph.key.{uid}.0.{i}")).unwrap_or_else(|| panic!("no graph key {i}")).clone();
@@ -397,4 +399,70 @@ fn properties_panel_edits_every_selected_layer() {
     for (a, b) in after.iter().zip(&before) {
         assert!((a - b - d).abs() < 1e-6, "same change on every layer: {before:?} → {after:?}");
     }
+}
+
+/// #770: Proportional Scrubbing (After Effects 26.2). With three layers selected, a Ctrl+Alt
+/// (Cmd+Opt) scrub of Position X in the Timeline leaves the first selected layer where it is,
+/// moves the last by the whole change and the middle one by half, whichever layer is scrubbed.
+#[test]
+fn ctrl_alt_scrub_in_the_timeline_is_proportional() {
+    let mut s = Session::default();
+    s.execute("comp.new", json!({"name": "Three", "width": 320, "height": 180, "frameRate": 30, "duration": 4})).unwrap();
+    let mut ids = vec![];
+    for c in ["#e04020", "#20e040", "#2040e0"] {
+        let l = s.execute("layer.newSolid", json!({"color": c, "width": 40, "height": 40})).unwrap()["layer"].as_u64().unwrap();
+        s.execute("prop.set", json!({"layer": l, "path": "transform/position", "value": [100.0, 90.0]})).unwrap();
+        ids.push(l);
+    }
+    // Selection order: the first created, then the second, then the third.
+    for (i, l) in ids.iter().enumerate() {
+        s.execute("layer.select", json!({"layers": [l], "add": i > 0})).unwrap();
+    }
+    let middle = ids[1];
+    let uid = s.active_comp().unwrap().layer(LayerId(middle)).unwrap().props.prop("transform/position").unwrap().uid;
+    let mut h = Harness::builder().with_size(egui::vec2(1600.0, 1000.0)).build_eframe(|_| EffectcraftApp::new(s));
+    h.run_steps(3);
+    let ctx = h.ctx.clone();
+    effectcraft_ui_egui::menus::invoke(h.state_mut(), &ctx, "timeline.reveal.position", json!({})).unwrap();
+    h.run_steps(4);
+    let x = |h: &Harness<'_, EffectcraftApp>, l: u64| {
+        h.state().session.active_comp().unwrap().layer(LayerId(l)).unwrap().props.prop("transform/position").unwrap().value.components()[0]
+    };
+    let e = h.state().auto.find(&format!("timeline.prop.{uid}.value.0")).cloned().expect("the middle layer's Position X shows");
+    let from = pos2(e.rect[0] + e.rect[2] / 2.0, e.rect[1] + e.rect[3] / 2.0);
+    let ctrl_alt = egui::Modifiers { alt: true, ctrl: true, command: true, ..Default::default() };
+    drag(&mut h, from, from + egui::vec2(40.0, 0.0), ctrl_alt);
+    let moved: Vec<f64> = ids.iter().map(|l| x(&h, *l) - 100.0).collect();
+    assert!(moved[2] > 1.0, "the last selected layer moved: {moved:?}");
+    assert!(moved[0].abs() < 1e-9, "the first selected layer stays: {moved:?}");
+    assert!((moved[1] - moved[2] / 2.0).abs() < 1e-6, "the middle one moves by half: {moved:?}");
+}
+
+/// #1171: in the speed graph an end key sits at its one side's speed, so it rises with the handle
+/// being dragged; once it left the plot its handles were skipped and the drag stopped at the top
+/// edge. A drag that ends above the graph keeps raising the speed as far as the pointer goes.
+#[test]
+fn speed_graph_handle_drags_upward_past_the_top() {
+    let (mut h, id, uid) = harness();
+    let s = &mut h.state_mut().session;
+    s.execute("prop.select", json!({"layer": id.0, "prop": uid})).unwrap();
+    s.execute("keys.selectAll", json!({})).unwrap();
+    s.execute("keys.easyEase", json!({})).unwrap();
+    h.state_mut().ui.timeline.graph_editor = true;
+    h.state_mut().ui.timeline.graph_mode = "speed".into();
+    h.run_steps(4);
+    let out_speed = |h: &Harness<'_, EffectcraftApp>| {
+        h.state().session.active_comp().unwrap().layer(id).unwrap().props.prop("transform/opacity").unwrap().keys[0].out_ease[0].speed
+    };
+    let e = h.state().auto.find(&format!("timeline.graph.handle.{uid}.0.0.out")).cloned().expect("the first key's out handle shows");
+    let at = pos2(e.rect[0] + e.rect[2] / 2.0, e.rect[1] + e.rect[3] / 2.0);
+    drag(&mut h, at, at + egui::vec2(0.0, -40.0), Default::default());
+    let short = out_speed(&h);
+    h.state_mut().session.execute("edit.undo", json!({})).unwrap();
+    h.run_steps(4);
+    assert_eq!(out_speed(&h), 0.0);
+    drag(&mut h, at, at + egui::vec2(0.0, -400.0), Default::default());
+    let long = out_speed(&h);
+    // The speed per pixel depends on the graph's fitted scale; only the proportion matters.
+    assert!(short > 0.0 && long > 9.0 * short, "40 px up gave {short}, 400 px up gave {long}");
 }
