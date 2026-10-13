@@ -2,7 +2,7 @@
 title: Footage is missing or offline
 description: Find missing footage in an EffectCraft project, relink it to a folder or replace it with another file.
 order: 20
-verified: 0.8.0
+verified: 0.9.2
 ---
 
 Choose **File ▸ Dependencies ▸ Relink Missing Footage...** and pick the folder where your files are now. For files that stay missing, choose **File ▸ Replace Footage ▸ File...**.

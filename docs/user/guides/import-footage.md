@@ -2,7 +2,7 @@
 title: Import footage and image sequences
 description: Bring video, images and numbered image sequences into an EffectCraft project, and change how footage is read.
 order: 50
-verified: 0.8.0
+verified: 0.9.2
 ---
 
 Choose **File ▸ Import ▸ File...** (Ctrl+I) and pick your files, or drop files on the EffectCraft window. Numbered stills such as `shot_0001.png` can import as one sequence that plays like a movie.
@@ -13,9 +13,9 @@ Shortcuts on this page use Ctrl. On macOS, use Cmd instead of Ctrl and Option in
 
 1. Choose **File ▸ Import ▸ File...** to pick one file. Use **File ▸ Import ▸ Multiple Files...** to pick several.
 2. Photoshop and PDF or Illustrator files first ask whether to import them as footage or as a composition.
-3. The footage appears in the Project panel. Drag it onto the Composition viewer to make a layer where you drop it, or into the Timeline.
+3. The footage appears in the Project panel. Drag it onto the Composition viewer to make a layer where you drop it, or into the Timeline. If no composition is open, dropping it on the empty viewer makes a new composition from it.
 
-You can also drop files or folders on the window. Files dropped on the Composition viewer become layers there. The **Media Browser** (**Window ▸ Media Browser**) browses folders and imports what you pick.
+You can also drop files or folders on the window. Files dropped on the Composition viewer become layers there. A dropped Photoshop file asks how to import it, as **File ▸ Import ▸ File...** does. The **Media Browser** (**Window ▸ Media Browser**) browses folders and imports what you pick.
 
 ## Import an image sequence
 
@@ -27,7 +27,7 @@ You can also drop files or folders on the window. Files dropped on the Compositi
 
 **Force alphabetical order** imports every image of that type in the folder in name order, whatever the numbering. Use it for files that are not numbered consistently.
 
-Stills in PNG, JPEG, TIFF, OpenEXR, BMP and WebP can form a sequence. PSD, SVG and PDF files import one by one.
+Stills in PNG, JPEG, TIFF, OpenEXR, BMP, WebP, Targa (`.tga`), Radiance HDR (`.hdr`), DPX and Cineon (`.cin`) can form a sequence. PSD, SVG and PDF files import one by one.
 
 If the numbering skips a frame, EffectCraft shows colour bars for it. Put the missing files in the folder and choose **File ▸ Reload Footage** to fill the gap.
 

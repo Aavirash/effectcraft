@@ -2,7 +2,7 @@
 title: Add an effect
 description: Apply an effect such as Gaussian Blur to a layer and change its settings in Effect Controls.
 order: 30
-verified: 0.8.0
+verified: 0.9.2
 ---
 
 Select a layer, then choose the effect from the **Effect** menu, or double-click it in the **Effects & Presets** panel. Change its settings in **Effect Controls** (F3).

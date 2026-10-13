@@ -1,7 +1,7 @@
 ---
 title: EffectCraft
 description: EffectCraft is a free, open-source app for motion graphics and visual effects, an alternative to Adobe After Effects.
-verified: 0.8.0
+verified: 0.9.2
 ---
 
 EffectCraft is a free, open-source app for animated titles, motion graphics and compositing. It is an alternative to Adobe After Effects.

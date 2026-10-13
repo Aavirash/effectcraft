@@ -2,7 +2,7 @@
 title: Animate with keyframes
 description: Fly a layer in with two Position keyframes and smooth the motion with Easy Ease.
 order: 20
-verified: 0.8.0
+verified: 0.9.2
 ---
 
 Click the stopwatch beside a property to start animating it, move the current-time indicator, then change the value. The second keyframe appears by itself. Select both keyframes and press F9 to ease the motion.

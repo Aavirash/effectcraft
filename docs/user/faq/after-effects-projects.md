@@ -2,7 +2,7 @@
 title: Can EffectCraft open After Effects projects?
 description: EffectCraft cannot open .aep or .aepx files, and After Effects plug-ins do not run. It saves .ecproj files and imports Lottie.
 order: 10
-verified: 0.8.0
+verified: 0.9.2
 ---
 
 No. EffectCraft cannot open After Effects projects (`.aep` or `.aepx`), and After Effects plug-ins do not run in it.
