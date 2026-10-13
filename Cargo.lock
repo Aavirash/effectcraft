@@ -1363,6 +1363,7 @@ dependencies = [
  "exr",
  "gif",
  "image",
+ "log",
  "rayon",
  "serde_json",
 ]
