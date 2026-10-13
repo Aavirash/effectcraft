@@ -490,16 +490,6 @@ pub trait FxTarget {
     fn gpu(&mut self, steps: &[FxStep]) -> bool;
     /// Run one CPU effect: `f` maps the buffer.
     fn cpu(&mut self, f: &mut dyn FnMut(Buf) -> Buf);
-    /// Grow the buffer to cover its whole layer rectangle (`size` layer pixels from its own
-    /// corner, the `layer_size` handed to effects), as [`effectcraft_effects::Buf::cover`].
-    /// Authored buffers (text, shapes) only span their painted content; this gives the stack
-    /// the room a sized source's buffer already has (#659).
-    fn cover(&mut self, size: [f64; 2]) {
-        self.cpu(&mut |mut buf| {
-            buf.cover(size);
-            buf
-        });
-    }
 }
 
 /// The CPU effect target (GPU chains go through [`Accelerator::effects`]: upload, readback).
@@ -1132,15 +1122,11 @@ impl<'a> Renderer<'a> {
         let Some(fx) = layer.effects() else { return };
         let lt = layer.layer_time(ctx.time);
         let layer_size = ctx.effect_bounds(layer).0;
-        // #659: an authored layer's buffer spans only its painted content while the stack works
-        // on the layer's whole region (`layer_size`): give the buffer the room a sized source
-        // already has, so tiling or displacement can place pixels outside the content instead
-        // of losing them at its edge. Only when something will actually run, and not for an
-        // adjustment layer, whose buffer is the comp below and already spans it.
-        if !adjustment
-            && fx.groups().any(|g| g.enabled && matches!(&g.kind, GroupKind::Effect { effect } if effectcraft_effects::find(effect).is_some_and(|s| !effectcraft_effects::audio_fx::is_audio_effect(s.id)))) {
-            target.cover(layer_size);
-        }
+        // #659 / #1205: an authored layer's buffer spans only its painted content. Effects that
+        // place pixels outside it grow the buffer themselves, by exactly what they need
+        // (`layer_cover_pad`: CC Tiler, CC Smear, CC Mosaic sharp) instead of a blanket cover of
+        // the whole layer rectangle on every stack — which paid a comp-sized texture per layer,
+        // per frame in flight, for glow and blur that never use the extra room.
         let mut mask_shapes = masks::shapes(ctx, layer);
         if origin != [0.0; 2] {
             for q in mask_shapes.iter_mut().flat_map(|m| m.points.iter_mut()) {
