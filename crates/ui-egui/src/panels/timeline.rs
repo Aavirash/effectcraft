@@ -178,6 +178,12 @@ fn edited_layers(layer: LayerId, selected: &[LayerId]) -> Vec<u64> {
     if selected.contains(&layer) { selected.iter().map(|l| l.0).collect() } else { vec![layer.0] }
 }
 
+/// The layers a Track Matte edit on `layer`'s row applies to: [`edited_layers`] that can have a
+/// matte. Selected nulls, cameras and lights (no Track Matte on their rows) are left out.
+fn matte_layers(comp: &Comp, layer: LayerId, selected: &[LayerId]) -> Vec<u64> {
+    edited_layers(layer, selected).into_iter().filter(|l| comp.layer(LayerId(*l)).is_some_and(|l| l.source.is_av())).collect()
+}
+
 /// A pick whip at `rect`: dragging it starts a pick whip of `kind` from `layer`'s `prop` (0 for
 /// the layer's own), drawn and dropped at the end of [`show`].
 #[allow(clippy::too_many_arguments)]
@@ -196,7 +202,11 @@ fn pick_whip(
     app.auto.add(auto, rect, label);
     if resp.drag_started() {
         let state: PickWhip = (kind, layer, prop, rect.center());
-        let layers = edited_layers(LayerId(layer), &app.session.state.selected_layers);
+        let selected = &app.session.state.selected_layers;
+        let layers = match (kind, app.session.active_comp()) {
+            (WHIP_MATTE, Some(comp)) => matte_layers(comp, LayerId(layer), selected),
+            _ => edited_layers(LayerId(layer), selected),
+        };
         ui.ctx().data_mut(|d| {
             d.insert_temp(pick_whip_id(), state);
             d.insert_temp(whip_layers_id(), layers);
@@ -2208,7 +2218,7 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
                     let current = layer.track_matte.and_then(|m| opts.iter().position(|o| o == m.kind.label()));
                     if let Some(i) = widgets::popup_menu(ui, pop, mr.left_bottom(), &opts, current) {
                         let ids: Vec<LayerId> = candidates.iter().map(|l| l.id).collect();
-                        if let Some(a) = opts.get(i).and_then(|o| track_matte_pick(&edited_layers(layer.id, &selected), &ids, i, o)) {
+                        if let Some(a) = opts.get(i).and_then(|o| track_matte_pick(&matte_layers(&comp, layer.id, &selected), &ids, i, o)) {
                             actions.push(a);
                         }
                     }

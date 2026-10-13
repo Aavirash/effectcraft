@@ -152,3 +152,54 @@ fn track_matte_menu_and_pick_whip_set_the_selected_layers_mattes() {
     whip(&mut h, &format!("timeline.layer.{c}.trackMattePickWhip"), x);
     assert_eq!([matte(&h, a), matte(&h, c)], [Some((y, MatteKind::Alpha)), Some((x, MatteKind::Alpha))]);
 }
+
+fn video(h: &Harness<'_, EffectcraftApp>, id: u64) -> bool {
+    h.state().session.active_comp().unwrap().layer(LayerId(id)).unwrap().switches.video
+}
+
+/// A selected layer locked with its Lock switch stays selected, and keeps its parent, its
+/// transform and its matte while another selected row's menus and pick whips change the rest.
+#[test]
+fn locked_selected_layers_keep_their_parent_and_matte() {
+    let (mut h, [a, b, c, _, x, _]) = harness();
+    select(&mut h, &[a, b]);
+    let at = rect(&h, &format!("timeline.layer.{b}.lock")).center();
+    click(&mut h, at);
+    let selected: Vec<u64> = h.state().session.state.selected_layers.iter().map(|l| l.0).collect();
+    assert!(h.state().session.active_comp().unwrap().layer(LayerId(b)).unwrap().switches.locked && selected == vec![a, b], "{selected:?}");
+    let b_position = position(&h, b);
+    choose(&mut h, &format!("timeline.layer.{a}.parent"), "3. P");
+    whip(&mut h, &format!("timeline.layer.{a}.pickWhip"), c);
+    choose(&mut h, &format!("timeline.layer.{a}.trackMatte"), "1. Y");
+    whip(&mut h, &format!("timeline.layer.{a}.trackMattePickWhip"), x);
+    assert_eq!((parent(&h, a), matte(&h, a)), (Some(c), Some((x, MatteKind::Alpha))), "A changed each time");
+    assert_eq!((parent(&h, b), matte(&h, b), position(&h, b)), (None, None, b_position), "locked B didn't");
+}
+
+/// Selected nulls (no Track Matte on their rows) get no matte from another row's menu or pick
+/// whip: at the top of the comp one used to refuse the whole mode change (nothing above it to
+/// take as a matte), at the bottom it took the layer above as its matte and hid it.
+#[test]
+fn selected_nulls_get_no_matte() {
+    let (mut h, [a, b, _, _, x, y]) = harness();
+    h.state_mut().session.execute("layer.setTrackMatte", json!({"layers": [a, b], "matte": x, "kind": "alpha"})).unwrap();
+    let n = h.state_mut().session.execute("layer.newNull", json!({"name": "N"})).unwrap()["layer"].as_u64().unwrap();
+    select(&mut h, &[a, b, n]);
+    choose(&mut h, &format!("timeline.layer.{a}.trackMatte"), "Luma Matte");
+    assert_eq!([matte(&h, a), matte(&h, b), matte(&h, n)], [Some((x, MatteKind::Luma)), Some((x, MatteKind::Luma)), None], "a null on top");
+    h.state_mut().session.execute("layer.arrange", json!({"layers": [n], "to": "back"})).unwrap();
+    select(&mut h, &[a, b, n]);
+    choose(&mut h, &format!("timeline.layer.{a}.trackMatte"), "Alpha Inverted Matte");
+    assert_eq!(
+        [matte(&h, a), matte(&h, b), matte(&h, n)],
+        [Some((x, MatteKind::AlphaInverted)), Some((x, MatteKind::AlphaInverted)), None],
+        "a null at the bottom"
+    );
+    assert!(video(&h, a), "A wasn't hidden as the null's matte");
+    whip(&mut h, &format!("timeline.layer.{a}.trackMattePickWhip"), y);
+    assert_eq!(
+        [matte(&h, a), matte(&h, b), matte(&h, n)],
+        [Some((y, MatteKind::AlphaInverted)), Some((y, MatteKind::AlphaInverted)), None],
+        "the pick whip too"
+    );
+}
