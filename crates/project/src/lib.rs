@@ -931,7 +931,7 @@ impl Comp {
         if !self.hide_shy
             && self.resolution.is_auto()
             && self.layers.iter().all(|l| l.switches == l.switches.pixels())
-            && (with_markers || (self.markers.iter().all(|m| !is_timing_marker(m)) && self.layers.iter().all(|l| l.markers.is_empty())))
+            && (with_markers || (self.markers.iter().all(is_timing_marker) && self.layers.iter().all(|l| l.markers.is_empty())))
         {
             return std::borrow::Cow::Borrowed(self);
         }
