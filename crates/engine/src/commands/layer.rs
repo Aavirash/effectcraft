@@ -789,10 +789,48 @@ fn reexpress_euler(correction: effectcraft_geom::Mat4, o: [f64; 3], reference: [
     nearest_euler(euler_zyx(world.0), reference)
 }
 
+/// Largest angle (degrees) a baked Orientation may drift from the exact rotation between its keys.
+const BAKE_TOLERANCE_DEGREES: f64 = 0.05;
+/// How many times a segment may be halved while baking, and the most keys a property may end up with.
+const BAKE_MAX_DEPTH: u32 = 10;
+const BAKE_MAX_KEYS: usize = 4096;
+
+/// The angle (degrees) between two rotations.
+fn rotation_angle(a: effectcraft_geom::Mat4, b: effectcraft_geom::Mat4) -> f64 {
+    let trace: f64 = (0..3).flat_map(|i| (0..3).map(move |j| (i, j))).map(|(i, j)| a.0[i][j] * b.0[i][j]).sum();
+    ((trace - 1.0) / 2.0).clamp(-1.0, 1.0).acos().to_degrees()
+}
+
+/// Adds keys between `(ta, ea)` and `(tb, eb)` (already converted) wherever the straight Euler blend
+/// between them drifts from `correction * Orientation(authored)` by more than the tolerance.
+fn bake_between(
+    correction: effectcraft_geom::Mat4,
+    authored: &effectcraft_project::Property,
+    (ta, ea): (Tick, [f64; 3]),
+    (tb, eb): (Tick, [f64; 3]),
+    depth: u32,
+    out: &mut Vec<effectcraft_keyframe::Keyframe>,
+) {
+    use effectcraft_geom::{Mat4, Vec3};
+    if depth == 0 || tb.0 - ta.0 < 2 || out.len() >= BAKE_MAX_KEYS {
+        return;
+    }
+    let tm = Tick(ta.0 + (tb.0 - ta.0) / 2);
+    let blend = [(ea[0] + eb[0]) / 2.0, (ea[1] + eb[1]) / 2.0, (ea[2] + eb[2]) / 2.0];
+    let exact = correction * Mat4::orientation(Vec3::from(authored.value_at(tm).as_vec3()));
+    if rotation_angle(Mat4::orientation(Vec3::from(blend)), exact) <= BAKE_TOLERANCE_DEGREES {
+        return;
+    }
+    let em = nearest_euler(euler_zyx(exact.0), blend);
+    bake_between(correction, authored, (ta, ea), (tm, em), depth - 1, out);
+    out.push(effectcraft_keyframe::Keyframe::new(tm, KV::Vec3(em)));
+    bake_between(correction, authored, (tm, em), (tb, eb), depth - 1, out);
+}
+
 /// Re-expresses Orientation as `correction * Orientation`. A Z-only correction shifts Z exactly in the
-/// value and every key, so the paths between keys stay exact too. Any other correction is applied
-/// only to a static value (`parent_fixes` leaves keyed Orientation alone then): Euler angles are
-/// blended between keys, which no re-expression of the keys can reproduce.
+/// value and every key. For any other correction a static value is converted directly; keys are
+/// converted, and keys are added between them wherever the Euler blend between two keys would drift
+/// from the exact rotation (the segments become linear, with the original easing baked in).
 fn reexpress_orientation(correction: effectcraft_geom::Mat4, pr: &mut effectcraft_project::Property) {
     if let Some(turn) = z_only_turn(correction) {
         // No turn (an identity correction) leaves every authored value as it is.
@@ -811,6 +849,53 @@ fn reexpress_orientation(correction: effectcraft_geom::Mat4, pr: &mut effectcraf
     }
     let value = pr.value.as_vec3();
     pr.value = KV::Vec3(reexpress_euler(correction, value, value));
+    if pr.keys.is_empty() {
+        return;
+    }
+    let authored = pr.clone();
+    // Each key keeps the authored change from the previous key on top of its converted value.
+    let mut converted: Vec<[f64; 3]> = vec![];
+    let mut prev: Option<([f64; 3], [f64; 3])> = None;
+    for key in &authored.keys {
+        let o = key.value.as_vec3();
+        let reference = match prev {
+            Some((before, after)) => [after[0] + o[0] - before[0], after[1] + o[1] - before[1], after[2] + o[2] - before[2]],
+            None => o,
+        };
+        let n = reexpress_euler(correction, o, reference);
+        converted.push(n);
+        prev = Some((o, n));
+    }
+    use effectcraft_keyframe::Interp;
+    let mut keys: Vec<effectcraft_keyframe::Keyframe> = vec![];
+    let mut after_baked_segment = false;
+    for (i, key) in authored.keys.iter().enumerate() {
+        let mut k = key.clone();
+        k.value = KV::Vec3(converted[i]);
+        if after_baked_segment {
+            k.in_interp = Interp::Linear;
+            k.in_ease.clear();
+            k.auto_bezier = false;
+            k.continuous = false;
+        }
+        after_baked_segment = false;
+        let segment = authored.keys.get(i + 1).filter(|_| key.out_interp != Interp::Hold);
+        let mut between = vec![];
+        if let Some(next) = segment {
+            bake_between(correction, &authored, (key.time, converted[i]), (next.time, converted[i + 1]), BAKE_MAX_DEPTH, &mut between);
+            // An eased segment, or one that gained keys, becomes a run of straight blends.
+            if !between.is_empty() || key.out_interp != Interp::Linear || next.in_interp != Interp::Linear {
+                k.out_interp = Interp::Linear;
+                k.out_ease.clear();
+                k.auto_bezier = false;
+                k.continuous = false;
+                after_baked_segment = true;
+            }
+        }
+        keys.push(k);
+        keys.extend(between);
+    }
+    pr.keys = keys;
 }
 
 /// Correction for a two-node rig's Orientation: after a uniform parent change its aim is
@@ -910,10 +995,6 @@ pub(crate) fn parent_fixes(s: &Session, cid: ItemId, ids: &[LayerId], parent: Op
                         .chain(orientation.keys.iter().map(|key| &key.value))
                         .all(|value| value.as_vec3().iter().all(|v| v.is_finite()));
                     if !correction.0.iter().flatten().all(|v| v.is_finite()) || !orientation_finite {
-                        return None;
-                    }
-                    // Keys can only follow a Z-only correction exactly; otherwise they stay authored.
-                    if !orientation.keys.is_empty() && z_only_turn(correction).is_none() {
                         return None;
                     }
                     if let Some(scale) = scale {

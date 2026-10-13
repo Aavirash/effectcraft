@@ -300,20 +300,27 @@ fn keyed_orientation_under_a_z_turn_keeps_the_direction_at_every_time() {
     }
 }
 
-/// Under a tilted null the keys cannot follow exactly (Euler angles are blended between them), so
-/// keyed Orientation stays as authored rather than changing the motion between the keys.
+/// Under a tilted null the keys alone cannot follow (Euler angles are blended between them), so keys are
+/// added between them: the light keeps its direction within a small angle at every time.
 #[test]
-fn keyed_orientation_under_a_tilted_null_stays_authored() {
-    let mut s = session();
-    let light = s.execute("layer.newLight", json!({"kind": "Point", "position": [320, 180, -500]})).unwrap()["layer"].as_u64().unwrap();
-    for (time, value) in [(0.0, json!([-8.0, 12.0, -13.0])), (1.0, json!([5.0, 18.0, 14.0]))] {
-        s.execute("prop.addKey", json!({"layer": light, "path": "transform/orientation", "time": time, "value": value})).unwrap();
+fn keyed_orientation_under_a_tilted_null_follows_between_the_keys() {
+    {
+        let mut s = session();
+        let light = s.execute("layer.newLight", json!({"kind": "Point", "position": [320, 180, -500]})).unwrap()["layer"].as_u64().unwrap();
+        for (time, value) in [(0.0, json!([-8.0, 12.0, -13.0])), (1.5, json!([50.0, 118.0, 74.0]))] {
+            s.execute("prop.addKey", json!({"layer": light, "path": "transform/orientation", "time": time, "value": value})).unwrap();
+        }
+        let times = [0.0, 0.2, 0.5, 0.9, 1.3, 1.5].map(Tick::from_seconds_f64);
+        let before = times.map(|t| frame_at(&s, light, t));
+        let nul = rotated_null(&mut s, [20.0, -35.0, 60.0], 30.0);
+        s.execute("layer.setParent", json!({"layers": [light], "parent": nul})).unwrap();
+        for (t, b) in times.into_iter().zip(before) {
+            let a = frame_at(&s, light, t);
+            // 0.05 degrees is about 9e-4 of a radian on a unit vector.
+            assert!((a.0 - b.0).length() < 1e-6 && (a.1 - b.1).length() < 2e-3, "at {t:?}: {:?} vs {:?}", a.1, b.1);
+        }
+        assert!(layer_in(&s, cid(&s), light).props.prop("transform/orientation").unwrap().keys.len() > 2, "keys were added between the two");
     }
-    let keys_before = layer_in(&s, cid(&s), light).props.prop("transform/orientation").unwrap().keys.iter().map(|k| k.value.as_vec3()).collect::<Vec<_>>();
-    let nul = rotated_null(&mut s, [20.0, -35.0, 60.0], 30.0);
-    s.execute("layer.setParent", json!({"layers": [light], "parent": nul})).unwrap();
-    let keys_after = layer_in(&s, cid(&s), light).props.prop("transform/orientation").unwrap().keys.iter().map(|k| k.value.as_vec3()).collect::<Vec<_>>();
-    assert_eq!(keys_before, keys_after);
 }
 
 // ---------------------------------------------------------------- from 3D model
