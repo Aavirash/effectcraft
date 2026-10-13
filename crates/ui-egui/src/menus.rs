@@ -291,6 +291,12 @@ pub fn invoke(app: &mut EffectcraftApp, ctx: &egui::Context, id: &str, params: V
             _ => {}
         }
     }
+    // Close follows panel focus too: with the Render Queue active, Cmd+W closes that panel and
+    // leaves the active composition open (it used to close the composition next to it).
+    if id == "file.close" && params.as_object().is_some_and(|p| p.is_empty()) && app.ui.focused == PanelKind::RenderQueue {
+        app.close_panel(PanelKind::RenderQueue);
+        return Ok(Value::Null);
+    }
     // Clear follows panel focus, including the Edit menu and keyboard shortcut.
     if id == "edit.clear" && params.as_object().is_some_and(|p| p.is_empty()) && app.ui.focused == PanelKind::Project {
         // Through `invoke`, so deleting items that compositions use still asks first (M3.16).
@@ -1984,6 +1990,21 @@ mod tests {
                 seen.insert(key, target);
             }
         }
+    }
+
+    /// Cmd+W with the Render Queue focused closes the queue; the composition next to it stays
+    /// open (it used to be closed, and the queue stayed).
+    #[test]
+    fn cmd_w_in_the_render_queue_closes_the_queue_not_the_comp() {
+        let ctx = egui::Context::default();
+        let mut app = EffectcraftApp::new(effectcraft_engine::Session::default());
+        let a = app.session.execute("comp.new", json!({"name": "A", "duration": 4})).unwrap()["comp"].as_u64();
+        app.show_panel(PanelKind::RenderQueue);
+        assert_eq!(app.ui.focused, PanelKind::RenderQueue);
+        invoke(&mut app, &ctx, "file.close", json!({})).unwrap();
+        assert!(!app.ui.dock.contains(PanelKind::RenderQueue));
+        assert_eq!(app.session.state.active_comp.map(|c| c.0), a);
+        assert_eq!(app.session.state.open_comps.len(), 1);
     }
 
     /// #336: Ctrl+\ (Cmd+\ on macOS) maximizes the application window, and again restores
