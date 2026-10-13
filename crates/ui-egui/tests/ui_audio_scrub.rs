@@ -182,6 +182,8 @@ fn preview_with_audio_sounds_without_caching_the_work_area() {
     h.state_mut().play(now);
     assert!(until_sound(&mut h, cid, 0), "the sound started");
     assert_eq!(audio_frame(&h, cid), Some(0), "from the first frame");
+    let cached = h.state().frames.cached_frames(&h.state().shown_series(cid)).len();
+    assert!((1..900).contains(&cached), "it started with {cached} of the 900 frames cached, not the whole work area");
 }
 
 /// Pull `frames` stereo frames from the output, waiting for the feeder thread to mix them.
@@ -263,13 +265,188 @@ fn no_device_plays_the_picture_and_stop_ends_the_wait() {
     // Stop while preparing.
     h.state_mut().stop();
     let now = h.ctx.input(|i| i.time);
-    h.state_mut().hooks.audio_device = Some(Box::new(move |_| Some(Box::new(fake.clone()) as Box<dyn AudioDevice>)));
+    let device = fake.clone();
+    h.state_mut().hooks.audio_device = Some(Box::new(move |_| Some(Box::new(device.clone()) as Box<dyn AudioDevice>)));
     h.state().frames.clear();
     h.state_mut().play(now);
-    assert!(h.state().playback.starting);
+    // One step into preparing: the frames ahead are requested and it waits for them.
+    h.step();
+    assert!(h.state().playback.starting && h.state().playback.waiting && h.state().audio.is_none(), "preparing");
     h.state_mut().stop();
-    for _ in 0..10 {
+    // The renders it queued finish after Stop: they must not start the sound.
+    for _ in 0..30 {
         h.step();
+        std::thread::sleep(std::time::Duration::from_millis(10));
     }
     assert!(!h.state().playback.playing && !h.state().playback.starting && h.state().audio.is_none(), "Stop while preparing: nothing plays");
+    assert!(fake.0.lock().unwrap().0.is_none(), "the output never opened");
+}
+
+/// Start a preview and step until it leaves its startup (or 60 s pass). Returns whether it did.
+fn until_started(h: &mut Harness<'_, EffectcraftApp>) -> bool {
+    let now = h.ctx.input(|i| i.time);
+    h.state_mut().play(now);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while h.state().playback.starting && std::time::Instant::now() < deadline {
+        h.step();
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    !h.state().playback.starting
+}
+
+/// RAM preview budgets just below, at and above the prefetch's frames ahead, and small ones, from
+/// a cold cache, with and without an output device: the start never waits for a frame the
+/// prefetch doesn't request (with a budget of 4 frames it asks for 3 ahead of the playhead).
+#[test]
+fn startup_finishes_at_any_ram_preview_budget() {
+    let probe = Fake::default();
+    let (app, _) = setup(true, &probe);
+    let ahead = (app.frames.parallelism() * 2).max(4) as i64;
+    // A 64×36 frame is 9216 bytes; `fit` frames fit in (fit + ½) frames' worth / 0.9.
+    let mut fits = vec![2, 3, 4, ahead - 1, ahead, ahead + 1];
+    fits.sort();
+    fits.dedup();
+    for fit in fits {
+        for device in [true, false] {
+            let fake = Fake::default();
+            let (mut app, cid) = setup_long(true, &fake, 8.0);
+            if !device {
+                app.hooks.audio_device = Some(Box::new(|_| None));
+            }
+            let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 30.0).build_eframe(|_| app);
+            h.run_steps(2);
+            let budget = ((fit as f64 + 0.5) * 9216.0 / 0.9) as usize;
+            h.state().frames.set_budget(budget);
+            h.state().frames.clear();
+            assert!(until_started(&mut h), "fit {fit} (ahead {ahead}), device {device}: the preview left its startup");
+            assert_eq!(h.state().audio.is_some(), device, "fit {fit}, device {device}");
+            if device {
+                assert_eq!(audio_frame(&h, cid), Some(0), "fit {fit}: from the first frame");
+            }
+        }
+    }
+}
+
+/// Extended Viewer frames render larger than the comp: a budget that would hold `ahead` comp-sized
+/// frames holds fewer of them, and the start waits only for as many as really fit (#947).
+#[test]
+fn startup_finishes_when_extended_viewer_frames_are_larger() {
+    let fake = Fake::default();
+    let mut s = Session::default();
+    s.execute("comp.new", json!({"name": "E", "width": 160, "height": 120, "frameRate": 30, "duration": 8})).unwrap();
+    let cid = s.active_comp_id().unwrap();
+    let l = s.execute("layer.newSolid", json!({"color": "#4060a0"})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("effect.apply", json!({"layers": [l], "effect": "ec.audio.tone"})).unwrap();
+    s.execute("layer.setSwitch", json!({"layers": [l], "switch": "audio", "value": true})).unwrap();
+    s.execute("layer.setSwitch", json!({"layers": [l], "switch": "threeD", "value": true})).unwrap();
+    s.execute("comp.setSwitch", json!({"switch": "draft3d", "value": true})).unwrap();
+    s.prefs.three_d.extended_viewer = true;
+    let mut app = EffectcraftApp::new(s);
+    let f = fake.clone();
+    app.hooks.audio_device = Some(Box::new(move |_| Some(Box::new(f.clone()) as Box<dyn AudioDevice>)));
+    let ahead = (app.frames.parallelism() * 2).max(4);
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 30.0).build_eframe(|_| app);
+    // The viewer shows the pasteboard: frames render the extended region.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let size = loop {
+        h.step();
+        let series = h.state().shown_series(cid);
+        if let Some(img) = h.state().frames.get(&series) {
+            break img.size();
+        }
+        assert!(std::time::Instant::now() < deadline, "the first frame rendered");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    assert!(h.state().ui.viewer.extended.is_some(), "Extended Viewer is on");
+    let (comp_bytes, real_bytes) = (160 * 120 * 4, size[0] * size[1] * 4);
+    // Room for `ahead` comp-sized frames (and a half), which is fewer real ones.
+    let budget = ((ahead as f64 + 0.5) * comp_bytes as f64 / 0.9) as usize;
+    assert!((budget as f64 * 0.9 / real_bytes as f64) < ahead as f64, "real frames ({size:?}) fit fewer than {ahead}");
+    h.state().frames.set_budget(budget);
+    h.state().frames.clear();
+    assert!(until_started(&mut h), "the preview left its startup");
+    assert!(h.state().audio.is_some(), "with its sound");
+    assert_eq!(audio_frame(&h, cid), Some(0), "from the first frame");
+}
+
+/// An output device whose start fails.
+#[derive(Clone, Default)]
+struct Broken;
+
+impl AudioDevice for Broken {
+    fn sample_rate(&self) -> u32 {
+        48000
+    }
+    fn start(&mut self, _feed: Arc<AudioFeed>) -> Result<(), String> {
+        Err("device unavailable".into())
+    }
+    fn stop(&mut self) {}
+}
+
+/// A device that fails to start: the picture plays on its own from the first frame.
+#[test]
+fn a_device_that_fails_to_start_plays_the_picture() {
+    let fake = Fake::default();
+    let (mut app, cid) = setup_long(true, &fake, 8.0);
+    app.hooks.audio_device = Some(Box::new(|_| Some(Box::new(Broken) as Box<dyn AudioDevice>)));
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 30.0).build_eframe(|_| app);
+    h.run_steps(2);
+    assert!(until_started(&mut h), "it left its startup");
+    assert!(h.state().audio.is_none() && h.state().playback.playing);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while frame(&h, cid) == 0 && std::time::Instant::now() < deadline {
+        h.step();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(frame(&h, cid) > 0, "the picture plays");
+}
+
+/// An output that plays: a thread takes the feed's samples in real time, as a sound card would.
+#[derive(Clone, Default)]
+struct Playing(Arc<Mutex<bool>>);
+
+impl AudioDevice for Playing {
+    fn sample_rate(&self) -> u32 {
+        48000
+    }
+    fn start(&mut self, feed: Arc<AudioFeed>) -> Result<(), String> {
+        let stop = self.0.clone();
+        std::thread::spawn(move || {
+            let mut buf = vec![0.0f32; 480 * 2];
+            while !*stop.lock().unwrap() {
+                feed.pull(&mut buf);
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        });
+        Ok(())
+    }
+    fn stop(&mut self) {
+        *self.0.lock().unwrap() = true;
+    }
+}
+
+/// Once started, the sound's clock moves the picture on from the first frame, and a frame that
+/// isn't cached still stops the sound rather than being skipped.
+#[test]
+fn a_started_preview_follows_its_sound() {
+    let fake = Fake::default();
+    let (mut app, cid) = setup_long(true, &fake, 8.0);
+    let device = Playing::default();
+    let d = device.clone();
+    app.hooks.audio_device = Some(Box::new(move |_| Some(Box::new(d.clone()) as Box<dyn AudioDevice>)));
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 30.0).build_eframe(|_| app);
+    h.run_steps(2);
+    assert!(until_started(&mut h) && h.state().audio.is_some(), "the sound started");
+    assert_eq!(audio_frame(&h, cid), Some(0), "from the first frame");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while frame(&h, cid) < 5 && std::time::Instant::now() < deadline && h.state().audio.is_some() {
+        h.step();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(frame(&h, cid) >= 5, "the picture follows the sound's clock (at frame {})", frame(&h, cid));
+    h.state().frames.set_budget(0);
+    h.state().frames.clear();
+    h.step();
+    assert!(h.state().audio.is_none() && h.state().playback.audio_held && h.state().playback.playing, "a stall stops the sound");
+    *device.0.lock().unwrap() = true;
 }

@@ -52,6 +52,17 @@ const SCREENSHOT_TIMEOUT_S: f64 = 4.0;
 /// [`EffectcraftApp::editing`]).
 const EDIT_QUIET: f64 = 0.3;
 
+/// How many frames from the first a preview with sound waits for before it starts (#947): the
+/// prefetch's `ahead`, but no more than its `window` requests from the current frame (offsets
+/// `0..window`), and no more than fit in the RAM preview `budget` (90 %, as for the prefetch) at
+/// `frame_bytes`, the size frames really render at; at least the current frame, which the viewer
+/// always requests. Waiting for a frame that is never requested, or that can't stay cached with
+/// the others, would hold the first frame for ever.
+fn startup_frames(ahead: i64, window: i64, budget: usize, frame_bytes: usize) -> i64 {
+    let fit = (budget as f64 * 0.9 / frame_bytes.max(1) as f64) as i64;
+    ahead.min(window).min(fit).max(1)
+}
+
 /// Modal dialogs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Dialog {
@@ -1275,13 +1286,19 @@ impl EffectcraftApp {
         let fit = self.frames_that_fit(&c, scale);
         // Starting with sound: hold the first frame until the frames ahead are cached, then start
         // the sound from that same frame (see `Playback::starting`). Without an output device the
-        // picture plays on its own clock from it.
+        // picture plays on its own clock from it. How many frames ahead: only ones the prefetch
+        // above requests and that fit in the RAM preview at the size they really render (an
+        // Extended Viewer frame is larger than the comp), so the wait always ends.
         if self.playback.starting
             && let Some(p) = plan
         {
             self.playback.start_wall = now;
             self.playback.start_frame = cur;
-            if !self.cached_ahead(&p, &series, cur, ahead.min(fit)) {
+            let need = self.frames.get(&FrameKey { frame: cur, ..series }).map(|img| {
+                let [w, h] = img.size();
+                startup_frames(ahead, window, self.frames.budget(), w.saturating_mul(h).saturating_mul(4))
+            });
+            if !need.is_some_and(|n| self.cached_ahead(&p, &series, cur, n)) {
                 self.playback.waiting = true;
                 ctx.request_repaint();
                 return;
@@ -2173,5 +2190,30 @@ mod appearance_tests {
         assert_eq!(app.session.prefs.appearance.appearance_mode, "dark");
         assert_eq!(app.session.prefs.appearance.dark_theme, "darker");
         assert_eq!(app.ui.theme, ThemeKind::Darker);
+    }
+}
+
+#[cfg(test)]
+mod startup_tests {
+    use super::startup_frames;
+
+    /// The frames a preview with sound waits for are always requested and fit together (#947).
+    #[test]
+    fn startup_waits_only_for_frames_it_requests_and_can_keep() {
+        // A 64×36 frame: 9216 bytes. A 46 080-byte budget fits 4 of them (90 %); the prefetch
+        // window then requests offsets 0..3, so the start needs those 3, not 4 it never asks for.
+        let frame = 64 * 36 * 4;
+        let fit = 4;
+        let window = (32i64 * 3).min(fit - 1);
+        assert_eq!(startup_frames(32, window, 46_080, frame), 3);
+        // A roomy budget: the prefetch's `ahead` frames.
+        assert_eq!(startup_frames(8, 24, 100_000_000, frame), 8);
+        // Extended Viewer: a 160×120 comp renders 320×248 frames. 952 320 bytes fit 11 comp-sized
+        // frames but only 2 real ones (90 %): wait for 2, not 4.
+        assert_eq!(startup_frames(4, 11, 952_320, 320 * 248 * 4), 2);
+        // Nothing fits, or no window: still the current frame, never 0.
+        assert_eq!(startup_frames(8, 0, 0, frame), 1);
+        // A zero frame size counts as 1 byte: no division by zero.
+        assert_eq!(startup_frames(8, 24, 10, 0), 8);
     }
 }
