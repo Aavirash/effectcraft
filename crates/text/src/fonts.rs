@@ -943,6 +943,11 @@ mod tests {
         let n = all_faces().iter().filter(|f| f.info.origin == "system").count();
         eprintln!("system fonts: {n} faces in {:?}", t.elapsed());
         assert_eq!(scan_system(), 0, "scans once");
+        if cfg!(all(unix, not(target_os = "macos"), not(target_arch = "wasm32"))) && std::path::Path::new("/etc/fonts").exists() {
+            // #1089: a fontconfig desktop (Fedora, Arch, Ubuntu, the CI runner): the scan must
+            // list the installed system families, not just the bundled three.
+            assert!(n > 20, "fontconfig system fonts missing: {n}");
+        }
         if cfg!(target_os = "macos") {
             assert!(n > 20, "{n}");
             let r = resolve("Helvetica", "Bold");

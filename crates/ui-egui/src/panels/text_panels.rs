@@ -642,6 +642,17 @@ pub(super) fn font_picker(app: &mut EffectcraftApp, ui: &mut egui::Ui, id: egui:
                 // Typing goes on into the search field.
                 ui.memory_mut(|m| m.request_focus(search_id));
             }
+            // #1089: fonts installed after launch (dnf, GNOME Fonts, a drop into ~/.fonts) appear
+            // without restarting EffectCraft: the system scan also runs in the background at
+            // startup, this re-runs it on demand.
+            let resc = Rect::from_min_size(pos2(row.rect.max.x - 124.0, row.rect.min.y + 2.0), vec2(120.0, filter_h - 4.0));
+            if widgets::text_button(ui, resc, tr("Rescan Fonts"), false, &t, id.with("rescan")).clicked() {
+                match app.session.execute("text.fonts", json!({"rescan": true})) {
+                    Ok(v) => app.ui.status = format!("{} +{}", tr("Rescan Fonts"), v.get("added").and_then(serde_json::Value::as_u64).unwrap_or(0)),
+                    Err(e) => app.ui.status = e.to_string(),
+                }
+            }
+            app.auto.add(&format!("{auto}.rescan"), resc, "Rescan Fonts");
             let query = state.query.trim().to_lowercase();
             let mut seen = std::collections::HashSet::new();
             let filtered: Vec<_> = rows
