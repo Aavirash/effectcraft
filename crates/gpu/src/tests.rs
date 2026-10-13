@@ -780,6 +780,49 @@ fn a_rejected_texture_fails_the_frame_not_the_compositor() {
     assert_eq!(g.ctx.pool_stats().0, hits, "the failed frame's texture wasn't reused");
 }
 
+/// A texture the device rejected (deliberately too wide), made outside any frame under a scope
+/// of its own: the view a frame then makes of it is the reported validation error.
+fn rejected_texture(g: &Gpu) -> wgpu::Texture {
+    let scope = g.ctx.device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let too_wide = g.ctx.device.limits().max_texture_dimension_2d.saturating_add(1);
+    let t = g.ctx.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("deliberately too wide"),
+        size: wgpu::Extent3d { width: too_wide, height: 1, depth_or_array_layers: 1 },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    });
+    assert!(pollster::block_on(scope.pop()).is_some(), "the device rejected the texture");
+    t
+}
+
+/// No texture of a failed frame is reused: not one released while another encoder is still
+/// open (it waits for that encoder), nor one taken before the failure and handed back after.
+#[test]
+fn a_failed_frame_returns_no_texture_to_the_pool() {
+    hold_gpu_lock();
+    let Some(g) = Gpu::headless() else { return };
+    let rejected = rejected_texture(&g);
+    let earlier = g.within_memory(|| crate::context::Enc::new(&g.ctx).image(48, 16)).expect("an earlier frame");
+    let mut other = crate::context::Enc::new(&g.ctx);
+    other.encoder();
+    g.within_memory(|| (crate::context::Enc::new(&g.ctx).image(64, 32), rejected.create_view(&Default::default()))).expect_err("the frame fails");
+    drop(earlier);
+    drop(other);
+    let (hits, _) = g.ctx.pool_stats();
+    let (a, b) = g
+        .within_memory(|| {
+            let mut e = crate::context::Enc::new(&g.ctx);
+            (e.image(64, 32), e.image(48, 16))
+        })
+        .expect("the next frame");
+    assert_eq!(((a.width, a.height), (b.width, b.height)), ((64, 32), (48, 16)));
+    assert_eq!(g.ctx.pool_stats().0, hits, "no texture of the failed frame was reused");
+}
+
 /// A buffer whose allocation fails (here: over the device's buffer size limit; on Adreno an
 /// internal `ERROR_INITIALIZATION_FAILED`) is reported to the caller's error scope instead of
 /// panicking in `create_buffer_init`'s mapped range on a frame thread (#591).
