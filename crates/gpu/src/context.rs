@@ -850,8 +850,9 @@ impl GpuContext {
     }
 
     fn texture(&self, w: u32, h: u32) -> wgpu::Texture {
+        // Named with its size, so a GPU error about it says which texture failed (#1319).
         self.device.create_texture(&wgpu::TextureDescriptor {
-            label: None,
+            label: Some(&format!("working image {w}×{h}")),
             size: wgpu::Extent3d { width: w.max(1), height: h.max(1), depth_or_array_layers: 1 },
             mip_level_count: 1,
             sample_count: 1,
