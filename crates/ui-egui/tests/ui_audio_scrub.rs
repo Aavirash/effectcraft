@@ -113,47 +113,55 @@ fn cmd_dragging_the_current_time_scrubs_and_an_idle_scrub_closes() {
     assert!(h.state().scrub.is_none() && fake.0.lock().unwrap().1, "closed and stopped");
 }
 
-/// A preview with audio waits for frames like a silent one (#103): while the frames ahead aren't
-/// cached, every frame shows as it renders, silently; the sound starts once the rest of the
-/// preview is cached, and a frame that isn't cached stops it instead of being skipped.
-#[test]
-fn preview_with_audio_shows_every_frame_and_sounds_once_cached() {
-    let fake = Fake::default();
-    let (mut app, cid) = setup(true, &fake);
-    // Playback requests at most twice as many frames ahead per step as there are render threads.
-    // Four times that many frames take at least four steps to cache, so frames are shown silently
-    // first however fast the renderer is (with a fixed 2 s comp, a machine with many cores cached
-    // all of it before the first step and the sound started at once).
-    let ahead = (app.frames.parallelism() * 2).max(4);
-    app.session.execute("comp.settings", json!({"comp": cid.0, "duration": (4 * ahead) as f64 / 30.0})).unwrap();
-    // A little under one frame of input time per step.
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 31.0).build_eframe(|_| app);
-    h.run_steps(2);
-    let frame = |h: &Harness<'_, EffectcraftApp>| {
-        let app = h.state();
-        app.session.project.comp(cid).unwrap().frame_rate.frame_at(app.session.time())
-    };
-    let now = h.ctx.input(|i| i.time);
-    h.state_mut().play(now);
-    assert!(h.state().playback.audio_held && h.state().audio.is_none(), "nothing is cached: no sound yet");
-    let mut last = frame(&h);
-    let mut shown = 0;
-    // Wait on the clock, not a step count: under a loaded machine (parallel test binaries) the
-    // background cache can take far longer than 2000 short steps to get ahead.
+/// The comp's frame at the current time.
+fn frame(h: &Harness<'_, EffectcraftApp>, cid: ItemId) -> i64 {
+    let app = h.state();
+    app.session.project.comp(cid).unwrap().frame_rate.frame_at(app.session.time())
+}
+
+/// The frame under the preview audio's first sample (its clock before the device pulls any).
+fn audio_frame(h: &Harness<'_, EffectcraftApp>, cid: ItemId) -> Option<i64> {
+    let app = h.state();
+    let a = app.audio.as_ref()?;
+    Some(effectcraft_ui_egui::audio::frame_of_sample(a.clock(), a.rate, app.session.project.comp(cid).unwrap().frame_rate))
+}
+
+/// Step until the preview's sound starts (or 60 s pass, for a loaded machine), checking the
+/// playhead holds `first` meanwhile. Returns whether the sound started.
+fn until_sound(h: &mut Harness<'_, EffectcraftApp>, cid: ItemId, first: i64) -> bool {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
     while std::time::Instant::now() < deadline {
         h.step();
         if h.state().audio.is_some() {
-            break;
+            return true;
         }
-        let f = frame(&h);
-        assert!(f == last || f == last + 1 || f < last, "{last} → {f}: a frame was skipped");
-        shown += usize::from(f != last);
-        last = f;
+        assert_eq!(frame(h, cid), first, "the playhead holds the first frame until the sound can start");
+        assert!(h.state().playback.starting && h.state().playback.playing);
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
-    assert!(h.state().audio.is_some() && fake.0.lock().unwrap().0.is_some(), "the sound started once the frames ahead were cached");
-    assert!(shown > 0, "frames played silently first");
+    false
+}
+
+/// Starting a preview with sound before its frames are cached (#947): the playhead holds the
+/// first frame while the frames ahead render, then sound and picture start together from it (the
+/// sound used to start at a later frame, losing the opening). A frame that isn't cached later on
+/// still stops the sound rather than being skipped (#103).
+#[test]
+fn preview_with_audio_holds_the_first_frame_and_sounds_from_it() {
+    let fake = Fake::default();
+    let (mut app, cid) = setup(true, &fake);
+    // Several steps' worth of frames to cache before the sound can start (see the prefetch).
+    let ahead = (app.frames.parallelism() * 2).max(4);
+    app.session.execute("comp.settings", json!({"comp": cid.0, "duration": (4 * ahead) as f64 / 30.0})).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 31.0).build_eframe(|_| app);
+    h.run_steps(2);
+    let now = h.ctx.input(|i| i.time);
+    h.state_mut().play(now);
+    assert!(h.state().playback.starting && h.state().audio.is_none(), "nothing is cached: no sound yet");
+    assert!(until_sound(&mut h, cid, 0), "the sound started once the frames ahead were cached");
+    assert!(fake.0.lock().unwrap().0.is_some());
+    assert_eq!(audio_frame(&h, cid), Some(0), "from the first frame, not a later one");
+    assert!(!h.state().playback.starting);
     // A frame that isn't cached stops the sound rather than being skipped. (Frames render fast
     // enough here to be cached again before the check: keep them out of the cache.)
     h.state().frames.set_budget(0);
@@ -162,33 +170,106 @@ fn preview_with_audio_shows_every_frame_and_sounds_once_cached() {
     assert!(h.state().audio.is_none() && h.state().playback.audio_held && h.state().playback.playing);
 }
 
-/// A preview whose frames render in real time sounds without waiting for the whole work area to
-/// be cached (#208): once the silent preview has kept up for a moment with the frames ahead
-/// cached, the sound starts, still without skipping a frame before it.
+/// A long (30 s) preview sounds once the frames ahead of its first frame are cached, not the
+/// whole work area (#208), and from that first frame (#947).
 #[test]
-fn preview_with_audio_sounds_once_rendering_keeps_up() {
+fn preview_with_audio_sounds_without_caching_the_work_area() {
     let fake = Fake::default();
     let (app, cid) = setup_long(true, &fake, 30.0);
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 30.0).build_eframe(|_| app);
     h.run_steps(2);
-    let frame = |h: &Harness<'_, EffectcraftApp>| {
-        let app = h.state();
-        app.session.project.comp(cid).unwrap().frame_rate.frame_at(app.session.time())
-    };
     let now = h.ctx.input(|i| i.time);
     h.state_mut().play(now);
-    assert!(h.state().playback.audio_held && h.state().audio.is_none(), "nothing is cached: no sound yet");
-    let mut last = frame(&h);
-    // Two seconds of playback, each step giving the frame workers time to keep up.
-    for _ in 0..60 {
-        h.step();
-        if h.state().audio.is_some() {
-            break;
-        }
-        let f = frame(&h);
-        assert!(f == last || f == last + 1, "{last} → {f}: a frame was skipped");
-        last = f;
-        std::thread::sleep(std::time::Duration::from_millis(20));
+    assert!(until_sound(&mut h, cid, 0), "the sound started");
+    assert_eq!(audio_frame(&h, cid), Some(0), "from the first frame");
+}
+
+/// Pull `frames` stereo frames from the output, waiting for the feeder thread to mix them.
+fn pull(feed: &AudioFeed, frames: usize) -> Vec<f32> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while feed.queued_frames() < frames && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(5));
     }
-    assert!(h.state().audio.is_some() && fake.0.lock().unwrap().0.is_some(), "the sound started within 2 s, at frame {last} of 900");
+    let mut out = vec![0.0f32; frames * 2];
+    feed.pull(&mut out);
+    out
+}
+
+/// The opening of the preview is heard (#947): a sound that lasts only the first 100 ms after the
+/// start, from the beginning of the comp or from the middle, reaches the output device.
+#[test]
+fn a_sound_in_the_first_100_ms_is_heard() {
+    for start in [0.0, 1.0] {
+        let fake = Fake::default();
+        let (mut app, cid) = setup_long(false, &fake, 4.0);
+        // A tone only from `start` to `start` + 0.1 s.
+        let l = app.session.execute("layer.newSolid", json!({"color": "#808080"})).unwrap()["layer"].as_u64().unwrap();
+        app.session.execute("effect.apply", json!({"layers": [l], "effect": "ec.audio.tone"})).unwrap();
+        app.session.execute("layer.setSwitch", json!({"layers": [l], "switch": "audio", "value": true})).unwrap();
+        app.session.execute("layer.timing", json!({"layers": [l], "in": start, "out": start + 0.1})).unwrap();
+        app.session.execute("time.set", json!({"time": start})).unwrap();
+        let first = (start * 30.0) as i64;
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 30.0).build_eframe(|_| app);
+        h.run_steps(2);
+        let now = h.ctx.input(|i| i.time);
+        h.state_mut().play(now);
+        assert!(until_sound(&mut h, cid, first), "{start}: the sound started");
+        assert_eq!(audio_frame(&h, cid), Some(first), "{start}: from the first frame");
+        let feed = fake.0.lock().unwrap().0.clone().expect("the output opened");
+        // The first 100 ms at 48 kHz.
+        let out = pull(&feed, 4800);
+        assert!(out.iter().any(|v| v.abs() > 0.01), "{start}: the opening tone reached the output");
+    }
+}
+
+/// A preview without video starts its sound at once, from the first frame (unchanged), and so
+/// does one whose frames are already cached.
+#[test]
+fn audio_only_previews_start_at_once() {
+    let fake = Fake::default();
+    let (app, cid) = setup(true, &fake);
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_| app);
+    h.run_steps(2);
+    let now = h.ctx.input(|i| i.time);
+    h.state_mut().play_with(now, effectcraft_engine::preview::PreviewShortcut::AltNumpad0);
+    assert!(h.state().audio.is_some() && !h.state().playback.starting, "Video off: the sound starts at once");
+    assert_eq!(audio_frame(&h, cid), Some(0));
+}
+
+/// Without an output device the preview still plays, from the first frame, once the frames ahead
+/// are cached; Stop while it prepares leaves nothing playing.
+#[test]
+fn no_device_plays_the_picture_and_stop_ends_the_wait() {
+    let fake = Fake::default();
+    let (mut app, cid) = setup_long(true, &fake, 10.0);
+    app.hooks.audio_device = Some(Box::new(|_| None));
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 30.0).build_eframe(|_| app);
+    h.run_steps(2);
+    let now = h.ctx.input(|i| i.time);
+    h.state_mut().play(now);
+    assert!(h.state().playback.starting);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while h.state().playback.starting && std::time::Instant::now() < deadline {
+        h.step();
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert!(!h.state().playback.starting && h.state().audio.is_none() && h.state().playback.playing, "no device: the picture plays alone");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while frame(&h, cid) == 0 && std::time::Instant::now() < deadline {
+        h.step();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(frame(&h, cid) > 0, "from the first frame on");
+    // Stop while preparing.
+    h.state_mut().stop();
+    let now = h.ctx.input(|i| i.time);
+    h.state_mut().hooks.audio_device = Some(Box::new(move |_| Some(Box::new(fake.clone()) as Box<dyn AudioDevice>)));
+    h.state().frames.clear();
+    h.state_mut().play(now);
+    assert!(h.state().playback.starting);
+    h.state_mut().stop();
+    for _ in 0..10 {
+        h.step();
+    }
+    assert!(!h.state().playback.playing && !h.state().playback.starting && h.state().audio.is_none(), "Stop while preparing: nothing plays");
 }

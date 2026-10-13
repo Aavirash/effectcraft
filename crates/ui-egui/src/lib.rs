@@ -217,6 +217,12 @@ pub struct Playback {
     /// fits in the RAM preview) is cached, so it never plays over skipped frames (#103), or
     /// sooner once the silent preview keeps real time with the frames ahead cached (#208).
     pub audio_held: bool,
+    /// Starting a preview with sound (#947): the playhead stays on the first frame while the
+    /// frames ahead render (the prefetch window, at most what fits in the RAM preview), then
+    /// sound and picture start together from it. Without this the picture played on silently
+    /// while they rendered and the sound started at the later frame, so the opening was lost.
+    /// A stall later on still falls back to [`Playback::audio_held`].
+    pub starting: bool,
     /// When the last frames were shown (seconds, the last second's worth): the achieved rate.
     pub shown_at: std::collections::VecDeque<f64>,
 }
@@ -1004,11 +1010,14 @@ impl EffectcraftApp {
             restore_max,
             audio_frame: (!plan.video).then_some(plan.first),
             audio_held: false,
+            starting: false,
             shown_at: Default::default(),
         };
         if !self.playback.caching {
             if plan.video {
-                self.playback.audio_held = self.audio_plays();
+                let audible = self.audio_plays();
+                self.playback.audio_held = audible;
+                self.playback.starting = audible;
             } else {
                 self.start_audio(fr.tick_of(plan.first));
             }
@@ -1068,6 +1077,7 @@ impl EffectcraftApp {
         let was = std::mem::replace(&mut self.playback.playing, false);
         self.audio = None;
         self.playback.caching = false;
+        self.playback.starting = false;
         if !was {
             return;
         }
@@ -1262,9 +1272,28 @@ impl EffectcraftApp {
             return;
         }
         let snap = |f: i64| wa + (f - wa).div_euclid(step) * step;
-        // Held sound starts once the frames ahead are cached (see `Playback::audio_held`): the
-        // prefetch window when the silent preview keeps real time, else the rest of the preview.
         let fit = self.frames_that_fit(&c, scale);
+        // Starting with sound: hold the first frame until the frames ahead are cached, then start
+        // the sound from that same frame (see `Playback::starting`). Without an output device the
+        // picture plays on its own clock from it.
+        if self.playback.starting
+            && let Some(p) = plan
+        {
+            self.playback.start_wall = now;
+            self.playback.start_frame = cur;
+            if !self.cached_ahead(&p, &series, cur, ahead.min(fit)) {
+                self.playback.waiting = true;
+                ctx.request_repaint();
+                return;
+            }
+            self.playback.starting = false;
+            self.playback.audio_held = false;
+            self.playback.waiting = false;
+            self.start_audio(fr.tick_of(cur));
+        }
+        // Held sound starts once the frames ahead are cached again after a stall (see
+        // `Playback::audio_held`): the prefetch window when the silent preview keeps real time,
+        // else the rest of the preview.
         if self.playback.audio_held
             && let Some(p) = plan
             && ((self.playback.keeps_up(now) && self.cached_ahead(&p, &series, cur, ahead.min(fit))) || self.cached_ahead(&p, &series, cur, fit))
