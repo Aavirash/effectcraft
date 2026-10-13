@@ -551,8 +551,8 @@ fn blend(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(Value::Null)
 }
 
-/// `layer.setTrackMatte`: `layers` (or `layer`, else the first selected layer) use `matte` as
-/// their track matte (none when null), in one undo step. `kind` sets the mode; `preserve` keeps
+/// `layer.setTrackMatte`: `layers` (or `layer`, else the first selected layer; locked ones left
+/// as they are) use `matte` as their track matte (none when null), in one undo step. `kind` sets the mode; `preserve` keeps
 /// each layer's own (Alpha for a layer without a matte), so changing the matte of several layers
 /// at once keeps their modes.
 fn track_matte(s: &mut Session, p: &Value) -> Result<Value> {
@@ -560,6 +560,8 @@ fn track_matte(s: &mut Session, p: &Value) -> Result<Value> {
         Some(_) => layers_p(s, p)?,
         None => layer_p(s, p, "layer.setTrackMatte").map(|(c, l)| (c, vec![l]))?,
     };
+    // Locked layers keep their matte (several at once: the others get it).
+    let ids = unlocked(s, cid, ids, "layer.setTrackMatte")?;
     let comp = s.project.comp(cid).ok_or(EngineError::NoComp)?;
     let matte = match p.get("matte") {
         None | Some(Value::Null) => None,
@@ -906,6 +908,8 @@ fn check_parent_chain(comp: &Comp, ids: &[LayerId], parent: Option<LayerId>, max
 
 fn set_parent(s: &mut Session, p: &Value) -> Result<Value> {
     let (cid, ids) = layers_p(s, p)?;
+    // Locked layers keep their parent (several at once: the others are parented).
+    let ids = unlocked(s, cid, ids, "layer.setParent")?;
     let comp = s.project.comp(cid).ok_or(EngineError::NoComp)?;
     let parent = match p.get("parent") {
         None | Some(Value::Null) => None,
@@ -1921,5 +1925,31 @@ mod track_matte_batch_tests {
         }
         s.execute("layer.setTrackMatte", json!({"layers": [a, b], "matte": null})).unwrap();
         assert_eq!((matte_of(&s, a), matte_of(&s, b)), (None, None), "both lose it");
+    }
+
+    /// Locked layers keep their parent and matte when they are among several (the others change),
+    /// and alone they are an error that changes nothing.
+    #[test]
+    fn locked_layers_keep_their_parent_and_matte() {
+        let mut s = Session::default();
+        s.execute("comp.new", json!({"name":"Locks","width":16,"height":16,"duration":1})).unwrap();
+        let [a, b, p, m] = ["A", "B", "P", "M"].map(|n| s.execute("layer.newSolid", json!({"name": n})).unwrap()["layer"].as_u64().unwrap());
+        s.execute("layer.setSwitch", json!({"layers": [b], "switch": "lock", "value": true})).unwrap();
+        let layer = |s: &Session, id: u64| s.active_comp().unwrap().layer(LayerId(id)).unwrap().clone();
+        s.execute("layer.setParent", json!({"layers": [a, b], "parent": p})).unwrap();
+        s.execute("layer.setTrackMatte", json!({"layers": [a, b], "matte": m, "kind": "preserve"})).unwrap();
+        s.execute("layer.trackMatte", json!({"layers": [a, b], "op": "luma"})).unwrap();
+        assert_eq!((layer(&s, a).parent, matte_of(&s, a)), (Some(LayerId(p)), Some((m, MatteKind::Luma))));
+        assert_eq!((layer(&s, b).parent, matte_of(&s, b)), (None, None), "the locked layer is left as it was");
+        for (cmd, p) in [
+            ("layer.setParent", json!({"layers": [b], "parent": p})),
+            ("layer.setTrackMatte", json!({"layers": [b], "matte": m})),
+            ("layer.trackMatte", json!({"layers": [b], "op": "alpha"})),
+        ] {
+            let (project, revision) = (s.project.clone(), s.revision);
+            let err = s.execute(cmd, p).unwrap_err();
+            assert!(err.to_string().contains("is locked"), "{cmd}: {err}");
+            assert!(Arc::ptr_eq(&project, &s.project) && s.revision == revision, "{cmd} changed nothing");
+        }
     }
 }
