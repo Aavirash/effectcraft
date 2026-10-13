@@ -983,7 +983,7 @@ impl GpuContext {
 
     /// After a failed frame: forget every texture and buffer kept for reuse, since any of them
     /// may be one the device rejected (#1319). Later frames allocate afresh.
-    pub(crate) fn discard_kept(&self) {
+    pub fn discard_kept(&self) {
         self.clear_uploads();
         if let Ok(mut z) = self.zeros.lock() {
             z.clear();
