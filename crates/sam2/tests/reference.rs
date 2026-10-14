@@ -337,3 +337,63 @@ fn sam2_works_as_a_mask_model() {
     assert!(model.segment(&rgb, fw, fh, &Prompt::default()).is_err());
     assert!(model.segment(&rgb, fw + 1, fh, &prompt).is_err());
 }
+
+#[test]
+fn sam2_tracks_a_clip_through_the_object_tracker_interface() {
+    use effectcraft_segment::{ClipFrame, MaskModel, Prompt, TrackRequest};
+    let Some((w, _)) = load() else { return };
+    let (fw, fh, n) = (128usize, 96usize, 6usize);
+    let centre = |t: usize| (40.0 + 8.0 * t as f32, 48.0f32);
+    let inside = |t: usize, x: usize, y: usize| {
+        let c = centre(t);
+        ((x as f32 - c.0).powi(2) + (y as f32 - c.1).powi(2)).sqrt() < 26.0
+    };
+    let frames: Vec<std::sync::Arc<ClipFrame>> = (0..n)
+        .map(|t| {
+            let mut rgb = vec![[0f32; 3]; fw * fh];
+            for y in 0..fh {
+                for x in 0..fw {
+                    let bg = 0.3 + 0.2 * (x as f32 / 9.0).sin() * (y as f32 / 7.0).cos();
+                    rgb[y * fw + x] =
+                        if inside(t, x, y) { [0.85 + 0.1 * ((x as f32 - centre(t).0) / 5.0).sin(), 0.4, 0.15] } else { [bg, bg * 0.8 + 0.1, bg * 0.6 + 0.3] };
+                }
+            }
+            std::sync::Arc::new(ClipFrame { rgb, w: fw, h: fh })
+        })
+        .collect();
+    let model = effectcraft_sam2::mask::Sam2Mask::new(std::sync::Arc::new(effectcraft_sam2::session::VideoModel::load(&w).unwrap()));
+    assert!(model.tracker().is_some());
+    let c = centre(1);
+    let req = TrackRequest { first: 100, count: n, prompts: vec![(101, Prompt { points: vec![([c.0, c.1], true)], bbox: None, mask: None })] };
+    let mut seen = std::collections::BTreeMap::new();
+    let mut get = |f: i64| frames.get((f - 100) as usize).cloned();
+    model
+        .tracker()
+        .unwrap()
+        .track(&req, &mut get, &|| false, &mut |f, t| {
+            assert!(seen.insert(f, t).is_none(), "frame {f} reported twice");
+        })
+        .unwrap();
+    assert_eq!(seen.keys().copied().collect::<Vec<_>>(), (100..100 + n as i64).collect::<Vec<_>>());
+    for (f, t) in &seen {
+        assert_eq!((t.w, t.h, t.prob.len()), (fw, fh, fw * fh));
+        let k = (f - 100) as usize;
+        let (mut i, mut u) = (0usize, 0usize);
+        for y in 0..fh {
+            for x in 0..fw {
+                let (a, b) = (t.prob[y * fw + x] > 0.5, inside(k, x, y));
+                i += usize::from(a && b);
+                u += usize::from(a || b);
+            }
+        }
+        let j = i as f64 / u.max(1) as f64;
+        eprintln!("frame {f}: IoU {j:.3}, confidence {:.2}, occluded {}", t.confidence, t.occluded);
+        assert!(j > 0.85 && !t.occluded && t.confidence > 0.3, "frame {f}: IoU {j}");
+    }
+    // Cancelling before the work starts, and bad requests, are errors.
+    assert!(model.tracker().unwrap().track(&req, &mut get, &|| true, &mut |_, _| {}).is_err());
+    let none = TrackRequest { first: 100, count: n, prompts: vec![] };
+    assert!(model.tracker().unwrap().track(&none, &mut get, &|| false, &mut |_, _| {}).is_err());
+    let outside = TrackRequest { first: 100, count: n, prompts: vec![(500, Prompt { points: vec![([1.0, 1.0], true)], bbox: None, mask: None })] };
+    assert!(model.tracker().unwrap().track(&outside, &mut get, &|| false, &mut |_, _| {}).is_err());
+}

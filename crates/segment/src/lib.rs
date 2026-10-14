@@ -45,6 +45,54 @@ pub trait MaskModel: Send + Sync {
     fn info(&self) -> &'static ModelInfo;
     /// Foreground probability (0–1) of each pixel of a frame (straight RGB 0–1, row-major `w×h`).
     fn segment(&self, rgb: &[[f32; 3]], w: usize, h: usize, prompt: &Prompt) -> Result<Vec<f32>>;
+    /// A video tracker built on the same weights, if the model has one.
+    fn tracker(&self) -> Option<&dyn ObjectTracker> {
+        None
+    }
+}
+
+/// One decoded frame handed to a tracker (straight RGB 0–1, row-major `w×h`).
+#[derive(Clone, Debug, Default)]
+pub struct ClipFrame {
+    pub rgb: Vec<[f32; 3]>,
+    pub w: usize,
+    pub h: usize,
+}
+
+/// What to track: the clip's frames `first..first + count` (the host's frame numbers) and the
+/// prompts of the one object, each on its frame.
+#[derive(Clone, Debug)]
+pub struct TrackRequest {
+    pub first: i64,
+    pub count: usize,
+    pub prompts: Vec<(i64, Prompt)>,
+}
+
+/// A tracker's answer for one frame.
+#[derive(Clone, Debug, Default)]
+pub struct TrackedFrame {
+    /// Foreground probability of every pixel (`w×h`); all zero when the object is absent.
+    pub prob: Vec<f32>,
+    pub w: usize,
+    pub h: usize,
+    /// How sure the tracker is (0–1), for the timeline.
+    pub confidence: f32,
+    /// The object is not in this frame (occluded or out of view).
+    pub occluded: bool,
+}
+
+/// A video tracker with memory (SAM 2): given prompts on some frames, it follows the object
+/// through the clip in both directions. Optional: a [`MaskModel`] may offer one.
+pub trait ObjectTracker: Send + Sync {
+    /// Track the object. `frames(i)` supplies frame `i` (`None`: unavailable); `cancel()` is polled
+    /// between frames; `out(i, result)` is called as soon as each frame is finished.
+    fn track(
+        &self,
+        req: &TrackRequest,
+        frames: &mut dyn FnMut(i64) -> Option<Arc<ClipFrame>>,
+        cancel: &dyn Fn() -> bool,
+        out: &mut dyn FnMut(i64, TrackedFrame),
+    ) -> Result<()>;
 }
 
 /// What a model is for.

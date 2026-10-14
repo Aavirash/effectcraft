@@ -33,7 +33,7 @@ const MAX_FRAMES: usize = 1_000_000;
 const GRID: usize = 64;
 
 /// Frames of the clip, already resized to the model input and normalised: `[1, 3, 1024, 1024]`.
-pub trait FrameSource: Send {
+pub trait FrameSource {
     fn num_frames(&self) -> usize;
     fn frame(&self, index: usize) -> Result<Tensor>;
 }
@@ -129,9 +129,9 @@ struct FrameFeatures {
     high: (Tensor, Tensor),
 }
 
-pub struct VideoTracker {
+pub struct VideoTracker<'a> {
     model: Arc<VideoModel>,
-    frames: Box<dyn FrameSource>,
+    frames: Box<dyn FrameSource + 'a>,
     objects: BTreeMap<ObjectId, ObjectState>,
     cache: VecDeque<(usize, Arc<FrameFeatures>)>,
 }
@@ -151,8 +151,8 @@ fn scalar(t: &Tensor) -> Result<f32> {
     Ok(t.flatten_all()?.to_vec1::<f32>()?.first().copied().unwrap_or(0.0))
 }
 
-impl VideoTracker {
-    pub fn new(model: Arc<VideoModel>, frames: Box<dyn FrameSource>) -> Result<VideoTracker> {
+impl<'a> VideoTracker<'a> {
+    pub fn new(model: Arc<VideoModel>, frames: Box<dyn FrameSource + 'a>) -> Result<VideoTracker<'a>> {
         let n = frames.num_frames();
         if n == 0 || n > MAX_FRAMES {
             return Err(Error::Input(format!("a clip needs between 1 and {MAX_FRAMES} frames, got {n}")));

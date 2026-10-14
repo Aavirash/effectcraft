@@ -21,6 +21,7 @@ pub mod neck;
 pub mod nn;
 pub mod prompt;
 pub mod session;
+pub mod track;
 pub mod weights;
 
 /// Everything that can go wrong in this crate. Never a panic.

@@ -105,6 +105,10 @@ impl MaskModel for Sam2Mask {
     fn segment(&self, rgb: &[[f32; 3]], w: usize, h: usize, prompt: &effectcraft_segment::Prompt) -> effectcraft_segment::Result<Vec<f32>> {
         self.probability(rgb, w, h, prompt).map_err(|e| e.to_string())
     }
+
+    fn tracker(&self) -> Option<&dyn effectcraft_segment::ObjectTracker> {
+        Some(self)
+    }
 }
 
 /// Verify the installed file against the registry and build the model.
