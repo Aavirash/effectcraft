@@ -11,6 +11,10 @@
 
 use std::fmt;
 
+pub mod hiera;
+pub mod nn;
+pub mod weights;
+
 /// Everything that can go wrong in this crate. Never a panic.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Error {
@@ -22,6 +26,8 @@ pub enum Error {
     Cancelled,
     /// A time or memory budget was exceeded.
     Budget(String),
+    /// A tensor operation failed (shape mismatch, out of memory, device error).
+    Compute(String),
 }
 
 impl fmt::Display for Error {
@@ -31,11 +37,18 @@ impl fmt::Display for Error {
             Error::Input(m) => write!(f, "SAM 2 input: {m}"),
             Error::Cancelled => write!(f, "SAM 2: cancelled"),
             Error::Budget(m) => write!(f, "SAM 2 budget: {m}"),
+            Error::Compute(m) => write!(f, "SAM 2 compute: {m}"),
         }
     }
 }
 
 impl std::error::Error for Error {}
+
+impl From<candle_core::Error> for Error {
+    fn from(e: candle_core::Error) -> Error {
+        Error::Compute(e.to_string())
+    }
+}
 
 pub type Result<T> = std::result::Result<T, Error>;
 
