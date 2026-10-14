@@ -368,6 +368,10 @@ Playground cannons without interacting forces evolve every particle independentl
 backend (reached through `EffectHost::particles` when the GPU compositor is active) simulates one
 particle per invocation from the CPU's birth schedule and keeps per-key state checkpoints on the
 GPU, like `SimCache`; the CPU simulation stays the oracle (tests compare ids and positions).
+CC Particle World samples its Birth Rate at every step (`EffectHost::param_at`, #1373), so a
+keyed rate only decides the births of its own time; the rate is left out of the simulation key,
+and a checkpoint is resumed only with the same rate history (the CPU state's `hist`, the GPU
+checkpoint's births).
 `effectcraft-cli bench --gpu` reports CPU vs GPU ms/frame, speed-up, Auto's ms/frame, pixel
 agreement and the steady-state upload / readback MB per frame for every comp plus an
 adjustment-layer comp.
