@@ -207,6 +207,60 @@ impl effectcraft_sam2::session::FrameSource for Clip {
     }
 }
 
+fn iou(a: &[f32], b: &[f32]) -> f64 {
+    let (mut i, mut u) = (0usize, 0usize);
+    for (x, y) in a.iter().zip(b) {
+        let (x, y) = (*x > 0.0, *y > 0.0);
+        i += usize::from(x && y);
+        u += usize::from(x || y);
+    }
+    if u == 0 { 1.0 } else { i as f64 / u as f64 }
+}
+
+/// Through the clip the memory bank feeds back on itself (bfloat16 memories, rotary attention), so
+/// the bound on logits is looser than for a single stage; the masks themselves must agree.
+/// Measured max 0.0038 over 9 frames forwards and backwards, 2026-10-15.
+const VIDEO_LOGIT_TOL: f32 = 0.02;
+const VIDEO_MIN_IOU: f64 = 0.995;
+
+#[test]
+fn video_tracking_matches_sam2_video_model() {
+    use effectcraft_sam2::prompt::Prompt;
+    use effectcraft_sam2::session::{Cancel, Direction, ObjectId, VideoModel, VideoTracker};
+    let Some((w, r)) = load_video() else { return };
+    let model = std::sync::Arc::new(VideoModel::load(&w).unwrap());
+    let clip = r.get("clip.pixel_values").unwrap().clone();
+    let mut tracker = VideoTracker::new(model, Box::new(Clip(clip))).unwrap();
+    let obj = ObjectId(1);
+    let first = tracker.prompt(2, obj, &Prompt { points: vec![([416.0, 512.0], true)], bbox: None }).unwrap();
+
+    let check = |tag: &str, m: &effectcraft_sam2::session::FrameMask| {
+        let want = r.get(&format!("video.{tag}.{}.pred_masks", m.frame)).unwrap().flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        let want_score = r.get(&format!("video.{tag}.{}.score", m.frame)).unwrap().flatten_all().unwrap().to_vec1::<f32>().unwrap()[0];
+        let err = m.logits.iter().zip(&want).map(|(a, b)| (a - b).abs()).fold(0f32, f32::max);
+        let j = iou(&m.logits, &want);
+        eprintln!("{tag} frame {}: logit error {err:.4}, IoU {j:.4}, score {:.3} (want {want_score:.3})", m.frame, m.object_score);
+        assert!(j >= VIDEO_MIN_IOU, "{tag} frame {} IoU {j}", m.frame);
+        assert!(err < VIDEO_LOGIT_TOL, "{tag} frame {} logit error {err}", m.frame);
+        assert!((m.object_score - want_score).abs() < 0.05, "{tag} frame {} score {} vs {want_score}", m.frame, m.object_score);
+        assert_eq!(m.occluded, want_score <= 0.0);
+    };
+    check("prompt", &first);
+    let cancel = Cancel::new();
+    let mut fwd = vec![];
+    tracker.propagate(2, Direction::Forward, None, &cancel, &mut |m| fwd.push(m)).unwrap();
+    assert_eq!(fwd.iter().map(|m| m.frame).collect::<Vec<_>>(), vec![2, 3, 4, 5, 6]);
+    for m in &fwd {
+        check("fwd", m);
+    }
+    let mut rev = vec![];
+    tracker.propagate(2, Direction::Backward, None, &cancel, &mut |m| rev.push(m)).unwrap();
+    assert_eq!(rev.iter().map(|m| m.frame).collect::<Vec<_>>(), vec![2, 1, 0]);
+    for m in &rev {
+        check("rev", m);
+    }
+}
+
 #[test]
 fn tracker_rejects_hostile_input_and_honours_cancel() {
     use effectcraft_sam2::Error;
