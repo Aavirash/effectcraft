@@ -2224,4 +2224,110 @@ mod tests {
         assert!(births.iter().all(|&b| f64::from(b) / SPS < 0.5), "nothing born once the ramp reaches 0");
     }
 
+    // ------------------------- CC Particle Systems II and CC Mr. Mercury's Birth Rate over time
+
+    /// A stepped particle effect: its id, physics and simulation.
+    struct System {
+        id: &'static str,
+        phys: fn(&EffectCtx) -> Phys,
+        stepped: Stepped<'static>,
+    }
+
+    const SYSTEMS: [System; 2] =
+        [System { id: "ec.sim.ccparticlesystems2", phys: ps2_phys, stepped: PS2 }, System { id: "ec.sim.ccmrmercury", phys: mercury_phys, stepped: MERCURY }];
+
+    /// `id`'s parameters with Birth Rate `now` and Longevity 1 s.
+    fn sys_params(id: &str, now: f64) -> crate::Params {
+        let spec = crate::find(id).unwrap();
+        let mut p = crate::Params { values: spec.params.iter().map(|ps| (ps.id.to_string(), crate::default_value(ps, [100.0, 100.0]))).collect() };
+        for (k, v) in [("birthRate", num(now)), ("longevity", num(1.0))] {
+            assert!(p.values.contains_key(k), "{id}: no {k}");
+            p.values.insert(k.to_string(), v);
+        }
+        p
+    }
+
+    /// The context at layer time `t` (`seed` keeps each test's simulations apart).
+    fn sys_ctx<'a>(p: &'a crate::Params, t: f64, host: Option<&'a Rate>, seed: u32) -> EffectCtx<'a> {
+        let env = EffectEnv { host: host.map(|h| h as &dyn crate::EffectHost), effect_index: host.map_or(0, |h| h.index), ..Default::default() };
+        EffectCtx { params: p, time: t, layer_size: [100.0, 100.0], seed, adjustment: false, env }
+    }
+
+    /// The live particles (id, position, age) of `sys` at `t` through its simulation.
+    fn sys_at(sys: &System, seed: u32, now: f64, t: f64, host: Option<&Rate>) -> Vec<(u32, [f32; 3], f32)> {
+        let p = sys_params(sys.id, now);
+        let ctx = sys_ctx(&p, t, host, seed);
+        sys.stepped.state(&ctx, &(sys.phys)(&ctx)).parts.iter().map(|q| (q.id, q.p, q.age)).collect()
+    }
+
+    /// The same, simulated from layer time 0 with a cache of its own (the reference).
+    fn sys_fresh(sys: &System, seed: u32, now: f64, t: f64, host: &Rate) -> Vec<(u32, [f32; 3], f32)> {
+        let p = sys_params(sys.id, now);
+        let ctx = sys_ctx(&p, t, Some(host), seed);
+        let mut skip = sys.stepped.skip.to_vec();
+        skip.push("birthRate");
+        let key = params_key_except(&ctx, &Buf { img: Image::new(0, 0), offset: [0.0; 2], scale: 1.0 }, sys.stepped.salt, &skip);
+        let st = simulate_rates(&SimCache::new(1), key, &(sys.phys)(&ctx), &rate_history(&ctx, "birthRate", sys.stepped.k));
+        st.parts.iter().map(|q| (q.id, q.p, q.age)).collect()
+    }
+
+    /// What `sys` draws at `t`: CC Particle Systems II's particles, CC Mr. Mercury's blobs.
+    fn sys_drawn(sys: &System, seed: u32, now: f64, t: f64, host: Option<&Rate>) -> usize {
+        let p = sys_params(sys.id, now);
+        let ctx = sys_ctx(&p, t, host, seed);
+        match sys.id {
+            "ec.sim.ccmrmercury" => mercury_blobs(&ctx, &Buf { img: Image::new(100, 100), offset: [0.0; 2], scale: 1.0 }).len(),
+            id => particle_state(id, &ctx).unwrap().len(),
+        }
+    }
+
+    /// #1373 for CC Particle Systems II and CC Mr. Mercury: a burst lives on after Birth Rate
+    /// drops to 0 (what they draw too), moving and ageing, and is gone after its Longevity.
+    #[test]
+    fn particle_systems_ii_and_mr_mercury_keep_a_burst_after_birth_rate_drops() {
+        let host = Rate { index: 1, rate: burst };
+        for sys in &SYSTEMS {
+            let born = crate::psim::births_at(steps_at(0.5), 40_000, |i| burst(i as f64 / SPS) * sys.stepped.k).unwrap().len();
+            assert_eq!(sys_at(sys, 201, 3.0, 0.4, Some(&host)), sys_at(sys, 201, 3.0, 0.4, None), "{}: during the burst", sys.id);
+            let late = sys_at(sys, 201, 0.0, 0.9, Some(&host));
+            assert!(late.len() > born / 2 && late.iter().all(|q| (q.0 as usize) < born), "{}: {} live of {born}", sys.id, late.len());
+            assert!(sys_drawn(sys, 201, 0.0, 0.9, Some(&host)) > 0, "{}: drawn", sys.id);
+            assert_eq!(sys_drawn(sys, 201, 0.0, 0.9, None), 0, "{}: a constant 0 bore none", sys.id);
+            let early = sys_at(sys, 201, 0.0, 0.7, Some(&host));
+            let q0 = early.iter().find(|q| q.0 == late[0].0).unwrap();
+            assert!(q0.1 != late[0].1 && late[0].2 > q0.2 + 0.19, "{}: {q0:?} -> {:?}", sys.id, late[0]);
+            assert!(sys_at(sys, 201, 0.0, 1.8, Some(&host)).is_empty(), "{}: gone after Longevity", sys.id);
+        }
+    }
+
+    /// Seeking matches a simulation from 0, and moving an earlier key (same current rate, same
+    /// cache key) isn't served from the old history's checkpoints.
+    #[test]
+    fn particle_systems_ii_and_mr_mercury_seek_and_drop_stale_checkpoints() {
+        let (long, short) = (Rate { index: 0, rate: burst }, Rate { index: 0, rate: short_burst });
+        for sys in &SYSTEMS {
+            for t in [1.4, 0.6, 0.9, 0.3, 0.9, 1.1] {
+                let now = burst(t);
+                assert_eq!(sys_at(sys, 202, now, t, Some(&long)), sys_fresh(sys, 202, now, t, &long), "{} at {t}", sys.id);
+            }
+            let b = sys_at(sys, 202, 0.0, 0.9, Some(&short));
+            assert_eq!(b, sys_fresh(sys, 202, 0.0, 0.9, &short), "{}: the moved key", sys.id);
+            assert!(!b.is_empty() && b.len() < sys_at(sys, 202, 0.0, 0.9, Some(&long)).len(), "{}", sys.id);
+        }
+    }
+
+    /// A constant Birth Rate gives exactly the particles the constant-rate simulation did.
+    #[test]
+    fn particle_systems_ii_and_mr_mercury_are_unchanged_at_a_constant_rate() {
+        let host = Rate { index: 0, rate: |_| 2.0 };
+        for sys in &SYSTEMS {
+            let p = sys_params(sys.id, 2.0);
+            let ctx = sys_ctx(&p, 1.3, None, 203);
+            let before = simulate(&SimCache::new(1), 1, 1.3, &(sys.phys)(&ctx));
+            let before: Vec<_> = before.parts.iter().map(|q| (q.id, q.p, q.age)).collect();
+            assert!(!before.is_empty());
+            assert_eq!(sys_at(sys, 203, 2.0, 1.3, Some(&host)), before, "{}: keyed to a constant", sys.id);
+            assert_eq!(sys_at(sys, 203, 2.0, 1.3, None), before, "{}: no host", sys.id);
+        }
+    }
 }
