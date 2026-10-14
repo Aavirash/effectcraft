@@ -514,6 +514,15 @@ pub struct EffectSpec {
     pub float: bool,
 }
 
+impl EffectSpec {
+    /// True when this effect grows its own buffer (blur/glow margins, Repeat Edge
+    /// [`Buf::cover`], displacement [`cover_pad`]) so a stack of only these can skip the
+    /// renderer's full-layer cover and keep the pyramid grid phase (#1205).
+    pub fn skips_cover(&self) -> bool {
+        SKIPS_COVER.contains(&self.id)
+    }
+}
+
 pub(crate) fn p(id: &'static str, name: &'static str, default: Value, ui: ParamUi) -> ParamSpec {
     ParamSpec { id, name, default, ui }
 }
@@ -1503,5 +1512,25 @@ mod tests {
         let g = instantiate(find("ec.noise.matchgrain").unwrap(), &mut Ids(&mut next), "Match Grain", [10.0, 10.0]);
         assert_eq!(g.get("noiseSourceLayerSource").map(|p| p.value.clone()), Some(Value::Enum(0)));
         assert_eq!(g.props().filter(|p| p.match_id == "noiseSourceLayerSource").count(), 1);
+    }
+
+    #[test]
+    fn align_plan_is_cover_shift_mod_grid() {
+        // Content inset from the layer origin: pixel 0 maps to layer (50, 30).
+        let offset = [-50.0, -30.0];
+        let scale = 1.0;
+        let size = [1920.0, 1080.0];
+        let (dx, dy, _, _) = cover_plan(offset, scale, size, 80, 40).unwrap();
+        assert_eq!((dx, dy), (50, 30));
+        assert_eq!(align_plan(offset, scale, size, 80, 40), Some((50, 30)));
+        assert_eq!(align_plan([-64.0, -128.0], 1.0, size, 80, 40), None);
+    }
+
+    #[test]
+    fn known_margin_effects_skip_cover_and_twirl_does_not() {
+        for id in SKIPS_COVER {
+            assert!(find(id).expect(id).skips_cover(), "{id}");
+        }
+        assert!(!find("ec.distort.twirl").unwrap().skips_cover());
     }
 }

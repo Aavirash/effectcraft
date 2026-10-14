@@ -1150,14 +1150,12 @@ impl<'a> Renderer<'a> {
         // get the cover: they move content past the painted bounds without growing the buffer.
         let video = || {
             fx.groups().filter(|g| g.enabled).filter_map(|g| match &g.kind {
-                GroupKind::Effect { effect } if effectcraft_effects::find(effect).is_some_and(|s| !effectcraft_effects::audio_fx::is_audio_effect(s.id)) => {
-                    Some(effect.as_str())
-                }
+                GroupKind::Effect { effect } => effectcraft_effects::find(effect).filter(|s| !effectcraft_effects::audio_fx::is_audio_effect(s.id)),
                 _ => None,
             })
         };
         if !adjustment && video().next().is_some() {
-            if video().all(|id| effectcraft_effects::SKIPS_COVER.contains(&id)) {
+            if video().all(|s| s.skips_cover()) {
                 target.align(layer_size);
             } else {
                 target.cover(layer_size);
