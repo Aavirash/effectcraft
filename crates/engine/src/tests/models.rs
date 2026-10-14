@@ -36,7 +36,9 @@ fn models_are_listed_chosen_and_verified() {
     for (prefix, model, task) in [("roto", "mobilesam", Task::Mask), ("face", "mediapipe-face", Task::Face)] {
         let list = s.execute_checked(&format!("{prefix}.models"), json!({})).unwrap();
         let ids: Vec<&str> = list["models"].as_array().unwrap().iter().map(|m| m["id"].as_str().unwrap()).collect();
-        assert_eq!(ids, ["classical", model]);
+        // Roto Brush also offers SAM 2.1 Tiny (a video tracker; see crates/sam2).
+        let expect: Vec<&str> = if task == Task::Mask { vec!["classical", model, "sam2.1-hiera-tiny"] } else { vec!["classical", model] };
+        assert_eq!(ids, expect);
         let m = &list["models"][1];
         assert_eq!((m["licence"].as_str(), m["installed"].as_bool()), (Some("Apache-2.0"), Some(false)));
         assert!(m["url"].as_str().unwrap().starts_with("https://") && !m["authors"].as_str().unwrap().is_empty());

@@ -506,7 +506,7 @@ Trained model (Roto Brush 2.0 / 3.0):
   licence, size, URL, SHA-256 and whether it is installed, selected and active.
 - `roto.model.download {id}` fetches and verifies the official weights in the background;
   `roto.model.install {path, id?}` installs a file you already have.
-- `roto.model.select {id: classical|mobilesam}` chooses which one Roto Brush uses. Loading runs
+- `roto.model.select {id: classical|mobilesam|sam2.1-hiera-tiny}` chooses which one Roto Brush uses. Loading runs
   in the background; `"wait": true` (also on download and install) returns once it is in use.
 - `roto.model.remove {id}` deletes the installed weights.
 - The `version` property (`effects/#1/version`: 0 = 1.0, 1 = 2.0, 2 = 3.0) picks between the

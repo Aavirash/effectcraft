@@ -96,6 +96,24 @@ pub const MOBILE_SAM: ModelInfo = ModelInfo {
     sha256: "6dbb90523a35330fedd7f1d3dfc66f995213d81b29a5ca8108dbcdd4e37d6c2f",
 };
 
+/// SAM 2.1 Tiny (Meta AI, Apache-2.0): a video object tracker with streaming memory. The weights are
+/// the Hugging Face `transformers` checkpoint, pinned to a commit so the SHA-256 stays valid; they
+/// are loaded by `effectcraft-sam2` (native only), not by [`load`].
+pub const SAM2_TINY: ModelInfo = ModelInfo {
+    id: "sam2.1-hiera-tiny",
+    task: Task::Mask,
+    name: "SAM 2.1 Tiny",
+    description: "Meta's Segment Anything Model 2 (Hiera-Tiny, 39M parameters). Follows the object through the clip with a streaming memory: it keeps tracking through occlusion and when the object leaves and re-enters the frame. Slower than MobileSAM on a CPU.",
+    authors: "Meta AI (Nikhila Ravi et al., SAM 2), Hugging Face transformers checkpoint",
+    licence: "Apache-2.0",
+    licence_url: "https://github.com/facebookresearch/sam2/blob/main/LICENSE",
+    homepage: "https://github.com/facebookresearch/sam2",
+    url: "https://huggingface.co/facebook/sam2.1-hiera-tiny/resolve/de431c4043854a71d8101e17995dfe596bf101a5/model.safetensors",
+    file_name: "sam2.1-hiera-tiny.safetensors",
+    size: 155_908_064,
+    sha256: "48c14467e5cf9e51870511feb72c89688e82dd74523142c0538b663e193ac2a7",
+};
+
 pub const FACE_LANDMARKER: ModelInfo = ModelInfo {
     id: "mediapipe-face",
     task: Task::Face,
@@ -112,7 +130,7 @@ pub const FACE_LANDMARKER: ModelInfo = ModelInfo {
 };
 
 /// The trained models, besides the built-in classical engines.
-pub const MODELS: &[ModelInfo] = &[MOBILE_SAM, FACE_LANDMARKER];
+pub const MODELS: &[ModelInfo] = &[MOBILE_SAM, SAM2_TINY, FACE_LANDMARKER];
 
 /// The id of the built-in classical engines (graph cut segmenter, shape-model face tracker): no
 /// weights, always available.
@@ -150,6 +168,7 @@ pub fn load(id: &str, bytes: &[u8]) -> Result<Loaded> {
             Ok(Loaded::Mask(Arc::new(Sam { net: mobilesam::MobileSam::from_weights(&w)? })))
         }
         "mediapipe-face" => Ok(Loaded::Face(Arc::new(mediapipe::FaceLandmarker::from_task(bytes)?))),
+        "sam2.1-hiera-tiny" => Err(format!("{} is loaded by the desktop application (effectcraft-sam2)", info.name)),
         _ => Err(format!("no loader for `{id}`")),
     }
 }
@@ -263,6 +282,8 @@ mod tests {
             assert!(m.url.starts_with("https://") && m.licence_url.starts_with("https://") && m.homepage.starts_with("https://"));
             assert!(!m.authors.is_empty() && notice(m).contains(m.authors));
         }
+        assert_eq!(models(Task::Mask).map(|m| m.id).collect::<Vec<_>>(), ["mobilesam", "sam2.1-hiera-tiny"]);
+        assert!(SAM2_TINY.url.contains("/resolve/") && SAM2_TINY.file_name.ends_with(".safetensors"), "pinned to a commit, not a branch");
         assert_eq!(models(Task::Face).map(|m| m.id).collect::<Vec<_>>(), ["mediapipe-face"]);
         assert!(load("mediapipe-face", b"nope").err().is_some_and(|e| e.contains("does not match")));
         // A file that isn't the published one is refused before anything is parsed.
