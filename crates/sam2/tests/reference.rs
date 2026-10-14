@@ -194,3 +194,56 @@ fn memory_attention_matches_pytorch() {
     eprintln!("memory attention: max abs error {e:e} (pointers {pointers})");
     assert!(e < MEMORY_TOL, "memory attention error {e}");
 }
+
+/// Frames of the video fixture, served one at a time.
+struct Clip(Tensor);
+
+impl effectcraft_sam2::session::FrameSource for Clip {
+    fn num_frames(&self) -> usize {
+        self.0.dim(0).unwrap()
+    }
+    fn frame(&self, i: usize) -> effectcraft_sam2::Result<Tensor> {
+        Ok(self.0.narrow(0, i, 1)?.contiguous()?)
+    }
+}
+
+#[test]
+fn tracker_rejects_hostile_input_and_honours_cancel() {
+    use effectcraft_sam2::Error;
+    use effectcraft_sam2::prompt::Prompt;
+    use effectcraft_sam2::session::{Cancel, Direction, ObjectId, VideoModel, VideoTracker};
+    let Some((w, r)) = load_video() else { return };
+    let model = std::sync::Arc::new(VideoModel::load(&w).unwrap());
+    let clip = r.get("clip.pixel_values").unwrap().narrow(0, 0, 3).unwrap();
+    let mut t = VideoTracker::new(model.clone(), Box::new(Clip(clip.clone()))).unwrap();
+    let click = Prompt { points: vec![([416.0, 512.0], true)], bbox: None };
+    let obj = ObjectId(7);
+    // outside the clip, empty and non-finite prompts, nothing prompted yet
+    assert!(matches!(t.prompt(3, obj, &click), Err(Error::Input(_))));
+    assert!(matches!(t.prompt(0, obj, &Prompt::default()), Err(Error::Input(_))));
+    assert!(matches!(t.prompt(0, obj, &Prompt { points: vec![([f32::NAN, 1.0], true)], bbox: None }), Err(Error::Input(_))));
+    let mut sink = |_m| {};
+    assert!(matches!(t.propagate(0, Direction::Forward, None, &Cancel::new(), &mut sink), Err(Error::Input(_))));
+    assert!(matches!(t.propagate(9, Direction::Forward, None, &Cancel::new(), &mut sink), Err(Error::Input(_))));
+    // an empty clip is refused; a cancelled run stops with Cancelled and keeps the tracker usable
+    assert!(VideoTracker::new(model.clone(), Box::new(Clip(clip.narrow(0, 0, 0).unwrap()))).is_err());
+    t.prompt(0, obj, &click).unwrap();
+    let cancel = Cancel::new();
+    cancel.cancel();
+    assert!(matches!(t.propagate(0, Direction::Forward, None, &cancel, &mut sink), Err(Error::Cancelled)));
+    let mut seen = vec![];
+    t.propagate(0, Direction::Forward, Some(1), &Cancel::new(), &mut |m| seen.push(m.frame)).unwrap();
+    assert_eq!(seen, vec![0, 1]);
+    // a frame source that returns the wrong size is an error, not a crash
+    struct Bad;
+    impl effectcraft_sam2::session::FrameSource for Bad {
+        fn num_frames(&self) -> usize {
+            2
+        }
+        fn frame(&self, _i: usize) -> effectcraft_sam2::Result<Tensor> {
+            Ok(Tensor::zeros((1, 3, 64, 64), candle_core::DType::F32, &Device::Cpu)?)
+        }
+    }
+    let mut bad = VideoTracker::new(model, Box::new(Bad)).unwrap();
+    assert!(matches!(bad.prompt(0, obj, &click), Err(Error::Input(_))));
+}

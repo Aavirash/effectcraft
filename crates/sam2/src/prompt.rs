@@ -146,6 +146,14 @@ impl PromptEncoder {
         Ok(Tensor::from_vec(tokens, (1, n, DIM), &Device::Cpu)?)
     }
 
+    /// Tokens for "no prompt" on a tracked frame: the reference feeds one point labelled -1 and
+    /// then pads another, so two `not_a_point` tokens, `[1, 2, 256]`.
+    pub fn sparse_none(&self) -> Result<Tensor> {
+        let mut v = self.not_a_point.clone();
+        v.extend_from_slice(&self.not_a_point);
+        Ok(Tensor::from_vec(v, (1, 2, DIM), &Device::Cpu)?)
+    }
+
     /// The dense embedding for "no mask prompt", `[1, 256, GRID, GRID]`.
     pub fn dense_empty(&self) -> Result<Tensor> {
         Ok(self.no_mask.reshape((1, DIM, 1, 1))?.broadcast_as((1, DIM, GRID, GRID))?.contiguous()?)

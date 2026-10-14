@@ -71,6 +71,16 @@ impl ImageModel {
         self.decoder.forward(&image, &self.image_pos, &sparse, &dense, &enc.high, multimask)
     }
 
+    /// Decode against an already memory-conditioned embedding `[1, 256, g, g]` (video tracking).
+    pub fn decode_embedded(&self, image: &Tensor, high: &(Tensor, Tensor), sparse: &Tensor, dense: &Tensor, multimask: bool) -> Result<DecoderOutput> {
+        self.decoder.forward(image, &self.image_pos, sparse, dense, high, multimask)
+    }
+
+    /// The learned embedding added to a frame's features when there is no memory yet.
+    pub fn no_memory(&self) -> &Tensor {
+        &self.no_memory
+    }
+
     pub fn device(&self) -> Device {
         Device::Cpu
     }
