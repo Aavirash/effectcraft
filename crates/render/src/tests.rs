@@ -312,6 +312,69 @@ fn particle_world_follows_the_comp_camera() {
     assert!(b < a - 20.0, "panning the camera right moves the particles left: {a} -> {b}");
 }
 
+/// A black solid with CC Particle World whose Birth Rate is 3 until layer time `cut`, then 0 a
+/// frame later (`None`: 3 throughout); the layer starts at comp time `start`, stretched `stretch` %.
+fn burst_scene(cut: Option<f64>, start: f64, stretch: f64) -> (Project, ItemId) {
+    let (mut p, cid, comp) = setup();
+    let mut l = solid(&mut p, &comp, [0.0, 0.0, 0.0], 200, 100);
+    let vals = [("birthRate", Value::Scalar(3.0)), ("longevity", Value::Scalar(1.0)), ("particle/particleType", Value::Enum(2))];
+    add_effect(&mut p, &mut l, "ec.sim.ccparticleworld", [200.0, 100.0], &vals);
+    if let Some(cut) = cut {
+        let fx = l.props.sub_mut("effects").unwrap().children.iter_mut().find_map(|c| match c {
+            effectcraft_project::Node::Group(g) => Some(g),
+            _ => None,
+        });
+        let fx = fx.unwrap();
+        let rate = fx.prop_mut("birthRate").unwrap();
+        let key = |t: f64, v: f64| Keyframe::new(Tick::from_seconds_f64(t), Value::Scalar(v));
+        rate.keys = vec![key(0.0, 3.0), key(cut, 3.0), key(cut + 1.0 / 30.0, 0.0)];
+    }
+    l.start_time = Tick::from_seconds_f64(start);
+    l.in_point = l.start_time;
+    l.out_point = Tick::from_seconds_f64(4.0);
+    l.stretch = stretch;
+    p.comp_mut(cid).unwrap().layers = vec![l];
+    (p, cid)
+}
+
+/// Total light in a frame.
+fn light(img: &crate::Image) -> f32 {
+    img.data.iter().map(|p| p[0] + p[1] + p[2]).sum()
+}
+
+/// #1373: a Birth Rate keyed down to 0 stops new births; the particles already born live on
+/// until their Longevity runs out (they vanished the frame the rate reached 0).
+#[test]
+fn particle_world_keeps_a_burst_after_birth_rate_drops_to_zero() {
+    let (keyed, cid) = burst_scene(Some(0.5), 0.0, 100.0);
+    let (constant, _) = burst_scene(None, 0.0, 100.0);
+    let at = Tick::from_seconds_f64;
+    assert_same(&render_cached(&keyed, cid, at(0.4), None), &render_cached(&constant, cid, at(0.4), None), "during the burst");
+    let (k, c) = (light(&render_cached(&keyed, cid, at(0.9), None)), light(&render_cached(&constant, cid, at(0.9), None)));
+    assert!(k > 1.0 && k < c, "the burst is still drawn, with no new births: {k} vs {c}");
+    // Longevity 1 s (± 20 %): gone by 1.9 s.
+    assert_eq!(light(&render_cached(&keyed, cid, at(1.9), None)), 0.0);
+}
+
+/// The burst's history: moving an earlier key changes a later frame whose Birth Rate is the
+/// same (0), cached or not, and offset or stretched layers sample their own layer times.
+#[test]
+fn particle_world_birth_rate_history_with_the_layer_cache_and_time_mapping() {
+    let at = Tick::from_seconds_f64;
+    let (long, cid) = burst_scene(Some(0.5), 0.0, 100.0);
+    let (short, _) = burst_scene(Some(0.25), 0.0, 100.0);
+    let cache = crate::LayerCache::default();
+    let a = render_cached(&long, cid, at(0.9), Some(&cache));
+    let b = render_cached(&short, cid, at(0.9), Some(&cache));
+    assert_same(&b, &render_cached(&short, cid, at(0.9), None), "cached render after an earlier key moved");
+    assert!(light(&b) > 1.0 && light(&b) < light(&a), "a shorter burst: {} vs {}", light(&b), light(&a));
+    let plain = render_cached(&long, cid, at(0.9), None);
+    let (late, _) = burst_scene(Some(0.5), 0.5, 100.0);
+    assert_same(&render_cached(&late, cid, at(1.4), None), &plain, "a layer starting at 0.5 s");
+    let (slow, _) = burst_scene(Some(0.5), 0.0, 200.0);
+    assert_same(&render_cached(&slow, cid, at(1.8), None), &plain, "a layer stretched 200 %");
+}
+
 // ------------------------------------------------------------------------------ layer cache
 
 fn render_cached(p: &Project, cid: ItemId, t: Tick, cache: Option<&crate::LayerCache>) -> crate::Image {
