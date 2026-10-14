@@ -390,6 +390,11 @@ pub trait EffectHost: Sync {
     fn param_at(&self, _effect_index: usize, _id: &str, _layer_time: f64) -> Option<Value> {
         None
     }
+    /// Parameter `id` of effect `effect_index` has one value at every time (no keyframes, no
+    /// expression), so sampling it over time can be skipped. `false` when unknown.
+    fn param_is_static(&self, _effect_index: usize, _id: &str) -> bool {
+        false
+    }
     /// A particle simulation backend (GPU particles; see [`psim`]). `None` = simulate on the
     /// CPU.
     fn particles(&self) -> Option<&dyn psim::ParticleSim> {

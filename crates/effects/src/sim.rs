@@ -1006,7 +1006,8 @@ fn accelerated(ctx: &EffectCtx, key: u64, phys: &Phys, rates: Option<&[f64]>) ->
 /// other times, the current value for every step.
 fn rate_history(ctx: &EffectCtx, id: &str, k: f64) -> Vec<f64> {
     let now = ctx.params.f(id);
-    let host = ctx.env.host;
+    // A rate without keyframes or an expression is the same at every step.
+    let host = ctx.env.host.filter(|h| !h.param_is_static(ctx.env.effect_index, id));
     (0..steps_at(ctx.time))
         .map(|i| {
             let v = host.and_then(|h| h.param_at(ctx.env.effect_index, id, i as f64 / SPS)).map_or(now, |v| v.as_f64());
