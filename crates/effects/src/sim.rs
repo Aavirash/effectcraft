@@ -784,6 +784,14 @@ pub(crate) struct PState {
     pub parts: Vec<Particle>,
     pub carry: f64,
     pub next_id: u32,
+    /// The birth rates of the steps so far (see [`rates_hash`]): a checkpoint is only resumed
+    /// from with the same history.
+    pub hist: u64,
+}
+
+/// `hist` after one more step at `rate` particles per second.
+fn rates_hash(hist: u64, rate: f64) -> u64 {
+    (hist ^ rate.to_bits()).wrapping_mul(0x0100_0000_01b3).rotate_left(5)
 }
 
 /// Physics configuration (world units; y down).
@@ -862,6 +870,12 @@ impl Phys {
     }
 
     pub(crate) fn step(&self, st: &mut PState, step: u64) {
+        self.step_at_rate(st, step, self.rate);
+    }
+
+    /// One step with `rate` particles per second born during it (rather than [`Phys::rate`]):
+    /// the rate only decides the births, particles already alive move and age as ever.
+    pub(crate) fn step_at_rate(&self, st: &mut PState, step: u64, rate: f64) {
         let dt = (1.0 / SPS) as f32;
         let t = step as f32 * dt;
         let mut drag = self.resistance;
@@ -919,7 +933,8 @@ impl Phys {
             q.age += dt;
         });
         st.parts.retain(|q| q.age < q.life);
-        st.carry += self.rate / SPS;
+        st.hist = rates_hash(st.hist, rate);
+        st.carry += rate / SPS;
         let n = st.carry.floor() as u32;
         st.carry -= n as f64;
         for _ in 0..n {
@@ -966,31 +981,73 @@ impl Phys {
 }
 
 /// The state at layer time `ctx.time` from the host's particle backend (GPU particles), or
-/// `None` (simulate on the CPU).
-fn accelerated(ctx: &EffectCtx, key: u64, phys: &Phys) -> Option<std::sync::Arc<PState>> {
+/// `None` (simulate on the CPU). `rates`: the birth rate of each step, when it changes over time
+/// (else [`Phys::rate`]).
+fn accelerated(ctx: &EffectCtx, key: u64, phys: &Phys, rates: Option<&[f64]>) -> Option<std::sync::Arc<PState>> {
     let backend = ctx.env.host?.particles()?;
     let steps = steps_at(ctx.time);
-    let births = crate::psim::births(phys.rate, steps, phys.max)?;
+    let births = match rates {
+        Some(r) => crate::psim::births_at(steps, phys.max, |i| r.get(i as usize).copied().unwrap_or(0.0))?,
+        None => crate::psim::births(phys.rate, steps, phys.max)?,
+    };
     let req = crate::psim::SimRequest { key, steps, births: &births, system: crate::psim::ParticleSystem::Engine(phys.desc()) };
     let parts = backend.simulate(&req)?;
     Some(std::sync::Arc::new(PState {
         parts: parts.into_iter().map(|q| Particle { p: q.p, v: q.v, age: q.age, life: q.life, rnd: q.rnd, id: q.id }).collect(),
         carry: 0.0,
         next_id: births.len() as u32,
+        hist: 0,
     }))
+}
+
+/// The birth rate (particles per second) of each step up to layer time `ctx.time`: parameter
+/// `id` × `k`, sampled where the step starts (a keyframed or expression-driven Birth Rate only
+/// decides the births of its own time, #1373). Without a host that evaluates the effect at
+/// other times, the current value for every step.
+fn rate_history(ctx: &EffectCtx, id: &str, k: f64) -> Vec<f64> {
+    let now = ctx.params.f(id);
+    let host = ctx.env.host;
+    (0..steps_at(ctx.time))
+        .map(|i| {
+            let v = host.and_then(|h| h.param_at(ctx.env.effect_index, id, i as f64 / SPS)).map_or(now, |v| v.as_f64());
+            if v.is_finite() { v.max(0.0) * k } else { 0.0 }
+        })
+        .collect()
+}
+
+/// Run a particle system through `rates` (one birth rate per step, see [`rate_history`]) with
+/// `cache`, resuming only from checkpoints reached with the same rates.
+fn simulate_rates(cache: &SimCache<PState>, key: u64, phys: &Phys, rates: &[f64]) -> std::sync::Arc<PState> {
+    // `hist` of the state after each number of steps.
+    let mut prefix = Vec::with_capacity(rates.len() + 1);
+    prefix.push(0u64);
+    for r in rates {
+        prefix.push(rates_hash(prefix.last().copied().unwrap_or(0), *r));
+    }
+    let rate = |i: u64| rates.get(i as usize).copied().unwrap_or(0.0);
+    cache.run_where(key, rates.len() as u64, PState::default, |st, i| phys.step_at_rate(st, i, rate(i)), |s, st| prefix.get(s as usize) == Some(&st.hist))
+}
+
+/// CC Particle World's particles at `ctx.time`, born at the Birth Rate of their own time.
+fn pw_state(ctx: &EffectCtx, phys: &Phys) -> std::sync::Arc<PState> {
+    let rates = rate_history(ctx, "birthRate", PW_RATE);
+    // Every parameter but Birth Rate (its history is checked through `PState::hist`).
+    let key = params_key_except(ctx, &Buf { img: Image::new(0, 0), offset: [0.0; 2], scale: 1.0 }, 1, &[PW_EFFECT_CAMERA, "birthRate"]);
+    accelerated(ctx, key, phys, Some(&rates)).unwrap_or_else(|| simulate_rates(&PW_CACHE, key, phys, &rates))
 }
 
 /// The live particles of a stepped particle effect (`ec.sim.ccparticleworld`,
 /// `ec.sim.ccparticlesystems2`) at `ctx.time`: from the host's particle backend when it has
 /// one (GPU particles), else from the CPU simulation. For comparing the two.
 pub fn particle_state(id: &str, ctx: &EffectCtx) -> Option<Vec<crate::psim::SimParticle>> {
-    let (phys, cache, salt) = match id {
-        "ec.sim.ccparticleworld" => (pw_phys(ctx), &PW_CACHE, 1),
-        "ec.sim.ccparticlesystems2" => (ps2_phys(ctx), &PS2_CACHE, 2),
+    let st = match id {
+        "ec.sim.ccparticleworld" => pw_state(ctx, &pw_phys(ctx)),
+        "ec.sim.ccparticlesystems2" => {
+            let (phys, key) = (ps2_phys(ctx), sim_key(ctx, 2));
+            accelerated(ctx, key, &phys, None).unwrap_or_else(|| simulate(&PS2_CACHE, key, ctx.time, &phys))
+        }
         _ => return None,
     };
-    let key = sim_key(ctx, salt);
-    let st = accelerated(ctx, key, &phys).unwrap_or_else(|| simulate(cache, key, ctx.time, &phys));
     Some(st.parts.iter().map(|q| crate::psim::SimParticle { p: q.p, v: q.v, age: q.age, life: q.life, rnd: q.rnd, id: q.id }).collect())
 }
 
@@ -1042,11 +1099,14 @@ fn type_sprite(kind: u32, x: f32, y: f32, r: f32, c: [f32; 4], vx: f32, vy: f32,
 
 static PW_CACHE: SimCache<PState> = SimCache::new(6);
 
+/// Particles per second per unit of CC Particle World's Birth Rate.
+const PW_RATE: f64 = 120.0;
+
 /// CC Particle World's physics.
 fn pw_phys(ctx: &EffectCtx) -> Phys {
     let pr = ctx.params;
     Phys {
-        rate: pr.f("birthRate").max(0.0) * 120.0,
+        rate: pr.f("birthRate").max(0.0) * PW_RATE,
         life: pr.f("longevity").max(0.0) as f32,
         producer: [pr.f("producer/producerX") as f32, pr.f("producer/producerY") as f32, pr.f("producer/producerZ") as f32],
         radius: [pr.f("producer/radiusX").max(0.0) as f32, pr.f("producer/radiusY").max(0.0) as f32, pr.f("producer/radiusZ").max(0.0) as f32],
@@ -1167,8 +1227,7 @@ fn particle_world_plan(ctx: &EffectCtx, b: &Buf) -> Option<SpritePlan> {
     if phys.rate <= 0.0 && ctx.time <= 0.0 {
         return None;
     }
-    let key = sim_key(ctx, 1);
-    let st = accelerated(ctx, key, &phys).unwrap_or_else(|| simulate(&PW_CACHE, key, ctx.time, &phys));
+    let st = pw_state(ctx, &phys);
     let kind = pr.e("particle/particleType");
     let birth = pr.color("particle/birthColor");
     let death = pr.color("particle/deathColor");
@@ -1242,7 +1301,7 @@ fn particle_systems2_plan(ctx: &EffectCtx, b: &Buf) -> SpritePlan {
     let unit = lh.max(1.0);
     let phys = ps2_phys(ctx);
     let key = sim_key(ctx, 2);
-    let st = accelerated(ctx, key, &phys).unwrap_or_else(|| simulate(&PS2_CACHE, key, ctx.time, &phys));
+    let st = accelerated(ctx, key, &phys, None).unwrap_or_else(|| simulate(&PS2_CACHE, key, ctx.time, &phys));
     let kind = pr.e("particle/particleType");
     let birth = pr.color("particle/birthColor");
     let death = pr.color("particle/deathColor");
@@ -1969,4 +2028,5 @@ mod tests {
         let sum = |i: &Image| i.data.iter().map(|p| p[0]).sum::<f32>() / i.data.len() as f32;
         assert!((sum(&full.img) - sum(&half.img)).abs() < 0.05, "{} {}", sum(&full.img), sum(&half.img));
     }
+
 }

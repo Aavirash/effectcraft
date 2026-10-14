@@ -23,8 +23,23 @@ struct Checkpoint {
     key: u64,
     steps: u64,
     n: u32,
+    /// The birth steps of its particles (see [`born`]).
+    born: u64,
     buf: wgpu::Buffer,
     used: u64,
+}
+
+/// The particles born in the first `steps` steps of `births` (ascending birth steps) and a hash
+/// of their birth steps: a checkpoint is only resumed from when the request's births before it
+/// are the same (a keyframed Birth Rate isn't part of the system key, #1373).
+fn born(births: &[u32], steps: u64) -> (u32, u64) {
+    let mut h = 0xcbf2_9ce4_8422_2325u64;
+    let mut n = 0u32;
+    for &b in births.iter().take_while(|&&b| u64::from(b) < steps) {
+        h = (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
+        n += 1;
+    }
+    (n, h)
 }
 
 #[derive(Default)]
@@ -141,7 +156,7 @@ pub(crate) fn simulate(g: &GpuContext, req: &SimRequest) -> Option<Vec<SimPartic
         let mut c = g.particle_states.lock().ok()?;
         c.clock += 1;
         let now = c.clock;
-        match c.list.iter_mut().filter(|k| k.key == req.key && k.steps <= req.steps).max_by_key(|k| k.steps) {
+        match c.list.iter_mut().filter(|k| k.key == req.key && k.steps <= req.steps && born(req.births, k.steps) == (k.n, k.born)).max_by_key(|k| k.steps) {
             Some(k) => {
                 k.used = now;
                 (k.steps, Some(k.buf.clone()), k.n)
@@ -232,7 +247,8 @@ fn keep_checkpoint(g: &GpuContext, req: &SimRequest, n: u32, next: wgpu::Buffer)
     if let Ok(mut c) = g.particle_states.lock() {
         let now = c.clock;
         c.list.retain(|k| !(k.key == req.key && k.steps == req.steps));
-        c.list.push(Checkpoint { key: req.key, steps: req.steps, n, buf: next, used: now });
+        let (_, h) = born(req.births, req.steps);
+        c.list.push(Checkpoint { key: req.key, steps: req.steps, n, born: h, buf: next, used: now });
         while c.list.len() > CHECKPOINTS {
             let Some(i) = c.list.iter().enumerate().min_by_key(|(_, k)| k.used).map(|(i, _)| i) else { break };
             c.list.remove(i);
