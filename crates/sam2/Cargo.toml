@@ -1,0 +1,12 @@
+[package]
+name = "effectcraft-sam2"
+description = "SAM 2.1 (Hiera) video object tracker for the Roto Brush: a Rust port of the Hugging Face transformers implementation, native only, weights downloaded by the user"
+version.workspace = true
+edition.workspace = true
+license = "Apache-2.0"
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
