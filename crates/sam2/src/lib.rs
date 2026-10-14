@@ -11,9 +11,12 @@
 
 use std::fmt;
 
+pub mod decoder;
 pub mod hiera;
+pub mod model;
 pub mod neck;
 pub mod nn;
+pub mod prompt;
 pub mod weights;
 
 /// Everything that can go wrong in this crate. Never a panic.

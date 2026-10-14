@@ -107,3 +107,39 @@ fn neck_and_vision_encoder_match_pytorch() {
     let e = max_abs(feats.features.first().unwrap(), r.get("vision_encoder.neck.3").unwrap());
     assert!(e < NECK_TOL);
 }
+
+/// Click-prompted single image: prompt embeddings and decoder outputs against `Sam2Model`.
+const DECODER_TOL: f32 = 1e-3;
+
+#[test]
+fn prompt_encoder_and_decoder_match_pytorch() {
+    use effectcraft_sam2::model::ImageModel;
+    use effectcraft_sam2::prompt::Prompt;
+    let Some((w, r)) = load() else { return };
+    let model = ImageModel::load(&w).unwrap();
+    let pixels = r.get("input.pixel_values").unwrap();
+    let prompt = Prompt { points: vec![([460.0, 512.0], true)], bbox: None };
+
+    let (sparse, dense) = model.embed_prompt(&prompt).unwrap();
+    let want_sparse = r.get("prompt_encoder.0").unwrap().squeeze(0).unwrap();
+    let e = max_abs(&sparse, &want_sparse);
+    eprintln!("sparse prompt: max abs error {e:e}");
+    assert!(e < 1e-5, "sparse prompt error {e}");
+    let e = max_abs(&dense, r.get("prompt_encoder.1").unwrap());
+    assert!(e < 1e-6, "dense prompt error {e}");
+
+    let enc = model.encode(pixels).unwrap();
+    let out = model.segment(&enc, &prompt, true).unwrap();
+    let want_masks = r.get("mask_decoder.0").unwrap().squeeze(0).unwrap();
+    let e = max_abs(&out.masks, &want_masks);
+    eprintln!("masks: max abs error {e:e} (logit range {:?})", want_masks.flatten_all().unwrap().max(0).unwrap().to_scalar::<f32>());
+    assert!(e < DECODER_TOL, "mask logits error {e}");
+    let e = max_abs(&out.iou, &r.get("mask_decoder.1").unwrap().squeeze(0).unwrap());
+    eprintln!("iou: max abs error {e:e}");
+    assert!(e < 1e-4, "iou error {e}");
+    let e = max_abs(&out.object_score, &r.get("mask_decoder.3").unwrap().squeeze(0).unwrap());
+    eprintln!("object score: max abs error {e:e}");
+    assert!(e < 1e-4, "object score error {e}");
+    let e = max_abs(&out.sam_tokens, &r.get("mask_decoder.2").unwrap().squeeze(0).unwrap());
+    assert!(e < 1e-4, "sam token error {e}");
+}
