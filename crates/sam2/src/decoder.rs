@@ -6,9 +6,9 @@
 //! One object per call (batch 1, one point batch).
 
 use candle_core::{D, Tensor};
-use candle_nn::{LayerNorm, Linear, Module, ops::sigmoid, ops::softmax};
+use candle_nn::{Linear, ops::sigmoid, ops::softmax};
 
-use crate::nn::{layer_norm, linear};
+use crate::nn::{LayerNorm, apply, layer_norm, linear};
 use crate::weights::Weights;
 use crate::{Error, Result};
 
@@ -40,11 +40,11 @@ impl Attention {
     /// `q`: `[1, nq, 256]`, `k` and `v`: `[1, nk, 256]`.
     fn forward(&self, q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Tensor> {
         let split = |t: Tensor| -> Result<Tensor> { Ok(t.reshape((1, (), self.heads, t.dim(2)? / self.heads))?.transpose(1, 2)?.contiguous()?) };
-        let (q, k, v) = (split(self.q.forward(q)?)?, split(self.k.forward(k)?)?, split(self.v.forward(v)?)?);
+        let (q, k, v) = (split(apply(&self.q, q)?)?, split(apply(&self.k, k)?)?, split(apply(&self.v, v)?)?);
         let att = softmax(&(q.matmul(&k.transpose(2, 3)?.contiguous()?)? * self.scale)?, D::Minus1)?;
         let out = att.matmul(&v)?.transpose(1, 2)?.contiguous()?;
         let (n, h, d) = (out.dim(1)?, out.dim(2)?, out.dim(3)?);
-        Ok(self.o.forward(&out.reshape((1, n, h * d))?)?)
+        apply(&self.o, &out.reshape((1, n, h * d))?)
     }
 }
 
@@ -67,11 +67,11 @@ impl FeedForward {
     }
 
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let mut x = self.proj_in.forward(x)?.relu()?;
+        let mut x = apply(&self.proj_in, x)?.relu()?;
         for l in &self.layers {
-            x = l.forward(&x)?.relu()?;
+            x = apply(l, &x)?.relu()?;
         }
-        let x = self.proj_out.forward(&x)?;
+        let x = apply(&self.proj_out, &x)?;
         Ok(if self.sigmoid_output { sigmoid(&x)? } else { x })
     }
 }

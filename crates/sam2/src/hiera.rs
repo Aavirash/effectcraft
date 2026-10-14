@@ -4,10 +4,10 @@
 //! The Hiera backbone: patch embedding, windowed positional embedding, and blocks with window or
 //! global attention and query pooling at the stage changes. Activations are NHWC like the reference.
 
-use candle_core::{D, Tensor};
-use candle_nn::{LayerNorm, Linear, Module, ops::softmax};
+use candle_core::Tensor;
+use candle_nn::{Linear, ops::softmax_last_dim};
 
-use crate::nn::{Mlp, layer_norm, linear};
+use crate::nn::{LayerNorm, Mlp, apply, layer_norm, linear};
 use crate::weights::Weights;
 use crate::{Error, Result};
 
@@ -89,7 +89,7 @@ struct Attention {
 impl Attention {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let (b, h, w, _) = x.dims4()?;
-        let qkv = self.qkv.forward(x)?.reshape((b, h * w, 3, self.heads, ()))?;
+        let qkv = apply(&self.qkv, x)?.reshape((b, h * w, 3, self.heads, ()))?;
         let part = |i: usize| -> Result<Tensor> { Ok(qkv.narrow(2, i, 1)?.squeeze(2)?) };
         let (mut q, k, v) = (part(0)?, part(1)?, part(2)?);
         let (mut oh, mut ow) = (h, w);
@@ -101,10 +101,12 @@ impl Attention {
         let q = q.transpose(1, 2)?.contiguous()?;
         let k = k.transpose(1, 2)?.contiguous()?;
         let v = v.transpose(1, 2)?.contiguous()?;
-        let att = (q.matmul(&k.transpose(2, 3)?.contiguous()?)? * self.scale)?;
-        let att = softmax(&att, D::Minus1)?;
+        // Scaling the (small) queries first equals scaling the scores, and the fused softmax is
+        // much faster than the generic one on the 4096 x 4096 global-attention maps.
+        let att = (q * self.scale)?.matmul(&k.transpose(2, 3)?.contiguous()?)?;
+        let att = softmax_last_dim(&att)?;
         let out = att.matmul(&v)?.transpose(1, 2)?.contiguous()?.reshape((b, oh, ow, ()))?;
-        Ok(self.proj.forward(&out)?)
+        apply(&self.proj, &out)
     }
 }
 
@@ -149,8 +151,8 @@ impl Block {
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let h = self.norm1.forward(x)?;
         let residual = match (&self.proj, self.query_stride) {
-            (Some(p), Some(s)) => do_pool(&p.forward(&h)?, s)?,
-            (Some(p), None) => p.forward(&h)?,
+            (Some(p), Some(s)) => do_pool(&apply(p, &h)?, s)?,
+            (Some(p), None) => apply(p, &h)?,
             (None, _) => x.clone(),
         };
         let (hh, ww) = (h.dim(1)?, h.dim(2)?);

@@ -4,9 +4,8 @@
 //! The prompt encoder: clicks and boxes become sparse tokens, a mask or "no mask" becomes a dense map.
 
 use candle_core::{Device, Tensor};
-use candle_nn::{LayerNorm, Module};
 
-use crate::nn::layer_norm;
+use crate::nn::{LayerNorm, layer_norm};
 use crate::weights::Weights;
 use crate::{Error, Result};
 
