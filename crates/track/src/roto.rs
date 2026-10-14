@@ -31,6 +31,7 @@
 //! deterministic function of its *chain*: the base frame's strokes, then every frame's strokes
 //! on the way out to it ([`RotoData::chain_keys`]).
 
+pub mod bench;
 pub mod gmm;
 pub mod matting;
 pub mod maxflow;

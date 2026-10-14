@@ -27,6 +27,8 @@
 //!     (--gpu: CPU vs GPU ms/frame for every comp at Full and Half)
 //! effectcraft-cli bench --ops [--small] [--layers N] [--comps N] [--footage N]   everyday-operation timings
 //!     on a large generated project (open, save, auto-save, undo/redo, timeline, Project panel)
+//! effectcraft-cli bench --roto [--frames N] [--json]   Roto Brush trackers on synthetic clips with known mattes
+//!     (classical engine, MobileSAM when installed; IoU, flicker, re-appearance, seconds per frame)
 //! effectcraft-cli script FILE.jsx [F.ecproj] | --eval CODE    run an After Effects-style script
 //! effectcraft-cli mcp [--autosave | --bridge PORT]            MCP server on stdio
 //!
@@ -124,6 +126,8 @@ const USAGE: &str = "usage: effectcraft-cli <info|commands|exec|run|props|get|se
   bench --ops [--small] [--layers N] [--comps N] [--footage N]
                                            everyday operations on a large generated project: startup, open,
                                            save, auto-save, edits + undo/redo, timeline, Project panel
+  bench --roto [--frames N] [--json]       Roto Brush trackers on synthetic clips with known mattes: movement,
+                                           lighting change, occlusion, leaving and re-entering the frame
   script FILE.jsx [F.ecproj] | --eval CODE run JavaScript with the After Effects-style object model
                                            (app.project, comps, layers, properties…); prints writeLn
                                            output and the result; errors exit 1 with file:line:col
@@ -137,6 +141,7 @@ options: --project F.ecproj | --demo | --empty   --save | --save-as F   --bridge
 /// Options that take a value.
 const VALUED: &[&str] = &[
     "--n",
+    "--frames",
     "--play",
     "--layers",
     "--comps",
@@ -199,6 +204,7 @@ const FLAGS: &[&str] = &[
     "--work-area",
     "--queue",
     "--ops",
+    "--roto",
     "--small",
     "--adv3d",
     "--autosave",
@@ -976,6 +982,9 @@ fn bench_cmd(args: &Args) -> Result<(), Failure> {
     if args.flag("--ops") {
         return bench_ops(args);
     }
+    if args.flag("--roto") {
+        return bench_roto(args);
+    }
     let mut s = effectcraft_host::session();
     match &args.project {
         Some(p) => s.execute("file.open", json!({"path": p})),
@@ -994,6 +1003,37 @@ fn bench_cmd(args: &Args) -> Result<(), Failure> {
     bench(&s, cid, t, opts, args.num("--n")?.unwrap_or(10.0).max(1.0) as usize);
     if let Some(n) = args.num("--play")? {
         bench_play(&s, cid, t, opts, n.max(1.0) as usize);
+    }
+    Ok(())
+}
+
+/// `bench --roto`: the Roto Brush's trackers on synthetic clips whose true mattes are known.
+fn bench_roto(args: &Args) -> Result<(), Failure> {
+    use effectcraft_segment::{Loaded, MOBILE_SAM, MaskModel};
+    use effectcraft_track::roto::bench;
+    let frames = args.num("--frames")?.unwrap_or(24.0).clamp(12.0, 240.0) as usize;
+    let session = effectcraft_host::session();
+    let mobilesam: Option<std::sync::Arc<dyn MaskModel>> =
+        session.model_path(&MOBILE_SAM).and_then(|p| std::fs::read(p).ok()).and_then(|bytes| effectcraft_segment::load(MOBILE_SAM.id, &bytes).ok()).and_then(
+            |m| match m {
+                Loaded::Mask(m) => Some(m),
+                _ => None,
+            },
+        );
+    if mobilesam.is_none() {
+        note!("bench --roto: MobileSAM is not installed; comparing the classical engine only");
+    }
+    let mut runs = vec![];
+    for sc in bench::scenarios(frames) {
+        runs.push(bench::run_flow(&sc, "classical", None));
+        if let Some(m) = &mobilesam {
+            runs.push(bench::run_flow(&sc, "mobilesam", Some(m.as_ref())));
+        }
+    }
+    if args.flag("--json") {
+        say!("{}", serde_json::to_string_pretty(&runs).map_err(|e| Failure::Error(e.to_string()))?);
+    } else {
+        say!("{}", bench::table(&runs));
     }
     Ok(())
 }
