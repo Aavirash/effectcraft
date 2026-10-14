@@ -315,6 +315,11 @@ fn particle_world_follows_the_comp_camera() {
 /// A black solid with CC Particle World whose Birth Rate is 3 until layer time `cut`, then 0 a
 /// frame later (`None`: 3 throughout); the layer starts at comp time `start`, stretched `stretch` %.
 fn burst_scene(cut: Option<f64>, start: f64, stretch: f64) -> (Project, ItemId) {
+    burst_scene_keys(cut, start, stretch, false)
+}
+
+/// [`burst_scene`]; `hold`: Hold keys, 3 until `cut` and 0 from `cut` exactly.
+fn burst_scene_keys(cut: Option<f64>, start: f64, stretch: f64, hold: bool) -> (Project, ItemId) {
     let (mut p, cid, comp) = setup();
     let mut l = solid(&mut p, &comp, [0.0, 0.0, 0.0], 200, 100);
     let vals = [("birthRate", Value::Scalar(3.0)), ("longevity", Value::Scalar(1.0)), ("particle/particleType", Value::Enum(2))];
@@ -327,7 +332,7 @@ fn burst_scene(cut: Option<f64>, start: f64, stretch: f64) -> (Project, ItemId) 
         let fx = fx.unwrap();
         let rate = fx.prop_mut("birthRate").unwrap();
         let key = |t: f64, v: f64| Keyframe::new(Tick::from_seconds_f64(t), Value::Scalar(v));
-        rate.keys = vec![key(0.0, 3.0), key(cut, 3.0), key(cut + 1.0 / 30.0, 0.0)];
+        rate.keys = if hold { vec![key(0.0, 3.0).hold(), key(cut, 0.0).hold()] } else { vec![key(0.0, 3.0), key(cut, 3.0), key(cut + 1.0 / 30.0, 0.0)] };
     }
     l.start_time = Tick::from_seconds_f64(start);
     l.in_point = l.start_time;
@@ -373,6 +378,82 @@ fn particle_world_birth_rate_history_with_the_layer_cache_and_time_mapping() {
     assert_same(&render_cached(&late, cid, at(1.4), None), &plain, "a layer starting at 0.5 s");
     let (slow, _) = burst_scene(Some(0.5), 0.0, 200.0);
     assert_same(&render_cached(&slow, cid, at(1.8), None), &plain, "a layer stretched 200 %");
+}
+
+/// The Birth Rate history is read at exact layer times: under a fractional stretch, mapping a
+/// layer time to comp time and back rounds down a tick, so a Hold cut at 0.5 s read its
+/// previous value at the step starting there (six extra births).
+#[test]
+fn particle_world_reads_a_hold_cut_at_its_exact_layer_time_under_any_stretch() {
+    use crate::{EffectHost, FxHost, NoFootage, RenderOpts, Renderer};
+    let plain = {
+        let (p, cid) = burst_scene_keys(Some(0.5), 0.0, 100.0, true);
+        render_cached(&p, cid, Tick::from_seconds_f64(0.9), None)
+    };
+    assert!(light(&plain) > 1.0, "the burst is drawn");
+    for stretch in [33.3, 133.33, 200.0] {
+        let (p, cid) = burst_scene_keys(Some(0.5), 0.0, stretch, true);
+        let c = p.comp(cid).unwrap();
+        let l = &c.layers[0];
+        let ctx = crate::eval::EvalCtx::new(&p, cid, c, Tick::ZERO);
+        let renderer = Renderer::new(&p, &NoFootage, RenderOpts::default());
+        let host = FxHost { r: &renderer, ctx: &ctx, layer: l, origin: [0.0; 2], index: Default::default(), original: None };
+        let rate = |t: f64| host.param_at(0, "birthRate", t).unwrap().as_f64();
+        assert_eq!((rate(0.5 - 1.0 / 60.0), rate(0.5)), (3.0, 0.0), "stretch {stretch} %");
+        assert!(!host.param_is_static(0, "birthRate"));
+        let t = l.comp_time(Tick::from_seconds_f64(0.9));
+        assert_same(&render_cached(&p, cid, t, None), &plain, &format!("stretch {stretch} %"));
+    }
+}
+
+/// An expression that reads a Controller layer's Opacity (÷ 25) before layer time 0.5 s and is
+/// 0 after (a stand-in for the expression engine).
+struct ControllerRate;
+
+impl crate::eval::ExprHost for ControllerRate {
+    fn eval(&self, ctx: &crate::eval::EvalCtx, layer: &effectcraft_project::Layer, _: &effectcraft_project::Property, _: &Value) -> Result<Value, String> {
+        if layer.layer_time(ctx.time).seconds() >= 0.5 {
+            return Ok(Value::Scalar(0.0));
+        }
+        let c = ctx.comp.layers.iter().find(|l| l.name == "Controller").ok_or("no controller")?;
+        let opacity = c.props.prop("transform/opacity").ok_or("no opacity")?;
+        Ok(Value::Scalar(ctx.value(c, opacity).as_f64() / 25.0))
+    }
+}
+
+/// A Birth Rate expression reading another layer: changing that layer changes the history but
+/// not the current rate (0) nor this layer's properties, which is all the layer cache key sees.
+/// CC Particle World layers with expressions therefore aren't layer cached.
+#[test]
+fn particle_world_with_a_birth_rate_expression_is_not_served_from_the_layer_cache() {
+    let scene = |opacity: f64| {
+        let (mut p, cid) = burst_scene(None, 0.0, 100.0);
+        let comp = p.comp(cid).unwrap().clone();
+        let mut ctl = solid(&mut p, &comp, [0.0, 0.0, 0.0], 10, 10);
+        ctl.name = "Controller".into();
+        ctl.switches.video = false;
+        ctl.props.prop_mut("transform/opacity").unwrap().value = Value::Scalar(opacity);
+        let c = p.comp_mut(cid).unwrap();
+        let fx = c.layers[0].props.sub_mut("effects").unwrap().children.iter_mut().find_map(|n| match n {
+            effectcraft_project::Node::Group(g) => Some(g),
+            _ => None,
+        });
+        fx.unwrap().prop_mut("birthRate").unwrap().expr = Some(effectcraft_project::Expression { text: "controller".into(), enabled: true });
+        c.layers.push(ctl);
+        (p, cid)
+    };
+    let render = |p: &Project, cid: ItemId, cache: Option<&crate::LayerCache>| {
+        let mut r = crate::Renderer::new(p, &crate::NoFootage, crate::RenderOpts::default());
+        r.expr = Some(&ControllerRate);
+        r.cache = cache;
+        r.comp_frame(cid, Tick::from_seconds_f64(0.9))
+    };
+    let ((many, cid), (few, _)) = (scene(75.0), scene(25.0));
+    let cache = crate::LayerCache::default();
+    let a = render(&many, cid, Some(&cache));
+    let b = render(&few, cid, Some(&cache));
+    assert_same(&b, &render(&few, cid, None), "cached render after the controller changed");
+    assert!(light(&b) > 1.0 && light(&b) < light(&a), "fewer births: {} vs {}", light(&b), light(&a));
 }
 
 // ------------------------------------------------------------------------------ layer cache
