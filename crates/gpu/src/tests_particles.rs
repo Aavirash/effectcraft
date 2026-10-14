@@ -91,6 +91,59 @@ fn particle_world_matches_the_cpu() {
     }
 }
 
+/// A host whose Birth Rate is `rate(layer time)` (#1373), with the GPU backend or without (the
+/// CPU oracle).
+struct Keyed {
+    gpu: Option<&'static Gpu>,
+    rate: fn(f64) -> f64,
+}
+
+impl EffectHost for Keyed {
+    fn layer(&self, _id: u64, _masks_and_effects: bool) -> Option<LayerPixels> {
+        None
+    }
+    fn audio(&self, _id: u64, _start: f64, _frames: usize, _rate: u32) -> Option<Vec<f32>> {
+        None
+    }
+    fn particles(&self) -> Option<&dyn ParticleSim> {
+        self.gpu.map(|g| g as &dyn ParticleSim)
+    }
+    fn param_at(&self, _effect_index: usize, id: &str, t: f64) -> Option<Value> {
+        (id == "birthRate").then(|| n((self.rate)(t)))
+    }
+}
+
+/// CC Particle World's live particles at layer time `t` through `host`.
+fn keyed_state(p: &Params, t: f64, host: &Keyed) -> Vec<SimParticle> {
+    let env = EffectEnv { host: Some(host), ..Default::default() };
+    let ctx = EffectCtx { params: p, time: t, layer_size: [320.0, 240.0], seed: 5, adjustment: false, env };
+    effectcraft_effects::particle_state("ec.sim.ccparticleworld", &ctx).unwrap()
+}
+
+/// #1373: with a keyed Birth Rate the GPU is given the births of each moment, as the CPU
+/// simulates them: a burst lives on after the rate drops to 0, and a GPU checkpoint of one
+/// history is not resumed for another (the burst's start moved, so the same ids are born at
+/// other steps; same system key).
+#[test]
+fn particle_world_with_a_keyed_birth_rate_matches_the_cpu() {
+    let Some(g) = gpu() else { return };
+    fn long(t: f64) -> f64 {
+        if t < 0.5 { 4.0 } else { 0.0 }
+    }
+    fn late(t: f64) -> f64 {
+        if (0.2..0.5).contains(&t) { 4.0 } else { 0.0 }
+    }
+    let p = params("ec.sim.ccparticleworld", &[("birthRate", n(0.0)), ("longevity", n(1.2)), ("extras/randomSeed", n(21.0))]);
+    for (rate, times) in [(long as fn(f64) -> f64, [0.4, 0.9, 1.2]), (late, [0.9, 1.2, 0.6])] {
+        let (cpu_host, gpu_host) = (Keyed { gpu: None, rate }, Keyed { gpu: Some(g), rate });
+        for t in times {
+            let cpu = keyed_state(&p, t, &cpu_host);
+            let gpu = keyed_state(&p, t, &gpu_host);
+            agree(&format!("keyed birth rate t {t}"), &cpu, &gpu, 1e-4, cpu.len() / 100 + 1);
+        }
+    }
+}
+
 #[test]
 fn particle_systems_ii_matches_the_cpu() {
     let Some(g) = gpu() else { return };
