@@ -121,6 +121,10 @@ fn uniforms(req: &SimRequest, n: u32, s0: u64, prev_n: u32) -> Vec<u8> {
     out
 }
 
+/// Simulations dispatched on the GPU (tests check the GPU path really ran).
+#[cfg(test)]
+pub(crate) static DISPATCHES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// Simulate `req` (see [`effectcraft_effects::psim::ParticleSim`]).
 ///
 /// With deferred readbacks (a browser worker) the state's readback is keyed by the request
@@ -202,6 +206,8 @@ pub(crate) fn simulate(g: &GpuContext, req: &SimRequest) -> Option<Vec<SimPartic
     }
     enc.copy_buffer_to_buffer(&next, 0, &read, 0, size);
     g.queue.submit([enc.finish()]);
+    #[cfg(test)]
+    DISPATCHES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     if let (Some(d), Some(k)) = (&deferred, key) {
         let row = usize::try_from(size).ok()?;
         let done = d.start(k, n, 1, [0.0; 2], 1.0);
