@@ -1800,6 +1800,8 @@ fn handle_shortcuts_impl(app: &mut EffectcraftApp, ctx: &egui::Context, tab_only
             if app.dialog == Some(crate::Dialog::UnsavedChanges) {
                 app.dialog_state.unsaved.command = None;
             }
+            // Escape is Cancel: a Preview that edited the project rolls back.
+            crate::panels::live_preview::cancel(app);
             app.dialog = None;
         }
         return;
@@ -1916,6 +1918,7 @@ fn handle_shortcuts_impl(app: &mut EffectcraftApp, ctx: &egui::Context, tab_only
                 app.session.prefs = p;
                 app.session.prefs_changed();
             }
+            crate::panels::live_preview::cancel(app);
             app.dialog = None;
             continue;
         }

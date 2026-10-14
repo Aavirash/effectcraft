@@ -571,12 +571,3 @@ fn the_escape_after_the_picker_closes_cancels_the_editor() {
     assert_eq!(h.state().dialog, None, "the next pass's Escape cancels the editor");
     assert_eq!(h.state().session.project, project, "and changes nothing");
 }
-
-/// The editor shows its edits on the canvas live, so the window behind it is not greyed out while
-/// it is open; other dialogs still are.
-#[test]
-fn only_dialogs_that_preview_leave_the_window_undimmed() {
-    assert!(Dialog::GradientEditor.leaves_window_undimmed());
-    assert!(!Dialog::SolidSettings.leaves_window_undimmed());
-    assert!(!Dialog::KeyVelocity.leaves_window_undimmed());
-}

@@ -101,14 +101,6 @@ pub enum Dialog {
     DeleteTemplate,
 }
 
-impl Dialog {
-    /// The dialog edits what is behind it live (Preview), so the window stays at full brightness
-    /// while it is open: clicks still don't reach it, but it is not greyed out (After Effects).
-    pub fn leaves_window_undimmed(self) -> bool {
-        matches!(self, Dialog::GradientEditor)
-    }
-}
-
 /// The desktop's light or dark appearance where egui cannot see it (Wayland compositors that send
 /// winit no theme). `None` = the host does not know.
 pub type SystemThemeFn = Box<dyn Fn(&egui::Context) -> Option<egui::Theme>>;
@@ -576,6 +568,18 @@ impl EffectcraftApp {
     /// do the same).
     pub fn gradient_draft_mut(&mut self) -> &mut panels::gradient_editor::Draft {
         &mut self.dialog_state.gradient
+    }
+
+    /// The open settings dialog's draft and Preview state (`panels::dialogs`): Solid, Camera,
+    /// Light and Composition Settings keep what OK would apply here.
+    pub fn dialog_state(&self) -> &panels::dialogs::DialogState {
+        &self.dialog_state
+    }
+
+    /// The open settings dialog's draft, to edit (tests and automation; the dialog's own fields
+    /// do the same).
+    pub fn dialog_state_mut(&mut self) -> &mut panels::dialogs::DialogState {
+        &mut self.dialog_state
     }
 
     /// Feed this frame's share of the queued synthetic input (control channel `ui.click`,
@@ -1688,9 +1692,11 @@ impl EffectcraftApp {
         }
         let t = self.tokens;
         let full = ui.max_rect();
-        if let Some(d) = self.dialog {
+        if self.dialog.is_some() {
             ui.disable();
-            if d.leaves_window_undimmed() {
+            // A dialog that edits what is behind it live (Preview) leaves the window at full
+            // brightness: clicks still don't reach it, but the canvas is not greyed out.
+            if self.dialog == Some(Dialog::GradientEditor) || panels::live_preview::active(self) {
                 ui.set_opacity(1.0);
             }
         }

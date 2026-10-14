@@ -315,8 +315,7 @@ pub fn show(app: &mut EffectcraftApp, ctx: &egui::Context, t: &Tokens) {
     }
     let mut answer: Option<bool> = None;
     // At the lower right, undimmed: the canvas it edits stays in view (After Effects).
-    let place = super::dialogs::Placement { start: vec2(0.75, 0.8), dim: false };
-    super::dialogs::modal_placed(ctx, tr("Gradient Editor"), vec2(520.0, 270.0), t, place, |ui| {
+    super::dialogs::modal_placed(ctx, tr("Gradient Editor"), vec2(520.0, 270.0), t, super::live_preview::PLACE, |ui| {
         let w = ui.available_width().max(200.0);
         let (area, _) = ui.allocate_exact_size(vec2(w, 72.0), Sense::hover());
         let bar = Rect::from_min_max(pos2(area.min.x + 8.0, area.min.y + 22.0), pos2(area.max.x - 8.0, area.min.y + 48.0));
