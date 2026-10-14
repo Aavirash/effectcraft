@@ -101,6 +101,14 @@ pub enum Dialog {
     DeleteTemplate,
 }
 
+impl Dialog {
+    /// The dialog edits what is behind it live (Preview), so the window stays at full brightness
+    /// while it is open: clicks still don't reach it, but it is not greyed out (After Effects).
+    pub fn leaves_window_undimmed(self) -> bool {
+        matches!(self, Dialog::GradientEditor)
+    }
+}
+
 /// The desktop's light or dark appearance where egui cannot see it (Wayland compositors that send
 /// winit no theme). `None` = the host does not know.
 pub type SystemThemeFn = Box<dyn Fn(&egui::Context) -> Option<egui::Theme>>;
@@ -1680,8 +1688,11 @@ impl EffectcraftApp {
         }
         let t = self.tokens;
         let full = ui.max_rect();
-        if self.dialog.is_some() {
+        if let Some(d) = self.dialog {
             ui.disable();
+            if d.leaves_window_undimmed() {
+                ui.set_opacity(1.0);
+            }
         }
         ui.painter().rect_filled(full, 0.0, t.app_bg);
         let mut top = full.min.y;

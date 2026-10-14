@@ -176,6 +176,31 @@ pub(crate) fn modal_vertical(ctx: &egui::Context, title: &str, size: egui::Vec2,
     modal_with_scroll(ctx, title, size, t, true, body);
 }
 
+/// Where a modal dialog opens and whether it dims the window behind it. The default is the middle
+/// of the window over a dimmed backdrop.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Placement {
+    /// The opening position as a fraction of the room the dialog can move in, from the middle
+    /// `(0, 0)` to the bottom right `(1, 1)`.
+    pub start: egui::Vec2,
+    /// Dim the window behind the dialog.
+    pub dim: bool,
+}
+
+impl Default for Placement {
+    fn default() -> Self {
+        Placement { start: vec2(0.0, 0.0), dim: true }
+    }
+}
+
+/// [`modal`] at `place`: a dialog that edits what is behind it keeps the canvas in view.
+pub(crate) fn modal_placed(ctx: &egui::Context, title: &str, size: egui::Vec2, t: &Tokens, place: Placement, body: impl FnOnce(&mut egui::Ui)) {
+    let max_height = (modal_space(ctx).y - 84.0).max(40.0);
+    modal_fit_placed(ctx, title, size, t, place, |ui, _| {
+        egui::ScrollArea::both().max_height(max_height).auto_shrink([false, true]).show(ui, body);
+    });
+}
+
 fn modal_with_scroll(ctx: &egui::Context, title: &str, size: egui::Vec2, t: &Tokens, vertical_only: bool, body: impl FnOnce(&mut egui::Ui)) {
     let max_height = (modal_space(ctx).y - 84.0).max(40.0);
     modal_fit(ctx, title, size, t, |ui, _| {
@@ -188,16 +213,21 @@ fn modal_with_scroll(ctx: &egui::Context, title: &str, size: egui::Vec2, t: &Tok
 /// only its content: `body` gets the height left under the title, with `size` kept within the
 /// window.
 pub(crate) fn modal_fit(ctx: &egui::Context, title: &str, size: egui::Vec2, t: &Tokens, body: impl FnOnce(&mut egui::Ui, f32)) {
+    modal_fit_placed(ctx, title, size, t, Placement::default(), body);
+}
+
+/// [`modal_fit`] at `place`.
+pub(crate) fn modal_fit_placed(ctx: &egui::Context, title: &str, size: egui::Vec2, t: &Tokens, place: Placement, body: impl FnOnce(&mut egui::Ui, f32)) {
     let size = size.min(modal_space(ctx));
     let id = egui::Id::new(("modal", title));
     // Dragging the title row moves the dialog off what it edits. The offset is kept within the
     // window, so dragging back never has to undo a part the dialog could not follow.
     let offset_id = id.with("offset");
     let room = ((ctx.content_rect().size() - size) * 0.5).max(vec2(0.0, 0.0));
-    let offset = ctx.data(|d| d.get_temp::<egui::Vec2>(offset_id)).unwrap_or_default().clamp(-room, room);
+    let offset = ctx.data(|d| d.get_temp::<egui::Vec2>(offset_id)).unwrap_or(room * place.start).clamp(-room, room);
     egui::Modal::new(id)
         .area(egui::Modal::default_area(id).anchor(Align2::CENTER_CENTER, offset))
-        .backdrop_color(Color32::from_black_alpha(120))
+        .backdrop_color(Color32::from_black_alpha(if place.dim { 120 } else { 0 }))
         .frame(egui::Frame::window(&ctx.style_of(ctx.theme())).fill(t.panel_bg).inner_margin(egui::Margin::same(18)))
         .show(ctx, |ui| {
             ui.set_width(size.x - 36.0);
