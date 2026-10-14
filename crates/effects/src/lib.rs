@@ -383,6 +383,13 @@ pub trait EffectHost: Sync {
     fn params_at(&self, _layer_time: f64) -> Option<Params> {
         None
     }
+    /// Parameter `id` (a [`flatten_params`] id such as `birthRate`) of effect `effect_index` in
+    /// the layer's stack (the running effect's [`EffectEnv::effect_index`]) at another **layer
+    /// time**: CC Particle World samples its Birth Rate at every step it simulates (#1373).
+    /// `None` when unavailable.
+    fn param_at(&self, _effect_index: usize, _id: &str, _layer_time: f64) -> Option<Value> {
+        None
+    }
     /// A particle simulation backend (GPU particles; see [`psim`]). `None` = simulate on the
     /// CPU.
     fn particles(&self) -> Option<&dyn psim::ParticleSim> {

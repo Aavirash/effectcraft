@@ -343,6 +343,27 @@ impl EffectHost for FxHost<'_, '_, '_> {
         Some(effectcraft_effects::flatten_params(g, &mut |pr| ctx.value(self.layer, pr)))
     }
 
+    fn param_at(&self, effect_index: usize, id: &str, layer_time: f64) -> Option<effectcraft_keyframe::Value> {
+        // Only the one property: a simulation samples it at every step.
+        let mut g = self.layer.effects()?.groups().nth(effect_index)?;
+        let mut path = id.split('/').peekable();
+        while let Some(m) = path.next() {
+            if path.peek().is_none() {
+                let p = g.children.iter().find_map(|c| match c {
+                    effectcraft_project::Node::Prop(p) if p.match_id == m => Some(p),
+                    _ => None,
+                })?;
+                let ctx = self.ctx.at(self.layer.comp_time(Tick::from_seconds_f64(layer_time)));
+                return Some(ctx.value(self.layer, p));
+            }
+            g = g.children.iter().find_map(|c| match c {
+                effectcraft_project::Node::Group(sg) if sg.match_id == m => Some(sg),
+                _ => None,
+            })?;
+        }
+        None
+    }
+
     fn comp_scene(&self) -> Option<effectcraft_effects::CompScene> {
         Some(comp_scene(self.ctx, self.layer)?.rebased(self.origin))
     }
