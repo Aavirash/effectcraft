@@ -1248,6 +1248,13 @@ pub fn is_time_dependent(id: &str) -> bool {
     id.starts_with("ec.sim.") || TIME_DEPENDENT.contains(&id)
 }
 
+/// Does effect `id` read its own parameters at earlier times (CC Particle World samples its
+/// Birth Rate at every step, #1373)? Caches keyed on the current values can't see what an
+/// expression returned then.
+pub fn reads_param_history(id: &str) -> bool {
+    id == "ec.sim.ccparticleworld"
+}
+
 /// Run an effect on a buffer.
 pub fn apply(spec: &EffectSpec, ctx: &EffectCtx, buf: Buf) -> Buf {
     (spec.render)(ctx, buf)
