@@ -77,3 +77,33 @@ fn hiera_is_deterministic_and_rejects_bad_sizes() {
     let odd = pixels.narrow(2, 0, 1022).unwrap();
     assert!(hiera.forward(&odd).is_err());
 }
+
+/// The neck adds 1x1 convolutions and nearest-neighbour sums to the Hiera output; the sine
+/// position encodings are exact functions of the grid size.
+const NECK_TOL: f32 = 1e-4;
+
+#[test]
+fn neck_and_vision_encoder_match_pytorch() {
+    let Some((w, r)) = load() else { return };
+    let enc = effectcraft_sam2::neck::VisionEncoder::load_tiny(&w).unwrap();
+    let pixels = r.get("input.pixel_values").unwrap();
+    let stages = enc.hiera.forward(pixels).unwrap();
+    let out = enc.neck.forward(&stages).unwrap();
+    assert_eq!((out.features.len(), out.positions.len()), (4, 4));
+    for (i, f) in out.features.iter().enumerate() {
+        let e = max_abs(f, r.get(&format!("vision_encoder.neck.{i}")).unwrap());
+        eprintln!("neck feature {i}: max abs error {e:e}");
+        assert!(e < NECK_TOL, "neck feature {i} error {e}");
+    }
+    for (i, p) in out.positions.iter().enumerate() {
+        let e = max_abs(p, r.get(&format!("vision_encoder.neck.{}", i + 4)).unwrap());
+        eprintln!("neck position {i}: max abs error {e:e}");
+        assert!(e < NECK_TOL, "neck position {i} error {e}");
+    }
+    // The vision encoder keeps the three highest-resolution levels, highest first.
+    let feats = enc.forward(pixels).unwrap();
+    let dims: Vec<usize> = feats.features.iter().map(|f| f.dim(2).unwrap()).collect();
+    assert_eq!(dims, vec![256, 128, 64]);
+    let e = max_abs(feats.features.first().unwrap(), r.get("vision_encoder.neck.3").unwrap());
+    assert!(e < NECK_TOL);
+}

@@ -12,6 +12,7 @@
 use std::fmt;
 
 pub mod hiera;
+pub mod neck;
 pub mod nn;
 pub mod weights;
 
