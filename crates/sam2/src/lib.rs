@@ -13,6 +13,7 @@ use std::fmt;
 
 pub mod decoder;
 pub mod hiera;
+pub mod memattn;
 pub mod memory;
 pub mod model;
 pub mod neck;

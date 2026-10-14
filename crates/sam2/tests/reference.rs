@@ -173,3 +173,24 @@ fn memory_encoder_matches_pytorch() {
     eprintln!("memory position encoding: max abs error {e:e}");
     assert!(e < 1e-5, "memory position error {e}");
 }
+
+#[test]
+fn memory_attention_matches_pytorch() {
+    let Some((w, r)) = load_video() else { return };
+    let att = effectcraft_sam2::memattn::MemoryAttention::load(&w).unwrap();
+    let get = |k: &str| r.get(k).unwrap().squeeze(1).unwrap();
+    let pointers = r.get("mem.attn.num_pointers").unwrap().to_vec1::<f32>().unwrap()[0] as usize;
+    let out = att
+        .forward(
+            &get("mem.attn.current_vision_features"),
+            &get("mem.attn.current_vision_position_embeddings"),
+            &get("mem.attn.memory"),
+            &get("mem.attn.memory_posision_embeddings"),
+            pointers,
+        )
+        .unwrap();
+    let want = r.get("mem.attn.out").unwrap().squeeze(0).unwrap().squeeze(0).unwrap();
+    let e = max_abs(&out, &want);
+    eprintln!("memory attention: max abs error {e:e} (pointers {pointers})");
+    assert!(e < MEMORY_TOL, "memory attention error {e}");
+}
