@@ -15,7 +15,7 @@ use effectcraft_raster::{Image, Px};
 use rayon::prelude::*;
 
 use crate::generate::value_noise;
-use crate::util::{SimCache, hash1, params_key, params_key_except, unpremul};
+use crate::util::{SimCache, hash1, params_key_except, unpremul};
 use crate::{Buf, EffectCtx, EffectSpec, col, num, p, popup, slider};
 
 pub(crate) fn spec(id: &'static str, name: &'static str, params: Vec<crate::ParamSpec>, render: crate::RenderFn) -> EffectSpec {
@@ -869,6 +869,8 @@ impl Phys {
         Particle { p, v, age: 0.0, life, rnd: h(id, 11, seed), id }
     }
 
+    /// One step at the constant [`Phys::rate`] (the tests' reference).
+    #[cfg(test)]
     pub(crate) fn step(&self, st: &mut PState, step: u64) {
         self.step_at_rate(st, step, self.rate);
     }
@@ -1029,12 +1031,39 @@ fn simulate_rates(cache: &SimCache<PState>, key: u64, phys: &Phys, rates: &[f64]
     cache.run_where(key, rates.len() as u64, PState::default, |st, i| phys.step_at_rate(st, i, rate(i)), |s, st| prefix.get(s as usize) == Some(&st.hist))
 }
 
+/// A stepped particle system's particles at `ctx.time`, born at the Birth Rate of their own
+/// time (`birthRate` × `k` particles per second, see [`rate_history`]). The cache key is every
+/// parameter but Birth Rate (its history is checked through `PState::hist`) and those under
+/// `skip`, with `salt`. `gpu`: the host's particle backend may simulate it.
+struct Stepped<'a> {
+    cache: &'a SimCache<PState>,
+    salt: u64,
+    skip: &'a [&'a str],
+    k: f64,
+    gpu: bool,
+}
+
+impl Stepped<'_> {
+    fn state(&self, ctx: &EffectCtx, phys: &Phys) -> std::sync::Arc<PState> {
+        let rates = rate_history(ctx, "birthRate", self.k);
+        let mut skip = self.skip.to_vec();
+        skip.push("birthRate");
+        let key = params_key_except(ctx, &Buf { img: Image::new(0, 0), offset: [0.0; 2], scale: 1.0 }, self.salt, &skip);
+        let gpu = if self.gpu { accelerated(ctx, key, phys, Some(&rates)) } else { None };
+        gpu.unwrap_or_else(|| simulate_rates(self.cache, key, phys, &rates))
+    }
+}
+
+/// CC Particle World.
+const PW: Stepped = Stepped { cache: &PW_CACHE, salt: 1, skip: &[PW_EFFECT_CAMERA], k: PW_RATE, gpu: true };
+/// CC Particle Systems II.
+const PS2: Stepped = Stepped { cache: &PS2_CACHE, salt: 2, skip: &[], k: PS2_RATE, gpu: true };
+/// CC Mr. Mercury (its blobs are simulated on the CPU).
+const MERCURY: Stepped = Stepped { cache: &MERCURY_CACHE, salt: 3, skip: &[], k: MERCURY_RATE, gpu: false };
+
 /// CC Particle World's particles at `ctx.time`, born at the Birth Rate of their own time.
 fn pw_state(ctx: &EffectCtx, phys: &Phys) -> std::sync::Arc<PState> {
-    let rates = rate_history(ctx, "birthRate", PW_RATE);
-    // Every parameter but Birth Rate (its history is checked through `PState::hist`).
-    let key = params_key_except(ctx, &Buf { img: Image::new(0, 0), offset: [0.0; 2], scale: 1.0 }, 1, &[PW_EFFECT_CAMERA, "birthRate"]);
-    accelerated(ctx, key, phys, Some(&rates)).unwrap_or_else(|| simulate_rates(&PW_CACHE, key, phys, &rates))
+    PW.state(ctx, phys)
 }
 
 /// The live particles of a stepped particle effect (`ec.sim.ccparticleworld`,
@@ -1043,23 +1072,22 @@ fn pw_state(ctx: &EffectCtx, phys: &Phys) -> std::sync::Arc<PState> {
 pub fn particle_state(id: &str, ctx: &EffectCtx) -> Option<Vec<crate::psim::SimParticle>> {
     let st = match id {
         "ec.sim.ccparticleworld" => pw_state(ctx, &pw_phys(ctx)),
-        "ec.sim.ccparticlesystems2" => {
-            let (phys, key) = (ps2_phys(ctx), sim_key(ctx, 2));
-            accelerated(ctx, key, &phys, None).unwrap_or_else(|| simulate(&PS2_CACHE, key, ctx.time, &phys))
-        }
+        "ec.sim.ccparticlesystems2" => PS2.state(ctx, &ps2_phys(ctx)),
         _ => return None,
     };
     Some(st.parts.iter().map(|q| crate::psim::SimParticle { p: q.p, v: q.v, age: q.age, life: q.life, rnd: q.rnd, id: q.id }).collect())
 }
 
-/// The simulation cache key of a stepped particle effect: every parameter but CC Particle World's
-/// Effect Camera, which only changes how the particles are seen (animating it doesn't restart
-/// the simulation).
+/// The simulation cache key of a stepped particle effect at a constant Birth Rate (the tests'
+/// reference): every parameter but CC Particle World's Effect Camera.
+#[cfg(test)]
 fn sim_key(ctx: &EffectCtx, salt: u64) -> u64 {
     params_key_except(ctx, &Buf { img: Image::new(0, 0), offset: [0.0; 2], scale: 1.0 }, salt, &[PW_EFFECT_CAMERA])
 }
 
-/// Run a particle system to layer time `t` through `cache`.
+/// Run a particle system at its constant [`Phys::rate`] to layer time `t` through `cache` (the
+/// tests' reference).
+#[cfg(test)]
 pub(crate) fn simulate(cache: &SimCache<PState>, key: u64, t: f64, phys: &Phys) -> std::sync::Arc<PState> {
     cache.run(key, steps_at(t), PState::default, |st, i| phys.step(st, i))
 }
@@ -1265,6 +1293,9 @@ fn particle_sprites(sprites: Vec<Sprite>, mode: u32) -> SpritePlan {
 
 static PS2_CACHE: SimCache<PState> = SimCache::new(6);
 
+/// Particles per second per unit of CC Particle Systems II's Birth Rate.
+const PS2_RATE: f64 = 60.0;
+
 /// CC Particle Systems II's physics.
 fn ps2_phys(ctx: &EffectCtx) -> Phys {
     let pr = ctx.params;
@@ -1273,7 +1304,7 @@ fn ps2_phys(ctx: &EffectCtx) -> Phys {
     let pos = pr.v2("producer/position");
     let dir = (pr.f("physics/direction") as f32).to_radians();
     Phys {
-        rate: pr.f("birthRate").max(0.0) * 60.0,
+        rate: pr.f("birthRate").max(0.0) * PS2_RATE,
         life: pr.f("longevity").max(0.0) as f32,
         producer: [pos[0] as f32 / unit, pos[1] as f32 / unit, 0.0],
         radius: [pr.f("producer/radiusX").max(0.0) as f32 / unit, pr.f("producer/radiusY").max(0.0) as f32 / unit, 0.0],
@@ -1300,9 +1331,7 @@ fn particle_systems2_plan(ctx: &EffectCtx, b: &Buf) -> SpritePlan {
     let pr = ctx.params;
     let lh = ctx.layer_size[1] as f32;
     let unit = lh.max(1.0);
-    let phys = ps2_phys(ctx);
-    let key = sim_key(ctx, 2);
-    let st = accelerated(ctx, key, &phys, None).unwrap_or_else(|| simulate(&PS2_CACHE, key, ctx.time, &phys));
+    let st = PS2.state(ctx, &ps2_phys(ctx));
     let kind = pr.e("particle/particleType");
     let birth = pr.color("particle/birthColor");
     let death = pr.color("particle/deathColor");
@@ -1327,6 +1356,9 @@ fn particle_systems2_plan(ctx: &EffectCtx, b: &Buf) -> SpritePlan {
 
 static MERCURY_CACHE: SimCache<PState> = SimCache::new(6);
 
+/// Blobs per second per unit of CC Mr. Mercury's Birth Rate.
+const MERCURY_RATE: f64 = 10.0;
+
 /// A CC Mr. Mercury blob (buffer px).
 #[derive(Clone, Copy, Debug)]
 pub struct Blob {
@@ -1335,15 +1367,14 @@ pub struct Blob {
     pub r: f32,
 }
 
-/// CC Mr. Mercury's blobs this frame, from its particle simulation (for buffer geometry `b`).
-pub fn mercury_blobs(ctx: &EffectCtx, b: &Buf) -> Vec<Blob> {
+/// CC Mr. Mercury's physics.
+fn mercury_phys(ctx: &EffectCtx) -> Phys {
     let pr = ctx.params;
-    let lh = ctx.layer_size[1] as f32;
-    let unit = lh.max(1.0);
+    let unit = (ctx.layer_size[1] as f32).max(1.0);
     let pos = pr.v2("producer");
     let dir = (pr.f("direction") as f32).to_radians();
-    let phys = Phys {
-        rate: pr.f("birthRate").max(0.0) * 10.0,
+    Phys {
+        rate: pr.f("birthRate").max(0.0) * MERCURY_RATE,
         life: pr.f("longevity").max(0.0) as f32,
         producer: [pos[0] as f32 / unit, pos[1] as f32 / unit, 0.0],
         radius: [pr.f("radiusX").max(0.0) as f32 / unit, pr.f("radiusY").max(0.0) as f32 / unit, 0.0],
@@ -1357,8 +1388,15 @@ pub fn mercury_blobs(ctx: &EffectCtx, b: &Buf) -> Vec<Blob> {
         seed: ctx.seed.wrapping_mul(0xc2b2ae35),
         max: 4_000,
         flat: true,
-    };
-    let st = simulate(&MERCURY_CACHE, params_key(ctx, &Buf { img: Image::new(0, 0), offset: [0.0; 2], scale: 1.0 }, 3), ctx.time, &phys);
+    }
+}
+
+/// CC Mr. Mercury's blobs this frame, from its particle simulation (for buffer geometry `b`).
+pub fn mercury_blobs(ctx: &EffectCtx, b: &Buf) -> Vec<Blob> {
+    let pr = ctx.params;
+    let unit = (ctx.layer_size[1] as f32).max(1.0);
+    let phys = mercury_phys(ctx);
+    let st = MERCURY.state(ctx, &phys);
     let (bs, ds) = (pr.f("blobBirthSize") as f32, pr.f("blobDeathSize") as f32);
     let s = b.scale as f32;
     st.parts
@@ -2185,4 +2223,5 @@ mod tests {
         assert_eq!(st.next_id as usize, births.len());
         assert!(births.iter().all(|&b| f64::from(b) / SPS < 0.5), "nothing born once the ramp reaches 0");
     }
+
 }
