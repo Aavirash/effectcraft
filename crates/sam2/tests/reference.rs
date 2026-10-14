@@ -143,3 +143,33 @@ fn prompt_encoder_and_decoder_match_pytorch() {
     let e = max_abs(&out.sam_tokens, &r.get("mask_decoder.2").unwrap().squeeze(0).unwrap());
     assert!(e < 1e-4, "sam token error {e}");
 }
+
+fn video_fixture_file() -> PathBuf {
+    std::env::var_os("EFFECTCRAFT_SAM2_VIDEO_REF").map_or_else(|| repo().join("plan/sam2-ref/video.safetensors"), PathBuf::from)
+}
+
+/// The weights and the video reference tensors (`tools/sam2_video_reference.py`), or `None`.
+fn load_video() -> Option<(Weights, HashMap<String, Tensor>)> {
+    let (wf, rf) = (weights_file(), video_fixture_file());
+    if !wf.exists() || !rf.exists() {
+        eprintln!("skipped: SAM 2 weights or video reference tensors not found ({} / {})", wf.display(), rf.display());
+        return None;
+    }
+    Some((Weights::open(&wf).unwrap(), candle_core::safetensors::load(&rf, &Device::Cpu).unwrap()))
+}
+
+/// Measured max 3.5e-6 (memory features), 2.6e-5 (memory attention), 2026-10-15.
+const MEMORY_TOL: f32 = 1e-4;
+
+#[test]
+fn memory_encoder_matches_pytorch() {
+    let Some((w, r)) = load_video() else { return };
+    let enc = effectcraft_sam2::memory::MemoryEncoder::load(&w).unwrap();
+    let (feat, pos) = enc.encode(r.get("mem.enc.vision_features").unwrap(), r.get("mem.enc.masks").unwrap()).unwrap();
+    let e = max_abs(&feat, r.get("mem.enc.out_features").unwrap());
+    eprintln!("memory features: max abs error {e:e}");
+    assert!(e < MEMORY_TOL, "memory feature error {e}");
+    let e = max_abs(&pos, r.get("mem.enc.out_pos").unwrap());
+    eprintln!("memory position encoding: max abs error {e:e}");
+    assert!(e < 1e-5, "memory position error {e}");
+}
