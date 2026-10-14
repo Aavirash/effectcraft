@@ -10,6 +10,7 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
+effectcraft-segment = { workspace = true }
 
 # Native only (D1): candle is not built for wasm32, where this crate is empty.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

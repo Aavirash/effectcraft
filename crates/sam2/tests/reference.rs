@@ -301,3 +301,39 @@ fn tracker_rejects_hostile_input_and_honours_cancel() {
     let mut bad = VideoTracker::new(model, Box::new(Bad)).unwrap();
     assert!(matches!(bad.prompt(0, obj, &click), Err(Error::Input(_))));
 }
+
+#[test]
+fn sam2_works_as_a_mask_model() {
+    use effectcraft_segment::{MaskModel, Prompt};
+    let Some((w, _)) = load() else { return };
+    let (fw, fh) = (256usize, 192usize);
+    let mut rgb = vec![[0f32; 3]; fw * fh];
+    let inside = |x: usize, y: usize| ((x as f32 - 120.0).powi(2) + (y as f32 - 96.0).powi(2)).sqrt() < 50.0;
+    for y in 0..fh {
+        for x in 0..fw {
+            let bg = 0.3 + 0.2 * (x as f32 / 9.0).sin() * (y as f32 / 7.0).cos();
+            rgb[y * fw + x] = if inside(x, y) { [0.85 + 0.1 * (x as f32 / 5.0).sin(), 0.4, 0.15] } else { [bg, bg * 0.8 + 0.1, bg * 0.6 + 0.3] };
+        }
+    }
+    let model = effectcraft_sam2::mask::Sam2Mask::new(std::sync::Arc::new(effectcraft_sam2::session::VideoModel::load(&w).unwrap()));
+    let prompt = Prompt { points: vec![([120.0, 96.0], true)], bbox: None, mask: None };
+    let p = model.segment(&rgb, fw, fh, &prompt).unwrap();
+    assert_eq!(p.len(), fw * fh);
+    assert!(p.iter().all(|v| (0.0..=1.0).contains(v)));
+    let (mut i, mut u) = (0usize, 0usize);
+    for y in 0..fh {
+        for x in 0..fw {
+            let (a, b) = (p[y * fw + x] > 0.5, inside(x, y));
+            i += usize::from(a && b);
+            u += usize::from(a || b);
+        }
+    }
+    let j = i as f64 / u as f64;
+    eprintln!("SAM 2 as a MaskModel: disc IoU {j:.3}");
+    assert!(j > 0.9, "IoU {j}");
+    // The same frame again is served from the cached encoding, and bad prompts are errors.
+    let again = model.segment(&rgb, fw, fh, &Prompt { points: vec![([20.0, 20.0], false), ([120.0, 96.0], true)], bbox: None, mask: None }).unwrap();
+    assert_eq!(again.len(), fw * fh);
+    assert!(model.segment(&rgb, fw, fh, &Prompt::default()).is_err());
+    assert!(model.segment(&rgb, fw + 1, fh, &prompt).is_err());
+}

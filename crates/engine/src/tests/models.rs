@@ -71,6 +71,23 @@ fn models_are_listed_chosen_and_verified() {
         s.execute_checked("roto.model.select", json!({"id": "classical"})).unwrap();
         assert!(crate::effects::roto::model_for(&params).is_none());
     }
+    // EFFECTCRAFT_SAM2=path/to/model.safetensors (facebook/sam2.1-hiera-tiny): installed with its
+    // notice, loaded (verified, native only) and used by Roto Brush 3.0, then dropped.
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Ok(path) = std::env::var("EFFECTCRAFT_SAM2") {
+        let r = s.execute_checked("roto.model.install", json!({"path": path})).unwrap();
+        assert_eq!(r["id"], "sam2.1-hiera-tiny");
+        let dir = s.models_dir().unwrap();
+        let notice = std::fs::read_to_string(dir.join("sam2.1-hiera-tiny.safetensors.NOTICE.txt")).unwrap();
+        assert!(notice.contains("Meta AI") && notice.contains("Apache-2.0"), "{notice}");
+        s.execute_checked("roto.model.select", json!({"id": "sam2.1-hiera-tiny"})).unwrap();
+        wait_loaded(&mut s, Task::Mask);
+        assert_eq!(s.models.status(Task::Mask).active.as_deref(), Some("sam2.1-hiera-tiny"));
+        let params = crate::effects::Params { values: [("version".to_string(), effectcraft_keyframe::Value::Enum(2))].into_iter().collect() };
+        assert_eq!(crate::effects::roto::model_for(&params).map(|m| m.info().id), Some("sam2.1-hiera-tiny"));
+        s.execute_checked("roto.model.select", json!({"id": "classical"})).unwrap();
+        assert!(crate::effects::roto::model_for(&params).is_none());
+    }
     // EFFECTCRAFT_FACE_LANDMARKER=path/to/face_landmarker.task: installed with its notice,
     // loaded for face tracking, dropped when the classic tracker is chosen, removed.
     if let Ok(path) = std::env::var("EFFECTCRAFT_FACE_LANDMARKER") {

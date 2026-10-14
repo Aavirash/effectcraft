@@ -202,6 +202,11 @@ impl Session {
 
 fn load_file(path: &Path, id: &str) -> std::result::Result<Loaded, String> {
     let bytes = std::fs::read(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    // SAM 2 runs on candle and is native only; every other model loads through the registry.
+    #[cfg(not(target_arch = "wasm32"))]
+    if id == seg::SAM2_TINY.id {
+        return effectcraft_sam2::mask::load(&bytes).map(|m| Loaded::Mask(m));
+    }
     seg::load(id, &bytes)
 }
 

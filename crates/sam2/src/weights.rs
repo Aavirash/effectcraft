@@ -22,6 +22,12 @@ impl Weights {
         Weights::from_map(map)
     }
 
+    /// Read a checkpoint held in memory (the installed file's bytes, already verified by the caller).
+    pub fn from_bytes(bytes: &[u8]) -> Result<Weights> {
+        let map = candle_core::safetensors::load_buffer(bytes, &Device::Cpu).map_err(|e| Error::Weights(e.to_string()))?;
+        Weights::from_map(map)
+    }
+
     /// Validate an already-loaded set of tensors.
     pub fn from_map(map: HashMap<String, Tensor>) -> Result<Weights> {
         let mut out = HashMap::with_capacity(map.len());
