@@ -314,14 +314,23 @@ impl Layer {
     }
 }
 
+/// Give `layer` its Layer Styles group (Blending Options only, after Transform) when it has none.
+/// Returns the Blending Options group's uid.
+pub fn add_blending_options(layer: &mut Layer, ids: &mut Ids, gl: &GlobalLight) -> Option<u64> {
+    if layer.props.sub(GROUP).is_none() {
+        let g = layer_styles(ids, gl);
+        let at = layer.props.children.iter().position(|c| c.match_id() == "transform").map(|i| i + 1).unwrap_or(layer.props.children.len());
+        layer.props.children.insert(at, g.into());
+    }
+    Some(layer.props.sub(GROUP)?.sub(BLENDING)?.uid)
+}
+
 /// Add style `id` to `layer` (creating the Layer Styles group after Transform when missing).
 /// Returns the style group's uid; an existing style of that kind is kept and returned.
 pub fn add_style(layer: &mut Layer, ids: &mut Ids, id: &str, gl: &GlobalLight, enabled: bool) -> Option<u64> {
     let order = STYLES.iter().position(|s| s.0 == id)?;
     if layer.props.sub(GROUP).is_none() {
-        let g = layer_styles(ids, gl);
-        let at = layer.props.children.iter().position(|c| c.match_id() == "transform").map(|i| i + 1).unwrap_or(layer.props.children.len());
-        layer.props.children.insert(at, g.into());
+        add_blending_options(layer, ids, gl);
     }
     let ls = layer.props.sub_mut(GROUP)?;
     if let Some(g) = ls.sub(id) {
