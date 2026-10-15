@@ -8,7 +8,7 @@ use candle_core::Tensor;
 
 use crate::Result;
 use crate::neck::sine_position;
-use crate::nn::{LayerNorm, apply, gelu, layer_norm, linear};
+use crate::nn::{LayerNorm, apply, apply_gelu, gelu, layer_norm, linear};
 use crate::weights::Weights;
 use candle_nn::Linear;
 
@@ -49,7 +49,7 @@ impl FuserBlock {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let h = norm_channels_first(&self.norm, &self.depthwise.forward(x)?)?;
         let h = h.permute((0, 2, 3, 1))?.contiguous()?;
-        let h = apply(&self.pw2, &gelu(&apply(&self.pw1, &h)?)?)?;
+        let h = apply(&self.pw2, &apply_gelu(&self.pw1, &h)?)?;
         let h = h.broadcast_mul(&self.scale)?.permute((0, 3, 1, 2))?.contiguous()?;
         Ok((x + h)?)
     }

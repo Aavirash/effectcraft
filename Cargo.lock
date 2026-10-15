@@ -1832,10 +1832,13 @@ dependencies = [
 name = "effectcraft-sam2"
 version = "0.18.0"
 dependencies = [
+ "bytemuck",
  "candle-core",
  "candle-nn",
  "effectcraft-segment",
+ "pollster 0.4.0",
  "rayon",
+ "wgpu",
 ]
 
 [[package]]

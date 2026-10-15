@@ -67,15 +67,16 @@ of clicks, and measured confidence collapses with many (0.99 with 1–7 points, 
 ## Speed (this PC: 16 threads, CPU only, release build)
 | Step | Time |
 |---|---|
-| Encode one 1024 × 1024 frame | about **2.4 s** (3.4 s before the speed work: a parallel GELU, cached position encodings, pooling without permutes) |
-| A click on an encoded frame | about 105 ms |
-| Memory attention on a tracked frame (full bank of 7 memory frames) | about **2.4 s** |
-| A tracked frame in all | about **5 s** (the first six have fewer memories) |
+| Encode one 1024 × 1024 frame | about **2.1 s** (3.4 s before the speed work: a parallel GELU, cached position encodings, pooling without permutes, a parallel bias add) |
+| A click on an encoded frame | about 100 ms |
+| Memory attention on a tracked frame (full bank of 7 memory frames) | about **2.3 s** |
+| A tracked frame in all | about **4.6 s** (the first six have fewer memories) |
 
-A 300-frame clip therefore takes on the order of 25 minutes on this CPU. (An earlier version of this page said one encode
+A 300-frame clip therefore takes on the order of 23 minutes on this CPU. (An earlier version of this page said one encode
 per frame; the memory attention is as large as the encode.) What was tried and did not help: chunking the queries of the
-global and memory attention to keep scores in cache. Candle has no AMD/Vulkan backend, so a GPU path is future work (a Burn
-or hand-written wgpu route); `cargo run --release -p effectcraft-sam2 --example sam2_bench` and `--example op_bench` time the
+global and memory attention to keep scores in cache. Candle has no AMD/Vulkan backend, so a GPU path is future work. A spike (`--example gpu_matmul`) measured a plain tiled
+WGSL matmul on the RX 7900 GRE at 1,900–3,600 GFLOPS against 160–470 for candle's CPU matmul on the same shapes (6–13×),
+so hand-written wgpu kernels could bring a tracked frame to a second or less; `cargo run --release -p effectcraft-sam2 --example sam2_bench` and `--example op_bench` time the
 pieces.
 
 ## Benchmark
