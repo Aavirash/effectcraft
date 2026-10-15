@@ -48,10 +48,16 @@ fn at<T: Copy>(v: &[T], i: usize, what: &str) -> Result<T> {
     v.get(i).copied().ok_or_else(|| Error::Weights(format!("Hiera config has no {what} for stage {i}")))
 }
 
-/// Max pool a `[B, H, W, C]` tensor by `stride` (kernel = stride, no padding, floor).
+/// Max pool a `[B, H, W, C]` tensor by `stride` (kernel = stride, no padding, floor), without the
+/// permutes a pooling layer would need: it groups the cells and takes the maximum over each group.
 fn do_pool(x: &Tensor, stride: usize) -> Result<Tensor> {
-    let x = x.permute((0, 3, 1, 2))?.contiguous()?.max_pool2d_with_stride(stride, stride)?;
-    Ok(x.permute((0, 2, 3, 1))?.contiguous()?)
+    let (b, h, w, c) = x.dims4()?;
+    if stride == 0 {
+        return Err(Error::Input("pool stride 0".into()));
+    }
+    let (oh, ow) = (h / stride, w / stride);
+    let x = if oh * stride != h || ow * stride != w { x.narrow(1, 0, oh * stride)?.narrow(2, 0, ow * stride)? } else { x.clone() };
+    Ok(x.contiguous()?.reshape((b, oh, stride, ow, stride, c))?.max(2)?.max(3)?.contiguous()?)
 }
 
 /// Split `[B, H, W, C]` into `[B * nH * nW, ws, ws, C]` windows, zero padding the bottom/right.
@@ -351,6 +357,17 @@ mod tests {
         let back = window_unpartition(&win, 4, pad, (5, 6)).unwrap();
         let d = (back - x).unwrap().abs().unwrap().sum_all().unwrap().to_scalar::<f32>().unwrap();
         assert_eq!(d, 0.0);
+    }
+
+    #[test]
+    fn pooling_equals_a_max_pool_layer_including_odd_sizes() {
+        let x = Tensor::randn(0f32, 1.0, (2, 7, 9, 5), &Device::Cpu).unwrap();
+        let want = x.permute((0, 3, 1, 2)).unwrap().contiguous().unwrap().max_pool2d_with_stride(2, 2).unwrap().permute((0, 2, 3, 1)).unwrap();
+        let got = do_pool(&x, 2).unwrap();
+        assert_eq!(got.dims(), want.dims());
+        let d = (got - want).unwrap().abs().unwrap().sum_all().unwrap().to_scalar::<f32>().unwrap();
+        assert_eq!(d, 0.0);
+        assert!(do_pool(&x, 0).is_err());
     }
 
     #[test]

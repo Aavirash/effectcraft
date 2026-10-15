@@ -46,6 +46,16 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         x = b.forward(&x)?;
         println!("block {i}: {:.0} ms, out {:?}", t.elapsed().as_secs_f64() * 1e3, x.dims());
     }
+    // The rest of the encode: the neck (1x1 convolutions, top-down sums) and its sine position encodings.
+    let stages = hiera.forward(&pixels)?;
+    let t = Instant::now();
+    let _ = model.vision.neck.forward(&stages)?;
+    println!("neck (convolutions + positions): {:.0} ms", t.elapsed().as_secs_f64() * 1e3);
+    let t = Instant::now();
+    for (h, w) in [(32, 32), (64, 64), (128, 128), (256, 256)] {
+        let _ = effectcraft_sam2::neck::sine_position(128, h, w)?;
+    }
+    println!("sine positions for the four levels: {:.0} ms", t.elapsed().as_secs_f64() * 1e3);
     println!("threads: {}", std::thread::available_parallelism().map_or(1, |n| n.get()));
     Ok(())
 }

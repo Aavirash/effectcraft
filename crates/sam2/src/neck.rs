@@ -3,6 +3,9 @@
 // HuggingFace Inc. team) to Rust on candle. See NOTICE.
 //! The feature pyramid neck on top of Hiera, and the vision encoder that joins them.
 
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock, PoisonError};
+
 use candle_core::{Device, Tensor};
 
 use crate::hiera::{Hiera, HieraConfig};
@@ -10,7 +13,23 @@ use crate::weights::Weights;
 use crate::{Error, Result};
 
 /// Sine position encoding `[1, 2 * num_pos_features, h, w]`, normalised (`Sam2SinePositionEmbedding`).
+/// It depends only on the sizes, so each is built once (it was 150 ms of a 2.7 s frame).
 pub fn sine_position(num_pos_features: usize, h: usize, w: usize) -> Result<Tensor> {
+    static CACHE: OnceLock<Mutex<HashMap<(usize, usize, usize), Tensor>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(Default::default);
+    if let Some(t) = cache.lock().unwrap_or_else(PoisonError::into_inner).get(&(num_pos_features, h, w)) {
+        return Ok(t.clone());
+    }
+    let t = build_sine_position(num_pos_features, h, w)?;
+    let mut map = cache.lock().unwrap_or_else(PoisonError::into_inner);
+    if map.len() >= 16 {
+        map.clear();
+    }
+    map.insert((num_pos_features, h, w), t.clone());
+    Ok(t)
+}
+
+fn build_sine_position(num_pos_features: usize, h: usize, w: usize) -> Result<Tensor> {
     let eps = 1e-6f32;
     let scale = 2.0 * std::f32::consts::PI;
     let dim_t: Vec<f32> = (0..num_pos_features).map(|i| 10000f32.powf(2.0 * (i / 2) as f32 / num_pos_features as f32)).collect();

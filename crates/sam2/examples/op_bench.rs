@@ -47,6 +47,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     time("linear 65536x96 -> 384 (mlp in)", || w1.forward(&flat).unwrap());
     let w2 = Linear::new(Tensor::randn(0f32, 0.1, (96, 384), &d)?, Some(Tensor::zeros(96, DType::F32, &d)?));
     time("linear 65536x384 -> 96 (mlp out)", || w2.forward(&big).unwrap());
+    // block 1 (the first stage change): pooling and the wide projections
+    let p1 = Tensor::randn(0f32, 1.0, (1, 192, 256, 256), &d)?;
+    time("max_pool2d 2x2 on 1 x 192 x 256 x 256", || p1.max_pool2d_with_stride(2, 2).unwrap());
+    let p2 = Tensor::randn(0f32, 1.0, (1024, 192, 8, 8), &d)?;
+    time("max_pool2d 2x2 on 1024 x 192 x 8 x 8", || p2.max_pool2d_with_stride(2, 2).unwrap());
+    let nhwc = Tensor::randn(0f32, 1.0, (1, 256, 256, 192), &d)?;
+    time("permute NHWC -> NCHW + contiguous (192ch)", || nhwc.permute((0, 3, 1, 2)).unwrap().contiguous().unwrap());
+    let w3 = Linear::new(Tensor::randn(0f32, 0.1, (192, 96), &d)?, Some(Tensor::zeros(192, DType::F32, &d)?));
+    time("linear 65536x96 -> 192 (block 1 proj)", || w3.forward(&flat).unwrap());
+    time("NHWC 2x2 max via reshape + max(2), max(3)", || nhwc.reshape((1, 128, 2, 128, 2, 192)).unwrap().max(2).unwrap().max(3).unwrap());
+    time("NHWC 2x2 max via two strided maxes of narrowed", || {
+        let a = nhwc.reshape((1, 128, 2, 256, 192)).unwrap();
+        let m = a.narrow(2, 0, 1).unwrap().maximum(&a.narrow(2, 1, 1).unwrap()).unwrap().squeeze(2).unwrap();
+        let b = m.reshape((1, 128, 128, 2, 192)).unwrap();
+        b.narrow(3, 0, 1).unwrap().maximum(&b.narrow(3, 1, 1).unwrap()).unwrap().squeeze(3).unwrap()
+    });
     println!("threads: {}", std::thread::available_parallelism().map_or(1, |n| n.get()));
     Ok(())
 }
