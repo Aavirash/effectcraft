@@ -668,3 +668,41 @@ fn object_matte_mattes_persist_in_the_disk_cache() {
     assert!(om::ensure(&moved, size, 25.0, 0, None, &mut |_| None, &|| false).is_none());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// SAM 2 tracks the clip end to end (needs the real weights: `EFFECTCRAFT_SAM2=path/to/model.safetensors`).
+/// Every frame comes from the tracker with a confidence, the mattes are right, and nothing changes
+/// once the model is deselected.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn sam2_tracks_the_clip_through_roto_propagate() {
+    let Ok(weights) = std::env::var("EFFECTCRAFT_SAM2") else { return };
+    let dir = std::env::temp_dir().join(format!("ec-roto-sam2-{}", std::process::id()));
+    let (mut s, clip, _) = painted(center, "disk-sam2.mov");
+    s.models_dir = Some(dir.join("models"));
+    std::fs::create_dir_all(dir.join("models")).unwrap();
+    s.execute_checked("roto.model.install", json!({"path": weights})).unwrap();
+    s.execute_checked("roto.model.select", json!({"id": "sam2.1-hiera-tiny", "wait": true})).unwrap();
+    assert_eq!(s.models.status(effectcraft_segment::Task::Mask).active.as_deref(), Some("sam2.1-hiera-tiny"));
+    let r = s.execute_checked("roto.propagate", json!({"layer": clip.0, "direction": "both", "wait": true})).unwrap();
+    assert_eq!(r["frames"], 21, "{r}");
+    let mut worst: f64 = 1.0;
+    for f in 0..=20 {
+        let j = iou_at(&mut s, clip, f, center(f));
+        let st = s.execute("roto.status", json!({"layer": clip.0, "frame": f})).unwrap();
+        eprintln!("frame {f}: IoU {j:.3}, {:?}", st["tracker"]["frames"][f.to_string()]);
+        worst = worst.min(j);
+    }
+    assert!(worst > 0.9, "worst IoU over the span with SAM 2: {worst}");
+    let st = s.execute("roto.status", json!({"layer": clip.0, "frame": 12})).unwrap();
+    assert_eq!(st["source"], "tracker", "{st}");
+    let frames = st["tracker"]["frames"].as_object().unwrap();
+    assert_eq!(frames.len(), 21);
+    assert!(frames.values().all(|t| t["occluded"] == false && t["confidence"].as_f64().unwrap() > 0.3), "{frames:?}");
+    assert_eq!(st["tracker"]["model"], "sam2.1-hiera-tiny");
+    // Back to the classic engine: same strokes, its own segmentation, no tracker data.
+    s.execute_checked("roto.model.select", json!({"id": "classical", "wait": true})).unwrap();
+    let st = s.execute("roto.status", json!({"layer": clip.0, "frame": 12})).unwrap();
+    assert_eq!(st["source"], "classical", "{st}");
+    assert_eq!(st["tracker"]["frames"].as_object().unwrap().len(), 0);
+    let _ = std::fs::remove_dir_all(dir);
+}

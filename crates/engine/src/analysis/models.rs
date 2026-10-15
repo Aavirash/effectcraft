@@ -188,6 +188,11 @@ impl Session {
         });
     }
 
+    /// The Roto Brush model in use (`None`: the classic engine).
+    pub fn models_roto_active(&self) -> Option<String> {
+        self.models.status(Task::Mask).active
+    }
+
     /// Finish what the model workers did: a toast, and loading a model that just arrived.
     pub fn poll_models(&mut self) {
         for task in [Task::Mask, Task::Face] {

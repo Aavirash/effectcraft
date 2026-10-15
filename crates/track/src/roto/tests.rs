@@ -579,3 +579,36 @@ fn a_correction_keeps_the_model_prompted_with_what_is_left() {
     let hard = resolve(&refs, StrokeKind::Fg, StrokeKind::Bg, 1.0, w, h);
     assert!(stroke_prompt(&refs, &hard, 1.0, w, h).points.iter().all(|p| !p.1));
 }
+
+#[test]
+fn tracker_prompts_carry_a_handful_of_points() {
+    let st = base_strokes(0);
+    let refs: Vec<&Stroke> = st.iter().collect();
+    let p = tracker_prompt(&refs, 1.0);
+    let (fg, bg) = (p.points.iter().filter(|(_, f)| *f).count(), p.points.iter().filter(|(_, f)| !*f).count());
+    assert!((1..=TRACKER_FG_POINTS).contains(&fg) && (1..=TRACKER_BG_POINTS).contains(&bg), "{fg} fg, {bg} bg");
+    // a long, finely sampled stroke still gives at most the limit, and an empty one gives none
+    let long = Stroke { kind: StrokeKind::Fg, frame: 0, radius: 2.0, points: (0..400).map(|i| [i as f64 * 0.4, 50.0]).collect() };
+    assert!(tracker_prompt(&[&long], 1.0).points.len() <= TRACKER_FG_POINTS);
+    assert!(tracker_prompt(&[], 1.0).points.is_empty());
+}
+
+#[test]
+fn tracked_segmentation_handles_absent_objects_and_bad_maps() {
+    let (img, gt) = frame_at(center(0));
+    let st = base_strokes(0);
+    let refs: Vec<&Stroke> = st.iter().collect();
+    let opts = SegOpts::default();
+    let n = (W * H) as usize;
+    // a good map (the true disk) reproduces it, with the strokes as constraints
+    let soft: Vec<f32> = gt.iter().map(|v| f32::from(*v)).collect();
+    let seg = segment_tracked(&img, &refs, soft, false, &opts, 0.0);
+    assert!(iou(&seg.matte, &gt) > 0.95);
+    // an absent object (no strokes on the frame) is an empty matte, whatever the map says
+    let none = segment_tracked(&img, &[], vec![1.0; n], true, &opts, 0.0);
+    assert_eq!(none.area(), 0);
+    assert_eq!(segment_tracked(&img, &[], vec![0.0; n], false, &opts, 0.0).area(), 0);
+    // a map of the wrong size is ignored: the strokes alone segment the frame
+    let wrong = segment_tracked(&img, &refs, vec![1.0; 3], false, &opts, 0.0);
+    assert!(iou(&wrong.matte, &gt) > 0.95);
+}

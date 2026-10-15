@@ -112,6 +112,10 @@ pub struct RotoProgress {
     pub error: Option<String>,
     /// The job works on an Object Matte (else a Roto Brush & Refine Edge).
     pub object_matte: bool,
+    /// What the model's tracker found, when one followed the object (SAM 2).
+    pub tracked: Option<fx::TrackSummary>,
+    /// Why the tracker was not used, when a tracking model was chosen but the classic engine ran.
+    pub tracker_note: Option<String>,
 }
 
 impl RotoProgress {
@@ -436,6 +440,31 @@ async fn run_work(w: Work, shared: &RotoShared) {
     let model = fx::installed_model();
     let key = if w.object_matte { om::frozen_key(&w.params, w.size, w.fps, model.as_deref()) } else { fx::frozen_key(&w.params, w.size, w.fps) };
     let mut frozen = FrozenCache { key, ..Default::default() };
+    // A tracking model (SAM 2) follows the object through the whole span in one pass; the loop
+    // below then finds every frame cached. Without one (or if it fails) nothing changes: the
+    // classic engine runs frame by frame.
+    if w.task == RotoTask::Propagate && !w.object_matte && chain.has_tracker() {
+        let mut get = |g: i64| src.get(g);
+        let mut report = |n: usize| {
+            let mut s = lock(&shared.state);
+            s.done = n as u64;
+            s.elapsed = t0.elapsed().as_secs_f64();
+            s.fps = if s.elapsed > 0.0 { s.done as f64 / s.elapsed } else { 0.0 };
+            crate::offload::report(s.done, s.total);
+        };
+        let result = chain.track(&mut get, &cancel, &mut report);
+        if cancel() {
+            let mut s = lock(&shared.state);
+            s.cancelled = true;
+            s.finished = true;
+            return;
+        }
+        let mut s = lock(&shared.state);
+        match result {
+            Ok(summary) => s.tracked = summary,
+            Err(e) => s.tracker_note = Some(format!("tracker unavailable, classic engine used: {e}")),
+        }
+    }
     for (k, f) in w.frames.iter().enumerate() {
         if cancel() {
             let mut s = lock(&shared.state);

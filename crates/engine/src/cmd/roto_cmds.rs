@@ -463,6 +463,19 @@ fn status(s: &mut Session, p: &Value) -> Result<Value> {
             }
         }
     }
+    // Where each frame's matte came from, and how far to trust it: frames a tracker followed
+    // report its confidence and whether the object was absent; the rest came from the classic engine.
+    {
+        let size = rt::layer_size(&s.project, &comp, &layer);
+        let chain = fx::Chain::new(&params_static(&g), size, comp.frame_rate.as_f64(), 1.0);
+        let tracked: serde_json::Map<String, Value> = chain
+            .keys
+            .iter()
+            .filter_map(|(f, k)| fx::trust(*k).map(|t| (f.to_string(), json!({"confidence": t.confidence, "occluded": t.occluded}))))
+            .collect();
+        out["tracker"] = json!({"model": s.models_roto_active(), "frames": tracked});
+        out["source"] = json!(if tracked.contains_key(&frame.to_string()) { "tracker" } else { "classical" });
+    }
     let computed = s.roto_computed(cid, lid, uid);
     out["computed"] = json!(computed.iter().filter(|(_, c)| **c).map(|(f, _)| *f).collect::<Vec<_>>());
     Ok(out)

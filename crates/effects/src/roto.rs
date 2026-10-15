@@ -29,7 +29,7 @@ use std::sync::{Arc, Mutex, OnceLock, RwLock, Weak};
 use effectcraft_keyframe::Value;
 use effectcraft_project::ParamUi;
 use effectcraft_raster::Image;
-use effectcraft_segment::MaskModel;
+use effectcraft_segment::{ClipFrame, MaskModel, TrackRequest};
 use effectcraft_track::roto::refine::{self, MatteParams};
 use effectcraft_track::roto::{self as rb, RotoData, SegOpts, rle};
 use rayon::prelude::*;
@@ -298,9 +298,39 @@ fn from_store(key: u64, scale: f64) -> Option<Arc<FrameSeg>> {
     Some(seg)
 }
 
+/// Tracker results live under the chain key mixed with this, so a frame the tracker followed and
+/// one the classic engine computed never share a cache slot.
+const TRACK_SALT: u64 = 0x7472_6163_6b65_7231;
+
+fn tracked_key(key: u64) -> u64 {
+    key.rotate_left(17) ^ TRACK_SALT
+}
+
+/// How far to trust a frame the tracker followed.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FrameTrust {
+    /// 0–1, from the tracker's own object score and mask quality.
+    pub confidence: f32,
+    /// The object is not in this frame (an empty matte).
+    pub occluded: bool,
+}
+
+fn trust_cache() -> &'static Mutex<HashMap<u64, FrameTrust>> {
+    static T: OnceLock<Mutex<HashMap<u64, FrameTrust>>> = OnceLock::new();
+    T.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// The tracker's confidence in the frame with chain key `key`, if the tracker followed it.
+pub fn trust(key: u64) -> Option<FrameTrust> {
+    trust_cache().lock().unwrap_or_else(|e| e.into_inner()).get(&tracked_key(key)).copied()
+}
+
 /// Drop the cached segmentations of these chain keys (every scale).
 pub fn forget(keys: impl IntoIterator<Item = u64>) {
-    let keys: std::collections::HashSet<u64> = keys.into_iter().collect();
+    let mut trusts = trust_cache().lock().unwrap_or_else(|e| e.into_inner());
+    let keys: std::collections::HashSet<u64> = keys.into_iter().flat_map(|k| [k, tracked_key(k)]).collect();
+    trusts.retain(|k, _| !keys.contains(k));
+    drop(trusts);
     let mut c = cache().lock().unwrap_or_else(|e| e.into_inner());
     let gone: Vec<(u64, u64)> = c.map.keys().filter(|k| keys.contains(&k.0)).copied().collect();
     for k in gone {
@@ -313,6 +343,7 @@ pub fn forget(keys: impl IntoIterator<Item = u64>) {
 
 /// Drop every cached segmentation (Edit ▸ Purge).
 pub fn purge() {
+    trust_cache().lock().unwrap_or_else(|e| e.into_inner()).clear();
     let mut c = cache().lock().unwrap_or_else(|e| e.into_inner());
     c.map.clear();
     c.order.clear();
@@ -331,6 +362,16 @@ pub fn layer_grid(buf: &Buf, layer_size: [f64; 2]) -> Image {
         }
     });
     img
+}
+
+/// What a tracking pass found.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackSummary {
+    pub frames: usize,
+    /// Frames where the object was absent.
+    pub occluded: usize,
+    pub min_confidence: f32,
 }
 
 /// Everything needed to compute an instance's segmentations.
@@ -357,11 +398,16 @@ impl Chain {
         let sc = self.opts.scale;
         let lookup = |g: i64| -> Option<Arc<FrameSeg>> {
             let k = *self.keys.get(&g)?;
+            // A frame the tracker followed wins over the classic engine's (memory only: its
+            // confidence is not persisted).
+            if let Some(s) = cached(tracked_key(k), sc) {
+                return Some(s);
+            }
             if let Some(s) = cached(k, sc).or_else(|| from_store(k, sc)) {
                 return Some(s);
             }
             if sc != 1.0 {
-                let full = cached(k, 1.0).or_else(|| from_store(k, 1.0))?;
+                let full = cached(tracked_key(k), 1.0).or_else(|| cached(k, 1.0)).or_else(|| from_store(k, 1.0))?;
                 let s = Arc::new(downscale(&full, sc));
                 store(k, sc, s.clone());
                 return Some(s);
@@ -407,7 +453,8 @@ impl Chain {
                     if pimg.width != img.width || pimg.height != img.height {
                         return None;
                     }
-                    rb::propagate_with(&pimg, p, &img, &strokes, &self.opts, self.refine_radius, self.model.as_deref())
+                    // A tracker is too slow to prompt on every frame (its pass is `track`); the classic flow carries the rest.
+                    rb::propagate_with(&pimg, p, &img, &strokes, &self.opts, self.refine_radius, if self.has_tracker() { None } else { self.model.as_deref() })
                 }
             };
             let seg = Arc::new(seg);
@@ -424,7 +471,64 @@ impl Chain {
 
     /// Whether frame `f` is computed (at full resolution or at `scale`).
     pub fn is_cached(&self, f: i64, scale: f64) -> bool {
-        self.keys.get(&f).is_some_and(|k| cached(*k, 1.0).is_some() || cached(*k, scale).is_some())
+        self.keys.get(&f).is_some_and(|k| [*k, tracked_key(*k)].iter().any(|k| cached(*k, 1.0).is_some() || cached(*k, scale).is_some()))
+    }
+
+    /// Whether the chosen model can follow an object through a clip (SAM 2).
+    pub fn has_tracker(&self) -> bool {
+        self.model.as_ref().is_some_and(|m| m.tracker().is_some())
+    }
+
+    /// Follow the object through the whole span with the model's tracker, from the strokes on
+    /// their frames, and cache every frame's segmentation (under the tracker's keys, with its
+    /// confidence). The strokes stay hard constraints and the edges are refined at full
+    /// resolution; frames the tracker can't give are left to [`Chain::ensure`]'s classic engine.
+    /// `progress` gets the number of frames finished. `Ok(None)`: no tracker, nothing done.
+    pub fn track(
+        &self,
+        frame: &mut dyn FnMut(i64) -> Option<Arc<Image>>,
+        cancel: &dyn Fn() -> bool,
+        progress: &mut dyn FnMut(usize),
+    ) -> Result<Option<TrackSummary>, String> {
+        let Some(tracker) = self.model.as_ref().and_then(|m| m.tracker()) else { return Ok(None) };
+        let (Some(_), true) = (self.data.base, self.data.span[1] >= self.data.span[0]) else { return Err("no base frame".into()) };
+        let prompts: Vec<(i64, effectcraft_segment::Prompt)> = self
+            .data
+            .stroke_frames()
+            .into_iter()
+            .filter(|f| self.data.in_span(*f))
+            .filter_map(|f| {
+                let strokes = self.data.strokes_at(f);
+                let p = rb::tracker_prompt(&strokes, self.opts.scale);
+                p.points.iter().any(|(_, fg)| *fg).then_some((f, p))
+            })
+            .collect();
+        if prompts.is_empty() {
+            return Err("no foreground strokes to follow".into());
+        }
+        let req = TrackRequest { first: self.data.span[0], count: (self.data.span[1] - self.data.span[0] + 1) as usize, prompts };
+        let frame = std::cell::RefCell::new(frame);
+        let mut summary = TrackSummary::default();
+        tracker.track(
+            &req,
+            &mut |g| {
+                let img = (frame.borrow_mut())(g)?;
+                Some(Arc::new(ClipFrame { rgb: rb::rgb_of(&img), w: img.width as usize, h: img.height as usize }))
+            },
+            cancel,
+            &mut |g, t| {
+                let (Some(key), Some(img)) = (self.keys.get(&g).copied(), (frame.borrow_mut())(g)) else { return };
+                let strokes = self.data.strokes_at(g);
+                let seg = rb::segment_tracked(&img, &strokes, t.prob, t.occluded, &self.opts, self.refine_radius);
+                store(tracked_key(key), self.opts.scale, Arc::new(seg));
+                trust_cache().lock().unwrap_or_else(|e| e.into_inner()).insert(tracked_key(key), FrameTrust { confidence: t.confidence, occluded: t.occluded });
+                summary.frames += 1;
+                summary.occluded += usize::from(t.occluded);
+                summary.min_confidence = if summary.frames == 1 { t.confidence } else { summary.min_confidence.min(t.confidence) };
+                progress(summary.frames);
+            },
+        )?;
+        Ok(Some(summary))
     }
 }
 
