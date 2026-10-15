@@ -780,6 +780,11 @@ mod script_font_tests {
     /// A fallback face's glyphs sit on the row font's baseline, in every UI family and at every
     /// interface size. (#1309)
     ///
+    /// `A` stands in for the row's baseline: epaint exposes none, but a capital without a descender
+    /// has its ink bottom on the baseline, so its ink bottom *is* the row's baseline. A glyph with a
+    /// descender (`g`) or a round one with an overshoot (`O`) would quietly stop holding, so keep `A`
+    /// as the Latin half of this pair.
+    ///
     /// Both glyphs of `Aあ` end on the baseline, so their ink bottoms agree up to the difference
     /// between the two outlines themselves - the kana reaches a little below the Latin letter in the
     /// Japanese faces. Without the correction the kana sits 3 pt high at 12 pt (measured), so the
