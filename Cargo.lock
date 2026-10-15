@@ -1836,6 +1836,7 @@ dependencies = [
  "candle-core",
  "candle-nn",
  "effectcraft-segment",
+ "log",
  "pollster 0.4.0",
  "rayon",
  "wgpu",

@@ -592,3 +592,43 @@ fn the_tracker_stops_at_its_budget() {
     let r = t.propagate(0, Direction::Forward, None, &Cancel::new(), &mut |_| {});
     assert!(matches!(r, Err(Error::Budget(_))), "{r:?}");
 }
+
+/// The GPU encoder (wgpu kernels, any vendor) against the CPU path and PyTorch on the same image. The two
+/// float implementations differ by accumulation order and the GPU's erf (1.5e-7), compounded through 12
+/// blocks. Measured (RX 7900 GRE, 2026-10-15): 6.8e-6 against PyTorch, 1.2e-5 against the CPU path.
+const GPU_TOL: f32 = 1e-4;
+
+#[test]
+fn gpu_encoder_matches_the_cpu_path_and_pytorch() {
+    use effectcraft_sam2::gpu::{Gpu, encoder::GpuEncoder};
+    use effectcraft_sam2::model::ImageModel;
+    let Some((w, r)) = load() else { return };
+    let gpu = match Gpu::new() {
+        Ok(g) => std::sync::Arc::new(g),
+        Err(e) => {
+            eprintln!("skipped: {e}");
+            return;
+        }
+    };
+    eprintln!("GPU: {}", gpu.adapter_name());
+    let model = ImageModel::load(&w).unwrap();
+    let pixels = r.get("input.pixel_values").unwrap();
+    let cpu = model.encode(pixels).unwrap();
+    let enc = GpuEncoder::load(gpu, &w, model.vision.hiera.clone()).unwrap();
+    let t = std::time::Instant::now();
+    let got = enc.encode(pixels).unwrap();
+    eprintln!("GPU encode (first run, includes shader compile): {:.0} ms", t.elapsed().as_secs_f64() * 1e3);
+    let t = std::time::Instant::now();
+    let got = (enc.encode(pixels).unwrap(), got).0;
+    eprintln!("GPU encode: {:.0} ms", t.elapsed().as_secs_f64() * 1e3);
+    let low_cpu = cpu.features.features.get(2).unwrap();
+    let e = max_abs(&got.low, low_cpu);
+    eprintln!("low level vs CPU: max abs error {e:e}");
+    assert!(e < GPU_TOL, "low level error {e}");
+    let e = max_abs(&got.low, r.get("vision_encoder.neck.1").unwrap());
+    eprintln!("low level vs PyTorch: max abs error {e:e}");
+    assert!(e < GPU_TOL, "low level vs PyTorch error {e}");
+    let (e0, e1) = (max_abs(&got.high.0, &cpu.high.0), max_abs(&got.high.1, &cpu.high.1));
+    eprintln!("skip features vs CPU: {e0:e} / {e1:e}");
+    assert!(e0 < GPU_TOL && e1 < GPU_TOL, "skip feature errors {e0} / {e1}");
+}

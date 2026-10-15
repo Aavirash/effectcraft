@@ -129,7 +129,7 @@ impl Neck {
 
 /// Hiera plus neck: `Sam2VisionModel`.
 pub struct VisionEncoder {
-    pub hiera: Hiera,
+    pub hiera: std::sync::Arc<Hiera>,
     pub neck: Neck,
     levels: usize,
 }
@@ -144,7 +144,7 @@ pub struct ImageFeatures {
 impl VisionEncoder {
     pub fn load_tiny(w: &Weights) -> Result<VisionEncoder> {
         let cfg = HieraConfig::tiny();
-        Ok(VisionEncoder { hiera: Hiera::load(w, &cfg)?, neck: Neck::load(w, &[768, 384, 192, 96], 256, &[2, 3])?, levels: 3 })
+        Ok(VisionEncoder { hiera: std::sync::Arc::new(Hiera::load(w, &cfg)?), neck: Neck::load(w, &[768, 384, 192, 96], 256, &[2, 3])?, levels: 3 })
     }
 
     pub fn forward(&self, pixels: &Tensor) -> Result<ImageFeatures> {

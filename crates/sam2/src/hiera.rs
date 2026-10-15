@@ -116,6 +116,39 @@ impl Attention {
     }
 }
 
+/// What a block is made of: its widths, heads, window (0: global attention) and query pooling.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct BlockPlan {
+    pub dim: usize,
+    pub dim_out: usize,
+    pub heads: usize,
+    pub window: usize,
+    pub query_stride: Option<usize>,
+}
+
+impl BlockPlan {
+    pub(crate) fn new(cfg: &HieraConfig, stage: usize, block_in_stage: usize, total: usize) -> Result<BlockPlan> {
+        let first = stage > 0 && block_in_stage == 0;
+        let dim = at(&cfg.embed_dims, if first { stage - 1 } else { stage }, "embed dim")?;
+        let dim_out = at(&cfg.embed_dims, stage, "embed dim")?;
+        let window = if first { at(&cfg.windows, stage - 1, "window")? } else { at(&cfg.windows, stage, "window")? };
+        let window = if cfg.global_blocks.contains(&total) { 0 } else { window };
+        let query_stride = (stage > 0 && stage <= cfg.query_pool_stages && block_in_stage == 0).then_some(cfg.query_stride);
+        Ok(BlockPlan { dim, dim_out, heads: at(&cfg.heads, stage, "heads")?, window, query_stride })
+    }
+
+    /// Every block of the backbone, in order.
+    pub(crate) fn all(cfg: &HieraConfig) -> Result<Vec<BlockPlan>> {
+        let mut out = vec![];
+        for (stage, n) in cfg.blocks.iter().enumerate() {
+            for b in 0..*n {
+                out.push(BlockPlan::new(cfg, stage, b, out.len())?);
+            }
+        }
+        Ok(out)
+    }
+}
+
 /// One Hiera block: pre-norm attention (window or global, optionally pooling the queries) and MLP.
 pub struct Block {
     norm1: LayerNorm,
@@ -130,13 +163,8 @@ pub struct Block {
 impl Block {
     fn load(w: &Weights, cfg: &HieraConfig, stage: usize, block_in_stage: usize, total: usize) -> Result<Block> {
         let prefix = format!("vision_encoder.backbone.blocks.{total}");
-        let first = stage > 0 && block_in_stage == 0;
-        let dim = at(&cfg.embed_dims, if first { stage - 1 } else { stage }, "embed dim")?;
-        let dim_out = at(&cfg.embed_dims, stage, "embed dim")?;
-        let window = if first { at(&cfg.windows, stage - 1, "window")? } else { at(&cfg.windows, stage, "window")? };
-        let window = if cfg.global_blocks.contains(&total) { 0 } else { window };
-        let query_stride = (stage > 0 && stage <= cfg.query_pool_stages && block_in_stage == 0).then_some(cfg.query_stride);
-        let heads = at(&cfg.heads, stage, "heads")?;
+        let plan = BlockPlan::new(cfg, stage, block_in_stage, total)?;
+        let (dim, dim_out, heads) = (plan.dim, plan.dim_out, plan.heads);
         Ok(Block {
             norm1: layer_norm(w, &format!("{prefix}.layer_norm1"), dim, cfg.eps)?,
             attn: Attention {
@@ -144,13 +172,13 @@ impl Block {
                 proj: linear(w, &format!("{prefix}.attn.proj"), dim_out, dim_out)?,
                 heads,
                 scale: ((dim_out / heads.max(1)) as f64).powf(-0.5),
-                query_stride,
+                query_stride: plan.query_stride,
             },
             norm2: layer_norm(w, &format!("{prefix}.layer_norm2"), dim_out, cfg.eps)?,
             mlp: Mlp::load(w, &format!("{prefix}.mlp"), dim_out, dim_out * cfg.mlp_ratio)?,
             proj: (dim != dim_out).then(|| linear(w, &format!("{prefix}.proj"), dim, dim_out)).transpose()?,
-            window,
-            query_stride,
+            window: plan.window,
+            query_stride: plan.query_stride,
         })
     }
 
@@ -269,6 +297,10 @@ impl Hiera {
     }
 
     /// Patch embedding of `[B, 3, H, W]` pixels: `[B, H/4, W/4, C]` (before the positional embedding).
+    pub(crate) fn config(&self) -> &HieraConfig {
+        &self.cfg
+    }
+
     pub fn patch_embed(&self, pixels: &Tensor) -> Result<Tensor> {
         let x = pixels.conv2d(&self.patch_w, 3, 4, 1, 1)?;
         let x = x.broadcast_add(&self.patch_b.reshape((1, self.hidden, 1, 1))?)?;
@@ -276,7 +308,7 @@ impl Hiera {
     }
 
     /// Background embedding resized to the grid plus the tiled window embedding, `[1, H, W, C]`.
-    fn pos(&self, h: usize, w: usize) -> Result<Tensor> {
+    pub(crate) fn pos(&self, h: usize, w: usize) -> Result<Tensor> {
         let bg = self.cfg.pos_background;
         let big = bicubic_resize(&self.pos_embed, self.hidden, (bg, bg), (h, w));
         let ws = self.window0.max(1);

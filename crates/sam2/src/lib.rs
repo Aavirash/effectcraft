@@ -12,6 +12,7 @@
 use std::fmt;
 
 pub mod decoder;
+pub mod gpu;
 pub mod hiera;
 pub mod mask;
 pub mod memattn;
