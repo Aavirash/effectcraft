@@ -107,7 +107,7 @@ impl GpuEncoder {
 
     fn norm(&self, x: &Buf, rows: usize, dim: usize, n: &GNorm) -> Result<Buf> {
         let out = self.gpu.zeros(rows * dim)?;
-        self.gpu.layernorm(x, &n.w, &n.b, &out, rows, dim, self.eps)?;
+        self.gpu.layernorm(x, &n.w, &n.b, &out, rows, dim, self.eps, false)?;
         Ok(out)
     }
 
@@ -227,6 +227,7 @@ impl GpuEncoder {
     /// Encode normalised `[1, 3, H, W]` pixels (`H` and `W` multiples of 32).
     pub fn encode(&self, pixels: &Tensor) -> Result<GpuFeatures> {
         let g = &self.gpu;
+        let _turn = g.exclusive();
         let (_, c, ph, pw) = pixels.dims4()?;
         let window0 = self.cfg.windows.first().copied().unwrap_or(8);
         if c != 3 || ph == 0 || pw == 0 || ph % 4 != 0 || pw % 4 != 0 || (ph / 4) % window0 != 0 || (pw / 4) % window0 != 0 {

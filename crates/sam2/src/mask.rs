@@ -79,7 +79,7 @@ impl Sam2Mask {
         {
             return Ok(e.clone());
         }
-        let enc = Arc::new(self.model.image.encode(&preprocess(rgb, w, h)?)?);
+        let enc = Arc::new(self.model.encode(&preprocess(rgb, w, h)?)?);
         *self.last.lock().unwrap_or_else(PoisonError::into_inner) = Some((key, enc.clone()));
         Ok(enc)
     }
@@ -117,6 +117,10 @@ impl MaskModel for Sam2Mask {
         Some(self)
     }
 
+    fn device_name(&self) -> Option<String> {
+        Some(self.model.device_name())
+    }
+
     fn idle_secs(&self) -> Option<f64> {
         Some(self.used.lock().unwrap_or_else(PoisonError::into_inner).elapsed().as_secs_f64())
     }
@@ -129,7 +133,7 @@ pub fn load(bytes: &[u8]) -> std::result::Result<Arc<Sam2Mask>, String> {
         return Err(format!("{}: the file does not match (SHA-256 {got}, expected {})", SAM2_TINY.name, SAM2_TINY.sha256));
     }
     let w = crate::weights::Weights::from_bytes(bytes).map_err(|e| e.to_string())?;
-    let model = VideoModel::load(&w).map_err(|e| e.to_string())?;
+    let model = VideoModel::load_auto(&w).map_err(|e| e.to_string())?;
     Ok(Arc::new(Sam2Mask::new(Arc::new(model))))
 }
 

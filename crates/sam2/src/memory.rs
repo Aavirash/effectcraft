@@ -123,10 +123,16 @@ impl MemoryEncoder {
     /// The memory kept for a frame: the encoder output, plus the occlusion embedding when the
     /// object is absent, rounded through bfloat16 like the reference.
     pub fn memory(&self, features: &Tensor, mask: &Tensor, object_present: bool) -> Result<Memory> {
-        let (x, pos) = self.encode(features, mask)?;
-        let x = if object_present { x } else { x.broadcast_add(&self.occlusion.reshape((1, 64, 1, 1))?)? };
-        let flat = |t: &Tensor| -> Result<Tensor> { Ok(t.flatten_from(2)?.squeeze(0)?.t()?.contiguous()?) };
-        let features = flat(&x)?.to_dtype(candle_core::DType::BF16)?.to_dtype(candle_core::DType::F32)?;
-        Ok(Memory { features, pos: flat(&pos)? })
+        let (x, _) = self.encode(features, mask)?;
+        self.finish(&x.flatten_from(2)?.squeeze(0)?.t()?.contiguous()?, object_present)
+    }
+
+    /// A memory from the encoder's raw tokens `[HW, 64]`: the occlusion embedding when the object is absent,
+    /// rounded through bfloat16, with the position encoding (shared by the CPU and GPU encoders).
+    pub fn finish(&self, tokens: &Tensor, object_present: bool) -> Result<Memory> {
+        let tokens = if object_present { tokens.clone() } else { tokens.broadcast_add(&self.occlusion)? };
+        let features = tokens.to_dtype(candle_core::DType::BF16)?.to_dtype(candle_core::DType::F32)?;
+        let pos = sine_position(32, 64, 64)?;
+        Ok(Memory { features, pos: pos.flatten_from(2)?.squeeze(0)?.t()?.contiguous()? })
     }
 }

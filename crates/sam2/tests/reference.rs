@@ -223,12 +223,17 @@ fn iou(a: &[f32], b: &[f32]) -> f64 {
 const VIDEO_LOGIT_TOL: f32 = 0.02;
 const VIDEO_MIN_IOU: f64 = 0.995;
 
-#[test]
-fn video_tracking_matches_sam2_video_model() {
+fn check_video_tracking(backend: effectcraft_sam2::session::Backend) {
     use effectcraft_sam2::prompt::Prompt;
     use effectcraft_sam2::session::{Cancel, Direction, ObjectId, VideoModel, VideoTracker};
     let Some((w, r)) = load_video() else { return };
-    let model = std::sync::Arc::new(VideoModel::load(&w).unwrap());
+    let model = std::sync::Arc::new(match VideoModel::load_with(&w, backend) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("skipped: {e}");
+            return;
+        }
+    });
     let clip = r.get("clip.pixel_values").unwrap().clone();
     let mut tracker = VideoTracker::new(model, Box::new(Clip(clip))).unwrap();
     let obj = ObjectId(1);
@@ -259,6 +264,19 @@ fn video_tracking_matches_sam2_video_model() {
     for m in &rev {
         check("rev", m);
     }
+}
+
+#[test]
+fn video_tracking_matches_sam2_video_model() {
+    check_video_tracking(effectcraft_sam2::session::Backend::Cpu);
+}
+
+/// The same clip on the GPU: every frame's mask against `Sam2VideoModel`, forwards and backwards. The GPU path
+/// is within 1e-5 of PyTorch stage by stage; through the clip the bfloat16 memories can round the other way
+/// on a few values, so the bound on logits is the video one, and the masks must agree.
+#[test]
+fn video_tracking_on_the_gpu_matches_sam2_video_model() {
+    check_video_tracking(effectcraft_sam2::session::Backend::Gpu);
 }
 
 #[test]
@@ -603,8 +621,8 @@ fn gpu_encoder_matches_the_cpu_path_and_pytorch() {
     use effectcraft_sam2::gpu::{Gpu, encoder::GpuEncoder};
     use effectcraft_sam2::model::ImageModel;
     let Some((w, r)) = load() else { return };
-    let gpu = match Gpu::new() {
-        Ok(g) => std::sync::Arc::new(g),
+    let gpu = match Gpu::shared() {
+        Ok(g) => g,
         Err(e) => {
             eprintln!("skipped: {e}");
             return;
@@ -631,4 +649,106 @@ fn gpu_encoder_matches_the_cpu_path_and_pytorch() {
     let (e0, e1) = (max_abs(&got.high.0, &cpu.high.0), max_abs(&got.high.1, &cpu.high.1));
     eprintln!("skip features vs CPU: {e0:e} / {e1:e}");
     assert!(e0 < GPU_TOL && e1 < GPU_TOL, "skip feature errors {e0} / {e1}");
+}
+
+/// The GPU memory attention against PyTorch (the fixture's frame: one memory frame and four pointer tokens).
+/// Measured on the RX 7900 GRE, 2026-10-15; the CPU path is at 2.6e-5.
+const GPU_ATTN_TOL: f32 = 1e-3;
+
+#[test]
+fn gpu_memory_attention_matches_pytorch() {
+    use effectcraft_sam2::gpu::{Gpu, memattn::GpuMemoryAttention};
+    let Some((w, r)) = load_video() else { return };
+    let gpu = match Gpu::shared() {
+        Ok(g) => g,
+        Err(e) => {
+            eprintln!("skipped: {e}");
+            return;
+        }
+    };
+    let att = GpuMemoryAttention::load(gpu, &w).unwrap();
+    let get = |k: &str| r.get(k).unwrap().squeeze(1).unwrap();
+    let pointers = r.get("mem.attn.num_pointers").unwrap().to_vec1::<f32>().unwrap()[0] as usize;
+    let args = (
+        get("mem.attn.current_vision_features"),
+        get("mem.attn.current_vision_position_embeddings"),
+        get("mem.attn.memory"),
+        get("mem.attn.memory_posision_embeddings"),
+    );
+    let out = att.forward(&args.0, &args.1, &args.2, &args.3, pointers).unwrap();
+    let want = r.get("mem.attn.out").unwrap().squeeze(0).unwrap().squeeze(0).unwrap();
+    let e = max_abs(&out, &want);
+    eprintln!("GPU memory attention vs PyTorch: max abs error {e:e}");
+    assert!(e < GPU_ATTN_TOL, "GPU memory attention error {e}");
+    // a full bank (7 memory frames and 16 pointers of 4 tokens): the same maths on a bigger problem, against the CPU path
+    let cpu = effectcraft_sam2::memattn::MemoryAttention::load(&w).unwrap();
+    let m = 7 * 4096 + 64;
+    let mem = Tensor::randn(0f32, 1.0, (m, 64), &Device::Cpu).unwrap();
+    let mem_pos = Tensor::randn(0f32, 1.0, (m, 64), &Device::Cpu).unwrap();
+    let t = std::time::Instant::now();
+    let big = att.forward(&args.0, &args.1, &mem, &mem_pos, 64).unwrap();
+    eprintln!("GPU memory attention, full bank: {:.0} ms", t.elapsed().as_secs_f64() * 1e3);
+    let want = cpu.forward(&args.0, &args.1, &mem, &mem_pos, 64).unwrap();
+    let e = max_abs(&big, &want);
+    eprintln!("full bank vs CPU: max abs error {e:e}");
+    assert!(e < GPU_ATTN_TOL, "full-bank error {e}");
+    // bad shapes are errors
+    assert!(att.forward(&args.0, &args.1, &mem, &mem_pos, m + 1).is_err());
+    assert!(att.forward(&args.0.narrow(0, 0, 10).unwrap(), &args.1, &mem, &mem_pos, 64).is_err());
+}
+
+/// The GPU can be switched off in the middle of a clip: the CPU takes over, the device name changes, and
+/// the masks still match `Sam2VideoModel` (the memory banks built on the GPU are read by the CPU path).
+#[test]
+fn switching_the_gpu_off_mid_clip_keeps_the_tracking_right() {
+    use effectcraft_sam2::prompt::Prompt;
+    use effectcraft_sam2::session::{Backend, Cancel, Direction, ObjectId, VideoModel, VideoTracker};
+    let Some((w, r)) = load_video() else { return };
+    let Ok(model) = VideoModel::load_with(&w, Backend::Gpu) else {
+        eprintln!("skipped: no GPU");
+        return;
+    };
+    let model = std::sync::Arc::new(model);
+    assert_ne!(model.device_name(), "CPU");
+    let mut t = VideoTracker::new(model.clone(), Box::new(Clip(r.get("clip.pixel_values").unwrap().clone()))).unwrap();
+    t.prompt(2, ObjectId(1), &Prompt { points: vec![([416.0, 512.0], true)], bbox: None }).unwrap();
+    let mut seen = vec![];
+    t.propagate(2, Direction::Forward, Some(1), &Cancel::new(), &mut |m| seen.push(m)).unwrap();
+    model.disable_gpu();
+    assert_eq!(model.device_name(), "CPU");
+    t.propagate(2, Direction::Forward, None, &Cancel::new(), &mut |m| seen.push(m)).unwrap();
+    let last = seen.last().unwrap();
+    assert_eq!(last.frame, 6);
+    let want = r.get("video.fwd.6.pred_masks").unwrap().flatten_all().unwrap().to_vec1::<f32>().unwrap();
+    let j = iou(&last.logits, &want);
+    assert!(j >= VIDEO_MIN_IOU, "frame 6 after the switch: IoU {j}");
+}
+
+/// The GPU memory encoder against the CPU one on the fixture's frame (a mask, the frame's features). The CPU
+/// path matches PyTorch to 3.5e-6; the GPU is held to the same output.
+#[test]
+fn gpu_memory_encoder_matches_the_cpu_one() {
+    use effectcraft_sam2::gpu::{Gpu, memenc::GpuMemoryEncoder};
+    let Some((w, r)) = load_video() else { return };
+    let Ok(gpu) = Gpu::shared() else {
+        eprintln!("skipped: no GPU");
+        return;
+    };
+    let cpu = effectcraft_sam2::memory::MemoryEncoder::load(&w).unwrap();
+    let enc = GpuMemoryEncoder::load(gpu, &w).unwrap();
+    let (features, mask) = (r.get("mem.enc.vision_features").unwrap(), r.get("mem.enc.masks").unwrap());
+    let t = std::time::Instant::now();
+    let got = enc.encode(features, mask).unwrap();
+    eprintln!("GPU memory encoder: {:.0} ms", t.elapsed().as_secs_f64() * 1e3);
+    let want = r.get("mem.enc.out_features").unwrap().flatten_from(2).unwrap().squeeze(0).unwrap().t().unwrap().contiguous().unwrap();
+    let e = max_abs(&got, &want);
+    eprintln!("GPU memory encoder vs PyTorch: max abs error {e:e}");
+    assert!(e < 1e-3, "memory encoder error {e}");
+    // the whole memory (with the occlusion embedding and bfloat16 rounding) equals the CPU one
+    let (a, b) = (cpu.finish(&got, false).unwrap(), cpu.memory(features, mask, false).unwrap());
+    let e = max_abs(&a.features, &b.features);
+    assert!(e < 0.05, "memory features differ by {e} (bfloat16 steps are 2^-8 of the value)");
+    assert_eq!(max_abs(&a.pos, &b.pos), 0.0);
+    // wrong shapes are errors
+    assert!(enc.encode(&features.narrow(1, 0, 8).unwrap(), mask).is_err());
 }

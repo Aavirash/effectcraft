@@ -64,20 +64,28 @@ the CPU.
 SAM 2 is prompted with at most three foreground and three background points per frame: it was trained on a handful
 of clicks, and measured confidence collapses with many (0.99 with 1–7 points, 0.25 with 16, 0.00 with 32).
 
-## Speed (this PC: 16 threads, CPU only, release build)
-| Step | Time |
-|---|---|
-| Encode one 1024 × 1024 frame | about **2.1 s** (3.4 s before the speed work: a parallel GELU, cached position encodings, pooling without permutes, a parallel bias add) |
-| A click on an encoded frame | about 100 ms |
-| Memory attention on a tracked frame (full bank of 7 memory frames) | about **2.3 s** |
-| A tracked frame in all | about **4.6 s** (the first six have fewer memories) |
+## Speed (this PC: AMD RX 7900 GRE and a 16-thread CPU, release build)
+SAM 2 runs on the GPU when there is one (wgpu compute kernels, so AMD, NVIDIA and Intel alike; candle itself has no AMD
+backend) and on the CPU otherwise. The model loads on the GPU automatically; `EFFECTCRAFT_SAM2_DEVICE=cpu` (or `gpu`)
+overrides it. A GPU that fails (no adapter, out of memory, a lost device) makes the CPU take over for the rest of the
+session, and `roto.status` reports `tracker.device` (the GPU's name, or `CPU`).
 
-A 300-frame clip therefore takes on the order of 23 minutes on this CPU. (An earlier version of this page said one encode
-per frame; the memory attention is as large as the encode.) What was tried and did not help: chunking the queries of the
-global and memory attention to keep scores in cache. Candle has no AMD/Vulkan backend, so a GPU path is future work. A spike (`--example gpu_matmul`) measured a plain tiled
-WGSL matmul on the RX 7900 GRE at 1,900–3,600 GFLOPS against 160–470 for candle's CPU matmul on the same shapes (6–13×),
-so hand-written wgpu kernels could bring a tracked frame to a second or less; `cargo run --release -p effectcraft-sam2 --example sam2_bench` and `--example op_bench` time the
-pieces.
+| Step | CPU | GPU |
+|---|---|---|
+| Encode one 1024 × 1024 frame | 2.05 s | **0.24 s** |
+| Memory attention (full bank of 7 memory frames) | 2.3 s | **0.29 s** |
+| Memory encoder | 0.24 s | 0.05 s |
+| Decoder (CPU on both) | 0.11 s | 0.11 s |
+| **A tracked frame in all** | **4.3 s** | **0.7 s** |
+| A click on an encoded frame | 0.10 s | 0.10 s |
+
+A 300-frame clip takes about 21 minutes on the CPU and about 3.5 minutes on this GPU; the decoder, still on the CPU, is the
+next 16 % of a GPU frame. The CPU numbers came down from 3.4 s per encode at the start of the speed
+work (parallel GELU and bias add, cached position encodings, pooling without permutes); chunking the attention queries was
+tried and did not help. The GPU kernels (`crates/sam2/src/gpu`) are tested against CPU definitions and PyTorch: the
+encoder's 64 × 64 level matches PyTorch to 7e-6, the memory attention to 1.8e-5, and a clip tracked on the GPU matches
+`Sam2VideoModel` as the CPU does (worst logit error 0.0032). `cargo run --release -p effectcraft-sam2 --example sam2_bench`
+times the pieces on both devices (`EFFECTCRAFT_SAM2_PROFILE=1` prints a frame's breakdown).
 
 ## Benchmark
 `effectcraft-cli bench --roto [--frames N] [--sam2 model.safetensors] [--mobilesam mobile_sam.pt]` runs synthetic clips

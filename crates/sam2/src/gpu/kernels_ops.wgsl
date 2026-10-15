@@ -29,7 +29,7 @@ fn reduce_max(li: u32) -> f32 {
 }
 
 // ---------------------------------------------------------------- layer norm over the last dimension
-//  words: 0 rows, 1 cols, 2 eps (f32). in0 x, in1 weight, in2 bias, out0 y. One workgroup per row.
+//  words: 0 rows, 1 cols, 2 eps (f32), 3 gelu (1: apply GELU to the result). in0 x, in1 weight, in2 bias, out0 y. One workgroup per row.
 @compute @workgroup_size(64)
 fn layernorm(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nw: vec3<u32>, @builtin(local_invocation_id) li: vec3<u32>) {
     let row = wg.y * nw.x + wg.x;
@@ -44,7 +44,40 @@ fn layernorm(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nw: 
     for (var c = li.x; c < cols; c += 64u) { let d = in0[base + c] - mean; q += d * d; }
     red[li.x] = q;
     let inv = inverseSqrt(reduce_sum(li.x) / f32(cols) + f(2u));
-    for (var c = li.x; c < cols; c += 64u) { out0[base + c] = (in0[base + c] - mean) * inv * in1[c] + in2[c]; }
+    for (var c = li.x; c < cols; c += 64u) {
+        var y = (in0[base + c] - mean) * inv * in1[c] + in2[c];
+        if (u(3u) == 1u) { y = gelu_(y); }
+        out0[base + c] = y;
+    }
+}
+
+// ---------------------------------------------------------------- convolution over channels-last [H, W, Ci]
+//  words: 0 n (output elements), 1 H, 2 W, 3 Ci, 4 Co, 5 Ho, 6 Wo, 7 k, 8 stride, 9 pad, 10 groups.
+//  in0 input, in1 weight [Co, Ci / groups, k, k], in2 bias [Co]; output [Ho, Wo, Co].
+@compute @workgroup_size(256)
+fn conv2d(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nw: vec3<u32>, @builtin(local_invocation_id) li: vec3<u32>) {
+    let i = gid1(wg, nw, li);
+    if (i >= u(0u)) { return; }
+    let H = u(1u); let W = u(2u); let Ci = u(3u); let Co = u(4u); let Wo = u(6u);
+    let k = u(7u); let stride = u(8u); let pad = i32(u(9u)); let groups = u(10u);
+    let co = i % Co; let t = i / Co;
+    let ox = t % Wo; let oy = t / Wo;
+    let cig = Ci / groups;
+    let g0 = co / (Co / groups);
+    var acc = in2[co];
+    for (var c = 0u; c < cig; c++) {
+        let ci = g0 * cig + c;
+        for (var ky = 0u; ky < k; ky++) {
+            let iy = i32(oy * stride + ky) - pad;
+            if (iy < 0 || iy >= i32(H)) { continue; }
+            for (var kx = 0u; kx < k; kx++) {
+                let ix = i32(ox * stride + kx) - pad;
+                if (ix < 0 || ix >= i32(W)) { continue; }
+                acc += in0[(u32(iy) * W + u32(ix)) * Ci + ci] * in1[((co * cig + c) * k + ky) * k + kx];
+            }
+        }
+    }
+    out0[i] = acc;
 }
 
 // ---------------------------------------------------------------- softmax over rows, in place on out0

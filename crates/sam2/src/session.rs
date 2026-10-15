@@ -14,9 +14,14 @@ use candle_core::{DType, Tensor};
 use candle_nn::{Linear, ops::sigmoid};
 
 use crate::decoder::FeedForward;
+use crate::gpu::Gpu;
+use crate::gpu::encoder::GpuEncoder;
+use crate::gpu::memattn::GpuMemoryAttention;
+use crate::gpu::memenc::GpuMemoryEncoder;
 use crate::memattn::MemoryAttention;
 use crate::memory::{Memory, MemoryEncoder};
-use crate::model::ImageModel;
+use crate::model::{Encoded, ImageModel};
+use crate::neck::ImageFeatures;
 use crate::nn::{apply, linear};
 use crate::prompt::{INPUT_SIZE, Prompt};
 use crate::resize::antialias_bilinear;
@@ -79,8 +84,31 @@ pub struct FrameMask {
     pub occluded: bool,
 }
 
+/// Which device runs the heavy parts (the backbone, the neck and the memory attention).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Backend {
+    /// Candle on the CPU: the reference path.
+    Cpu,
+    /// wgpu compute on the GPU (any vendor); an error if there is none.
+    Gpu,
+    /// The GPU when there is a real one and it loads, else the CPU. The environment variable
+    /// `EFFECTCRAFT_SAM2_DEVICE` (`cpu`, `gpu` or `auto`) overrides the choice.
+    Auto,
+}
+
+/// The GPU path: kernels for the backbone and the memory attention. Any failure switches it off for good
+/// and the CPU path takes over.
+struct GpuParts {
+    encoder: GpuEncoder,
+    attention: GpuMemoryAttention,
+    memory_encoder: GpuMemoryEncoder,
+    ok: AtomicBool,
+    adapter: String,
+}
+
 /// The weights of everything the video tracker needs.
 pub struct VideoModel {
+    gpu: Option<GpuParts>,
     pub image: ImageModel,
     memory_encoder: MemoryEncoder,
     memory_attention: MemoryAttention,
@@ -93,9 +121,37 @@ pub struct VideoModel {
 }
 
 impl VideoModel {
+    /// On the CPU: the reference path every test compares against.
     pub fn load(w: &Weights) -> Result<VideoModel> {
+        VideoModel::load_with(w, Backend::Cpu)
+    }
+
+    /// On the GPU when there is one (see [`Backend::Auto`]).
+    pub fn load_auto(w: &Weights) -> Result<VideoModel> {
+        VideoModel::load_with(w, Backend::Auto)
+    }
+
+    pub fn load_with(w: &Weights, backend: Backend) -> Result<VideoModel> {
+        let backend = match (backend, std::env::var("EFFECTCRAFT_SAM2_DEVICE").ok().as_deref()) {
+            (Backend::Auto, Some("cpu")) => Backend::Cpu,
+            (Backend::Auto, Some("gpu")) => Backend::Gpu,
+            (b, _) => b,
+        };
+        let image = ImageModel::load(w)?;
+        let gpu = match backend {
+            Backend::Cpu => None,
+            Backend::Gpu => Some(Self::load_gpu(w, &image)?),
+            Backend::Auto => match Self::load_gpu(w, &image) {
+                Ok(g) => Some(g),
+                Err(e) => {
+                    log::info!("SAM 2 runs on the CPU: {e}");
+                    None
+                }
+            },
+        };
         Ok(VideoModel {
-            image: ImageModel::load(w)?,
+            gpu,
+            image,
             memory_encoder: MemoryEncoder::load(w)?,
             memory_attention: MemoryAttention::load(w)?,
             temporal_pos: w.get("memory_temporal_positional_encoding", &[MEMORY_FRAMES, 1, 1, 64])?.flatten_all()?.to_vec1::<f32>()?,
@@ -104,6 +160,79 @@ impl VideoModel {
             pointer_time_proj: linear(w, "temporal_positional_encoding_projection_layer", 256, 64)?,
             mask_down: (w.get("mask_downsample.weight", &[1, 1, 4, 4])?, w.get("mask_downsample.bias", &[1])?),
         })
+    }
+
+    fn load_gpu(w: &Weights, image: &ImageModel) -> Result<GpuParts> {
+        let gpu = Gpu::shared()?;
+        Ok(GpuParts {
+            encoder: GpuEncoder::load(gpu.clone(), w, image.vision.hiera.clone())?,
+            attention: GpuMemoryAttention::load(gpu.clone(), w)?,
+            memory_encoder: GpuMemoryEncoder::load(gpu.clone(), w)?,
+            ok: AtomicBool::new(true),
+            adapter: gpu.adapter_name().to_string(),
+        })
+    }
+
+    /// The device the heavy parts run on now: the GPU's name, or "CPU".
+    pub fn device_name(&self) -> String {
+        match &self.gpu {
+            Some(g) if g.ok.load(Ordering::Relaxed) => g.adapter.clone(),
+            _ => "CPU".to_string(),
+        }
+    }
+
+    /// Run on the CPU from now on (a GPU that misbehaves, or the user's choice). Weights and results are
+    /// unchanged; only the device differs.
+    pub fn disable_gpu(&self) {
+        if let Some(g) = &self.gpu {
+            g.ok.store(false, Ordering::Relaxed);
+        }
+    }
+
+    fn gpu_failed(&self, what: &str, e: &Error) {
+        if let Some(g) = &self.gpu
+            && g.ok.swap(false, Ordering::Relaxed)
+        {
+            log::warn!("SAM 2 {what} failed on the GPU ({e}); the CPU takes over");
+        }
+    }
+
+    /// Encode a normalised `[1, 3, 1024, 1024]` frame on the GPU if it is working, else on the CPU.
+    pub fn encode(&self, pixels: &Tensor) -> Result<Encoded> {
+        if let Some(g) = self.gpu.as_ref().filter(|g| g.ok.load(Ordering::Relaxed)) {
+            match g.encoder.encode(pixels) {
+                Ok(f) => {
+                    let none = || Tensor::zeros((1, 0, 0, 0), DType::F32, &candle_core::Device::Cpu);
+                    let pos = crate::neck::sine_position(128, GRID, GRID)?;
+                    let features = ImageFeatures { features: vec![none()?, none()?, f.low], positions: vec![none()?, none()?, pos] };
+                    return Ok(Encoded { features, high: f.high });
+                }
+                Err(e) => self.gpu_failed("encoding", &e),
+            }
+        }
+        self.image.encode(pixels)
+    }
+
+    /// The memory of a frame (its features and the scaled mask), on the GPU if it is working, else on the CPU.
+    fn memorize(&self, features: &Tensor, mask: &Tensor, present: bool) -> Result<Memory> {
+        if let Some(g) = self.gpu.as_ref().filter(|g| g.ok.load(Ordering::Relaxed)) {
+            match g.memory_encoder.encode(features, mask).and_then(|t| self.memory_encoder.finish(&t, present)) {
+                Ok(m) => return Ok(m),
+                Err(e) => self.gpu_failed("memory encoding", &e),
+            }
+        }
+        self.memory_encoder.memory(features, mask, present)
+    }
+
+    /// Memory attention on the GPU if it is working, else on the CPU.
+    fn attend(&self, current: &Tensor, current_pos: &Tensor, memory: &Tensor, memory_pos: &Tensor, pointers: usize) -> Result<Tensor> {
+        if let Some(g) = self.gpu.as_ref().filter(|g| g.ok.load(Ordering::Relaxed)) {
+            match g.attention.forward(current, current_pos, memory, memory_pos, pointers) {
+                Ok(t) => return Ok(t),
+                Err(e) => self.gpu_failed("memory attention", &e),
+            }
+        }
+        self.memory_attention.forward(current, current_pos, memory, memory_pos, pointers)
     }
 
     pub fn open(path: &Path) -> Result<VideoModel> {
@@ -221,7 +350,7 @@ impl<'a> VideoTracker<'a> {
             return Ok(f.clone());
         }
         let pixels = self.frames.frame(frame)?;
-        let enc = self.model.image.encode(&pixels)?;
+        let enc = self.model.encode(&pixels)?;
         let (low, pos) = match (enc.features.features.get(2), enc.features.positions.get(2)) {
             (Some(l), Some(p)) => (l.clone(), p.clone()),
             _ => return Err(Error::Compute("vision encoder returned too few levels".into())),
@@ -295,7 +424,17 @@ impl<'a> VideoTracker<'a> {
 
     /// Run the model on one frame for one object and store the result.
     fn step(&mut self, id: ObjectId, frame: usize, prompt: Option<&Prompt>, reverse: bool, conditioning: bool) -> Result<FrameMask> {
+        // EFFECTCRAFT_SAM2_PROFILE=1 prints where a frame's time goes (stderr).
+        let profile = std::env::var_os("EFFECTCRAFT_SAM2_PROFILE").is_some();
+        let mut lap = std::time::Instant::now();
+        let mut mark = |what: &str| {
+            if profile {
+                eprintln!("sam2 frame {frame}: {what} {:.0} ms", lap.elapsed().as_secs_f64() * 1e3);
+            }
+            lap = std::time::Instant::now();
+        };
         let feats = self.features(frame)?;
+        mark("encode");
         let model = self.model.clone();
         let tokens = |t: &Tensor| -> Result<Tensor> { Ok(t.flatten_from(2)?.squeeze(0)?.t()?.contiguous()?) };
         let conditioned = if conditioning {
@@ -303,9 +442,10 @@ impl<'a> VideoTracker<'a> {
         } else {
             let obj = self.objects.get(&id).ok_or_else(|| Error::Input("unknown object".into()))?;
             let (mem, mem_pos, n_ptr) = self.memory_bank(obj, frame, reverse)?;
-            let out = model.memory_attention.forward(&tokens(&feats.low)?, &tokens(&feats.pos)?, &mem, &mem_pos, n_ptr)?;
+            let out = model.attend(&tokens(&feats.low)?, &tokens(&feats.pos)?, &mem, &mem_pos, n_ptr)?;
             out.t()?.contiguous()?.reshape((1, 256, GRID, GRID))?
         };
+        mark("memory attention");
         let num_points = prompt.map_or(0, |p| p.points.len() + 2 * usize::from(p.bbox.is_some()));
         let multimask = num_points <= 1;
         let sparse = match prompt {
@@ -315,6 +455,7 @@ impl<'a> VideoTracker<'a> {
         let dense = model.image.prompt.dense_empty()?;
         let out = model.image.decode_embedded(&conditioned, &feats.high, &sparse, &dense, multimask)?;
 
+        mark("decoder");
         let score = scalar(&out.object_score)?;
         let present = score > 0.0;
         let ious = out.iou.flatten_all()?.to_vec1::<f32>()?;
@@ -327,7 +468,9 @@ impl<'a> VideoTracker<'a> {
         let high = low.upsample_bilinear2d(INPUT_SIZE, INPUT_SIZE, false)?;
         let for_memory = if prompt.is_some() { high.gt(0f32)?.to_dtype(DType::F32)? } else { sigmoid(&high)? };
         let for_memory = ((for_memory * 20.0)? - 10.0)?;
-        let memory = model.memory_encoder.memory(&feats.low, &for_memory, present)?;
+        mark("upsample and mask");
+        let memory = model.memorize(&feats.low, &for_memory, present)?;
+        mark("memory encoder");
 
         let iou = ious.get(best).copied().unwrap_or(0.0);
         let result = FrameMask { frame, object: id, logits: low.flatten_all()?.to_vec1::<f32>()?, iou, object_score: score, occluded: !present };
@@ -414,7 +557,7 @@ impl<'a> VideoTracker<'a> {
         let decoder_present = scalar(&out.object_score)? > 0.0;
         let pointer = if decoder_present { model.pointer_proj.forward(&token)? } else { model.no_object_pointer.clone() };
         let pointer = if present { pointer } else { model.no_object_pointer.clone() };
-        let memory = model.memory_encoder.memory(&feats.low, &high, present)?;
+        let memory = model.memorize(&feats.low, &high, present)?;
         let score = if present { 10.0 } else { -10.0 };
         let result = FrameMask { frame, object: id, logits: low, iou: 1.0, object_score: score, occluded: !present };
         let state = self.objects.entry(id).or_default();

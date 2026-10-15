@@ -18,7 +18,7 @@ const LAYERS: usize = 4;
 pub const GRID: usize = 64;
 
 /// `cos` and `sin` of the axial rotary encoding for the `GRID x GRID` grid, each `[GRID², 256]`.
-fn rope_tables(theta: f32) -> Result<(Tensor, Tensor)> {
+pub(crate) fn rope_tables(theta: f32) -> Result<(Tensor, Tensor)> {
     let freqs = DIM / 2 / 2; // per axis: head_dim / 4
     let inv: Vec<f32> = (0..freqs).map(|i| 1.0 / theta.powf(i as f32 / freqs as f32)).collect();
     let n = GRID * GRID;

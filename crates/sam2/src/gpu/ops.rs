@@ -27,12 +27,18 @@ fn need(buf: &Buf, len: usize, what: &str) -> Result<()> {
 
 impl Gpu {
     /// `y = layer_norm(x) * weight + bias` over the last dimension of a `[rows, cols]` buffer.
-    pub fn layernorm(&self, x: &Buf, weight: &Buf, bias: &Buf, y: &Buf, rows: usize, cols: usize, eps: f32) -> Result<()> {
+    #[allow(clippy::too_many_arguments)]
+    pub fn layernorm(&self, x: &Buf, weight: &Buf, bias: &Buf, y: &Buf, rows: usize, cols: usize, eps: f32, gelu: bool) -> Result<()> {
         need(x, rows * cols, "layernorm x")?;
         need(y, rows * cols, "layernorm y")?;
         need(weight, cols, "layernorm weight")?;
         need(bias, cols, "layernorm bias")?;
-        self.run("layernorm", &[(0, x), (1, weight), (2, bias), (3, y)], &[n32(rows, "rows")?, n32(cols, "cols")?, eps.to_bits()], grid(rows)?);
+        self.run(
+            "layernorm",
+            &[(0, x), (1, weight), (2, bias), (3, y)],
+            &[n32(rows, "rows")?, n32(cols, "cols")?, eps.to_bits(), u32::from(gelu)],
+            grid(rows)?,
+        );
         Ok(())
     }
 
@@ -40,6 +46,52 @@ impl Gpu {
     pub fn softmax(&self, x: &Buf, rows: usize, cols: usize) -> Result<()> {
         need(x, rows * cols, "softmax")?;
         self.run("softmax", &[(3, x)], &[n32(rows, "rows")?, n32(cols, "cols")?], grid(rows)?);
+        Ok(())
+    }
+
+    /// A convolution over channels-last `[h, w, ci]` with weight `[co, ci / groups, k, k]` and bias `[co]`,
+    /// output `[ho, wo, co]` (`groups == ci == co` is depthwise).
+    #[allow(clippy::too_many_arguments)]
+    pub fn conv2d(
+        &self,
+        x: &Buf,
+        weight: &Buf,
+        bias: &Buf,
+        out: &Buf,
+        dims: (usize, usize, usize, usize),
+        k: usize,
+        stride: usize,
+        pad: usize,
+        groups: usize,
+    ) -> Result<()> {
+        let (h, w, ci, co) = dims;
+        if k == 0 || stride == 0 || groups == 0 || ci % groups != 0 || co % groups != 0 || h + 2 * pad < k || w + 2 * pad < k {
+            return Err(Error::Input(format!("a {k}x{k} convolution (stride {stride}, groups {groups}) does not fit {w}x{h}x{ci} -> {co}")));
+        }
+        let (ho, wo) = ((h + 2 * pad - k) / stride + 1, (w + 2 * pad - k) / stride + 1);
+        need(x, h * w * ci, "conv2d input")?;
+        need(weight, co * (ci / groups) * k * k, "conv2d weight")?;
+        need(bias, co, "conv2d bias")?;
+        need(out, ho * wo * co, "conv2d output")?;
+        let n = ho * wo * co;
+        self.run(
+            "conv2d",
+            &[(0, x), (1, weight), (2, bias), (3, out)],
+            &[
+                n32(n, "n")?,
+                n32(h, "h")?,
+                n32(w, "w")?,
+                n32(ci, "ci")?,
+                n32(co, "co")?,
+                n32(ho, "ho")?,
+                n32(wo, "wo")?,
+                n32(k, "k")?,
+                n32(stride, "stride")?,
+                n32(pad, "pad")?,
+                n32(groups, "groups")?,
+            ],
+            items(n)?,
+        );
         Ok(())
     }
 

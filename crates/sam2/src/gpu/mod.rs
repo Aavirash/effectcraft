@@ -72,6 +72,7 @@ pub struct Gpu {
     module: wgpu::ShaderModule,
     pipelines: Mutex<HashMap<&'static str, Arc<wgpu::ComputePipeline>>>,
     encoder: Mutex<Option<wgpu::CommandEncoder>>,
+    turn: Mutex<()>,
     error: Arc<Mutex<Option<String>>>,
     adapter: String,
 }
@@ -89,8 +90,16 @@ fn u32_of(v: usize, what: &str) -> Result<u32> {
 }
 
 impl Gpu {
+    /// The process's one GPU device, created on first use. Several devices at once upset some Vulkan loaders
+    /// (a crash when two threads create or drop them together), and one is all SAM 2 needs: models come and go,
+    /// the device stays. An error (no GPU) is remembered too.
+    pub fn shared() -> Result<Arc<Gpu>> {
+        static DEVICE: std::sync::OnceLock<std::result::Result<Arc<Gpu>, String>> = std::sync::OnceLock::new();
+        DEVICE.get_or_init(|| Gpu::new().map(Arc::new).map_err(|e| e.to_string())).clone().map_err(Error::Compute)
+    }
+
     /// A device on the best real GPU (a software adapter is refused: the CPU path is faster).
-    pub fn new() -> Result<Gpu> {
+    fn new() -> Result<Gpu> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let adapter = pollster::block_on(
             instance.request_adapter(&wgpu::RequestAdapterOptions { power_preference: wgpu::PowerPreference::HighPerformance, ..Default::default() }),
@@ -117,7 +126,13 @@ impl Gpu {
             sink.lock().unwrap_or_else(PoisonError::into_inner).get_or_insert_with(|| format!("GPU device lost ({reason:?}): {message}"));
         });
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("sam2 kernels"), source: wgpu::ShaderSource::Wgsl(SHADER.into()) });
-        Ok(Gpu { device, queue, module, pipelines: Mutex::default(), encoder: Mutex::new(None), error, adapter: info.name })
+        Ok(Gpu { device, queue, module, pipelines: Mutex::default(), encoder: Mutex::new(None), turn: Mutex::new(()), error, adapter: info.name })
+    }
+
+    /// One GPU pass at a time: a caller holds this while it queues, flushes and reads back a whole job, so
+    /// two threads never interleave their dispatches in one command stream.
+    pub fn exclusive(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.turn.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     pub fn adapter_name(&self) -> &str {
@@ -304,6 +319,8 @@ impl Gpu {
 }
 
 pub mod encoder;
+pub mod memattn;
+pub mod memenc;
 mod ops;
 
 /// A linear layer's weight `[out, in]` and bias `[out]` on the GPU.
@@ -333,6 +350,24 @@ impl GLinear {
             inp,
             out,
         })
+    }
+
+    /// As [`GLinear::load`], with output channel `j` scaled by `scale[j]` (the memory fuser's layer scale).
+    pub fn load_scaled(g: &Gpu, w: &crate::weights::Weights, name: &str, inp: usize, out: usize, scale: &[f32]) -> Result<GLinear> {
+        if scale.len() != out {
+            return Err(Error::Weights(format!("`{name}`: {} scales for {out} outputs", scale.len())));
+        }
+        let mut wt = flat(w.get(&format!("{name}.weight"), &[out, inp])?)?;
+        let mut bias = flat(w.get(&format!("{name}.bias"), &[out])?)?;
+        for (j, s) in scale.iter().enumerate() {
+            if let Some(row) = wt.get_mut(j * inp..(j + 1) * inp) {
+                row.iter_mut().for_each(|v| *v *= s);
+            }
+            if let Some(b) = bias.get_mut(j) {
+                *b *= s;
+            }
+        }
+        Ok(GLinear { w: g.upload(&wt), b: g.upload(&bias), inp, out })
     }
 
     /// A 1 x 1 convolution (`[out, in, 1, 1]`) as a linear layer over channels-last tokens.

@@ -478,7 +478,7 @@ fn status(s: &mut Session, p: &Value) -> Result<Value> {
             .keys()
             .filter_map(|f| chain.trust_at(*f).map(|t| (f.to_string(), json!({"confidence": t.confidence, "occluded": t.occluded}))))
             .collect();
-        out["tracker"] = json!({"model": s.models_roto_active(), "saved": chain.saved_model(), "frames": tracked});
+        out["tracker"] = json!({"model": s.models_roto_active(), "device": fx::installed_model().and_then(|m| m.device_name()), "saved": chain.saved_model(), "frames": tracked});
         let notice = s.roto_model_notice(s.uses_roto_model(cid, lid, uid)).or_else(|| s.saved_tracking_notice(chain.saved_model()));
         out["notice"] = json!(notice);
         out["source"] = json!(if tracked.contains_key(&frame.to_string()) {

@@ -70,6 +70,57 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         let _ = attn.forward(&cur, &cur_pos, &mem, &mem_pos, 64)?;
         println!("memory attention (run {run}, {m} memory tokens): {:.0} ms", t.elapsed().as_secs_f64() * 1e3);
     }
+    // The same two costs on the GPU (wgpu kernels), when there is one.
+    match effectcraft_sam2::gpu::Gpu::shared() {
+        Ok(gpu) => {
+            println!("GPU: {}", gpu.adapter_name());
+            let enc = effectcraft_sam2::gpu::encoder::GpuEncoder::load(gpu.clone(), &weights, model.vision.hiera.clone())?;
+            let gattn = effectcraft_sam2::gpu::memattn::GpuMemoryAttention::load(gpu, &weights)?;
+            for run in 0..3 {
+                let t = Instant::now();
+                let _ = enc.encode(&pixels)?;
+                let encode = t.elapsed().as_secs_f64() * 1e3;
+                let t = Instant::now();
+                let _ = gattn.forward(&cur, &cur_pos, &mem, &mem_pos, 64)?;
+                println!("GPU run {run}: encode {encode:.0} ms, memory attention (full bank) {:.0} ms", t.elapsed().as_secs_f64() * 1e3);
+            }
+        }
+        Err(e) => println!("no GPU: {e}"),
+    }
+    // A whole tracked frame (encode, memory attention, decode, memory encoding) through the video session, on each backend.
+    struct Same(Tensor);
+    impl effectcraft_sam2::session::FrameSource for Same {
+        fn num_frames(&self) -> usize {
+            12
+        }
+        fn frame(&self, _i: usize) -> effectcraft_sam2::Result<Tensor> {
+            Ok(self.0.clone())
+        }
+    }
+    for backend in [effectcraft_sam2::session::Backend::Cpu, effectcraft_sam2::session::Backend::Gpu] {
+        let Ok(vm) = effectcraft_sam2::session::VideoModel::load_with(&weights, backend) else { continue };
+        let vm = std::sync::Arc::new(vm);
+        let mut tracker = effectcraft_sam2::session::VideoTracker::new(vm.clone(), Box::new(Same(pixels.clone())))?;
+        let obj = effectcraft_sam2::session::ObjectId(1);
+        let t = Instant::now();
+        tracker.prompt(0, obj, &Prompt { points: vec![([512.0, 512.0], true)], bbox: None })?;
+        println!("{:?} ({}): prompt frame {:.0} ms", backend, vm.device_name(), t.elapsed().as_secs_f64() * 1e3);
+        let mut last = Instant::now();
+        let mut times = vec![];
+        tracker.propagate(0, effectcraft_sam2::session::Direction::Forward, None, &effectcraft_sam2::session::Cancel::new(), &mut |m| {
+            if m.frame > 0 {
+                times.push(last.elapsed().as_secs_f64() * 1e3);
+            }
+            last = Instant::now();
+        })?;
+        println!(
+            "{:?}: tracked frames {:.0} ms each (first {:.0}, last {:.0})",
+            backend,
+            times.iter().sum::<f64>() / times.len().max(1) as f64,
+            times.first().copied().unwrap_or(0.0),
+            times.last().copied().unwrap_or(0.0)
+        );
+    }
     println!("threads: {}", std::thread::available_parallelism().map_or(1, |n| n.get()));
     Ok(())
 }

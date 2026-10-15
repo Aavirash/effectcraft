@@ -6,27 +6,25 @@ use super::*;
 
 /// The one device the tests share (several devices at once upset the Vulkan loader), held for the whole
 /// test so the tests take turns.
-pub(crate) struct Shared(#[allow(dead_code)] std::sync::MutexGuard<'static, ()>, &'static Gpu);
+pub(crate) struct Shared(#[allow(dead_code)] std::sync::MutexGuard<'static, ()>, Arc<Gpu>);
 
 impl std::ops::Deref for Shared {
     type Target = Gpu;
     fn deref(&self) -> &Gpu {
-        self.1
+        &self.1
     }
 }
 
 pub(crate) fn gpu() -> Option<Shared> {
     static TURN: Mutex<()> = Mutex::new(());
-    static DEVICE: std::sync::OnceLock<Option<Gpu>> = std::sync::OnceLock::new();
     let guard = TURN.lock().unwrap_or_else(PoisonError::into_inner);
-    let device = DEVICE.get_or_init(|| match Gpu::new() {
-        Ok(g) => Some(g),
+    match Gpu::shared() {
+        Ok(g) => Some(Shared(guard, g)),
         Err(e) => {
             eprintln!("skipped: {e}");
             None
         }
-    });
-    device.as_ref().map(|g| Shared(guard, g))
+    }
 }
 
 /// Deterministic pseudo-random values in -1..1.
@@ -176,7 +174,7 @@ fn layernorm_and_softmax_match_the_definition() {
         let x = noise(rows * cols, 7);
         let (w, b) = (noise(cols, 8), noise(cols, 9));
         let (gx, gw, gb, gy) = (g.upload(&x), g.upload(&w), g.upload(&b), g.zeros(rows * cols).unwrap());
-        g.layernorm(&gx, &gw, &gb, &gy, rows, cols, 1e-6).unwrap();
+        g.layernorm(&gx, &gw, &gb, &gy, rows, cols, 1e-6, false).unwrap();
         let want: Vec<f32> = x
             .chunks(cols)
             .flat_map(|r| {
@@ -298,4 +296,51 @@ fn patch_embed_rope_and_upsample_match_the_cpu_definitions() {
     g.upsample_add(&gl, &gp2, &go, h, w, c).unwrap();
     let want: Vec<f32> = (0..h * w * c).map(|i| lat[i] + prev[((i / c / w / 2) * (w / 2) + (i / c % w) / 2) * c + i % c]).collect();
     assert_close(&run_and_read(&g, &go), &want, 0.0, "upsample_add");
+}
+
+#[test]
+fn convolutions_and_the_layernorm_gelu_epilogue_match_candle() {
+    use candle_core::{Device, Tensor};
+    let Some(g) = gpu() else { return };
+    // (h, w, ci, co, k, stride, pad, groups): a strided 3 x 3, a depthwise 7 x 7, and a 1-channel input
+    for (h, w, ci, co, k, stride, pad, groups) in
+        [(9usize, 13usize, 3usize, 5usize, 3usize, 2usize, 1usize, 1usize), (10, 10, 4, 4, 7, 1, 3, 4), (16, 16, 1, 4, 3, 2, 1, 1)]
+    {
+        let (x, wt, b) = (noise(h * w * ci, 30), noise(co * (ci / groups) * k * k, 31), noise(co, 32));
+        let (gx, gw, gb) = (g.upload(&x), g.upload(&wt), g.upload(&b));
+        let (ho, wo) = ((h + 2 * pad - k) / stride + 1, (w + 2 * pad - k) / stride + 1);
+        let out = g.zeros(ho * wo * co).unwrap();
+        g.conv2d(&gx, &gw, &gb, &out, (h, w, ci, co), k, stride, pad, groups).unwrap();
+        // candle works on NCHW: bring the channels-last input over, convolve, bring the result back
+        let t = Tensor::from_vec(x, (1, h, w, ci), &Device::Cpu).unwrap().permute((0, 3, 1, 2)).unwrap().contiguous().unwrap();
+        let kern = Tensor::from_vec(wt, (co, ci / groups, k, k), &Device::Cpu).unwrap();
+        let want = t
+            .conv2d(&kern, pad, stride, 1, groups)
+            .unwrap()
+            .broadcast_add(&Tensor::from_vec(b, (1, co, 1, 1), &Device::Cpu).unwrap())
+            .unwrap()
+            .permute((0, 2, 3, 1))
+            .unwrap();
+        assert_close(
+            &run_and_read(&g, &out),
+            &want.flatten_all().unwrap().to_vec1::<f32>().unwrap(),
+            2e-4,
+            &format!("conv {k}x{k} stride {stride} groups {groups}"),
+        );
+    }
+    assert!(g.conv2d(&g.upload(&[0.0; 4]), &g.upload(&[0.0; 4]), &g.upload(&[0.0; 1]), &g.zeros(4).unwrap(), (2, 2, 1, 1), 5, 1, 0, 1).is_err());
+    // layer norm followed by GELU in the same pass
+    let (rows, cols) = (50usize, 96usize);
+    let (x, wt, b) = (noise(rows * cols, 33), noise(cols, 34), noise(cols, 35));
+    let (gx, gw, gb, gy) = (g.upload(&x), g.upload(&wt), g.upload(&b), g.zeros(rows * cols).unwrap());
+    g.layernorm(&gx, &gw, &gb, &gy, rows, cols, 1e-6, true).unwrap();
+    let want: Vec<f32> = x
+        .chunks(cols)
+        .flat_map(|r| {
+            let mean = r.iter().sum::<f32>() / cols as f32;
+            let var = r.iter().map(|v| (v - mean).powi(2)).sum::<f32>() / cols as f32;
+            r.iter().enumerate().map(|(i, v)| gelu((v - mean) / (var + 1e-6).sqrt() * wt[i] + b[i])).collect::<Vec<_>>()
+        })
+        .collect();
+    assert_close(&run_and_read(&g, &gy), &want, 1e-3, "layernorm + gelu");
 }

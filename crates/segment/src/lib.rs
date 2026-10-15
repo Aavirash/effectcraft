@@ -49,6 +49,10 @@ pub trait MaskModel: Send + Sync {
     fn tracker(&self) -> Option<&dyn ObjectTracker> {
         None
     }
+    /// What runs the model: the GPU's name or "CPU" (`None`: it does not say).
+    fn device_name(&self) -> Option<String> {
+        None
+    }
     /// Seconds since the model was last used (`None`: it does not track use, so it is never unloaded
     /// for being idle). Large models free their memory after a quiet spell and load again on use.
     fn idle_secs(&self) -> Option<f64> {
