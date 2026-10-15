@@ -544,3 +544,51 @@ fn a_mask_prompt_through_the_object_tracker_interface() {
     let bad = TrackRequest::single(0, n, vec![(1, Prompt { points: vec![], bbox: None, mask: Some(vec![1.0; 5]) })]);
     assert!(model.tracker().unwrap().track(&bad, &mut get, &|| false, &mut |_, _, _| {}).is_err());
 }
+
+/// The same prompts on the same frames give the same masks, bit for bit, run after run (CPU).
+#[test]
+fn tracking_is_deterministic() {
+    use effectcraft_sam2::prompt::Prompt;
+    use effectcraft_sam2::session::{Cancel, Direction, ObjectId, VideoModel, VideoTracker};
+    let Some((w, r)) = load_video() else { return };
+    let model = std::sync::Arc::new(VideoModel::load(&w).unwrap());
+    let clip = r.get("clip.pixel_values").unwrap().narrow(0, 1, 3).unwrap();
+    let run = || {
+        let mut t = VideoTracker::new(model.clone(), Box::new(Clip(clip.clone()))).unwrap();
+        t.prompt(0, ObjectId(1), &Prompt { points: vec![([416.0, 512.0], true)], bbox: None }).unwrap();
+        let mut out = vec![];
+        t.propagate(0, Direction::Forward, None, &Cancel::new(), &mut |m| out.push(m)).unwrap();
+        out
+    };
+    let (a, b) = (run(), run());
+    assert_eq!(a.len(), 3);
+    for (x, y) in a.iter().zip(&b) {
+        assert_eq!(x.logits, y.logits, "frame {} differs between runs", x.frame);
+        assert_eq!((x.iou.to_bits(), x.object_score.to_bits()), (y.iou.to_bits(), y.object_score.to_bits()));
+    }
+}
+
+/// Hard limits: a tracker over its memory budget or past its time budget stops with Error::Budget.
+#[test]
+fn the_tracker_stops_at_its_budget() {
+    use effectcraft_sam2::Error;
+    use effectcraft_sam2::prompt::Prompt;
+    use effectcraft_sam2::session::{Budget, Cancel, Direction, ObjectId, VideoModel, VideoTracker};
+    let Some((w, r)) = load_video() else { return };
+    let model = std::sync::Arc::new(VideoModel::load(&w).unwrap());
+    let clip = r.get("clip.pixel_values").unwrap().narrow(0, 1, 3).unwrap();
+    let click = Prompt { points: vec![([416.0, 512.0], true)], bbox: None };
+    // memory: one frame's worth is more than a 1 MB limit
+    let mut t = VideoTracker::new(model.clone(), Box::new(Clip(clip.clone()))).unwrap();
+    t.set_budget(Budget { max_state_bytes: 1 << 20, max_seconds: None });
+    assert!(matches!(t.prompt(0, ObjectId(1), &click), Err(Error::Budget(_))));
+    // default limit: fine, and the bytes held are reported
+    let mut t = VideoTracker::new(model.clone(), Box::new(Clip(clip.clone()))).unwrap();
+    t.prompt(0, ObjectId(1), &click).unwrap();
+    let held = t.state_bytes();
+    assert!(held > 2 << 20 && held < 200 << 20, "{held}");
+    // time: a limit of zero stops the first propagation
+    t.set_budget(Budget { max_state_bytes: 2 << 30, max_seconds: Some(0.0) });
+    let r = t.propagate(0, Direction::Forward, None, &Cancel::new(), &mut |_| {});
+    assert!(matches!(r, Err(Error::Budget(_))), "{r:?}");
+}

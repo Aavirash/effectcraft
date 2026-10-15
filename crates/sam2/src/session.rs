@@ -133,11 +133,34 @@ struct FrameFeatures {
     high: (Tensor, Tensor),
 }
 
+/// What a tracker may hold and take. A call that would exceed it stops with [`Error::Budget`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Budget {
+    /// Memory banks, results and cached frame features (bytes).
+    pub max_state_bytes: usize,
+    /// Wall-clock seconds one `propagate` call may take (`None`: no limit).
+    pub max_seconds: Option<f64>,
+}
+
+impl Default for Budget {
+    fn default() -> Budget {
+        Budget { max_state_bytes: 2 << 30, max_seconds: None }
+    }
+}
+
+/// Bytes of one stored frame: memory features and position encoding `[4096, 64]`, the pointer.
+const FRAME_BYTES: usize = 2 * GRID * GRID * 64 * 4 + 256 * 4;
+/// Bytes of a conditioning frame's kept result (`256 x 256` logits).
+const RESULT_BYTES: usize = 4 * GRID * 4 * GRID * 4;
+/// Bytes of one frame's cached neck features (lowest level and position, two skip levels).
+const FEATURE_BYTES: usize = (2 * 256 * GRID * GRID + 32 * 16 * GRID * GRID + 64 * 4 * GRID * GRID) * 4;
+
 pub struct VideoTracker<'a> {
     model: Arc<VideoModel>,
     frames: Box<dyn FrameSource + 'a>,
     objects: BTreeMap<ObjectId, ObjectState>,
     cache: VecDeque<(usize, Arc<FrameFeatures>)>,
+    budget: Budget,
 }
 
 fn sine_embedding_1d(positions: &[f32], dim: usize) -> Result<Tensor> {
@@ -161,11 +184,30 @@ impl<'a> VideoTracker<'a> {
         if n == 0 || n > MAX_FRAMES {
             return Err(Error::Input(format!("a clip needs between 1 and {MAX_FRAMES} frames, got {n}")));
         }
-        Ok(VideoTracker { model, frames, objects: BTreeMap::new(), cache: VecDeque::new() })
+        Ok(VideoTracker { model, frames, objects: BTreeMap::new(), cache: VecDeque::new(), budget: Budget::default() })
     }
 
     pub fn num_frames(&self) -> usize {
         self.frames.num_frames()
+    }
+
+    /// Replace the limits (see [`Budget`]).
+    pub fn set_budget(&mut self, budget: Budget) {
+        self.budget = budget;
+    }
+
+    /// Bytes held now: stored frames, kept results and cached features.
+    pub fn state_bytes(&self) -> usize {
+        let frames: usize = self.objects.values().map(|o| (o.cond.len() + o.non_cond.len()) * FRAME_BYTES + o.cond.len() * RESULT_BYTES).sum();
+        frames + self.cache.len() * FEATURE_BYTES
+    }
+
+    fn check_budget(&self) -> Result<()> {
+        let used = self.state_bytes();
+        if used > self.budget.max_state_bytes {
+            return Err(Error::Budget(format!("the tracker holds {} MB, over its {} MB limit", used >> 20, self.budget.max_state_bytes >> 20)));
+        }
+        Ok(())
     }
 
     /// Forget every object and cached frame (the clip stays).
@@ -298,6 +340,7 @@ impl<'a> VideoTracker<'a> {
             state.non_cond.insert(frame, entry);
             Self::prune(state, frame);
         }
+        self.check_budget()?;
         Ok(result)
     }
 
@@ -383,6 +426,7 @@ impl<'a> VideoTracker<'a> {
             state.non_cond.insert(frame, entry);
             Self::prune(state, frame);
         }
+        self.check_budget()?;
         Ok(result)
     }
 
@@ -410,12 +454,16 @@ impl<'a> VideoTracker<'a> {
         if ids.is_empty() {
             return Err(Error::Input("no object has been prompted".into()));
         }
+        let started = std::time::Instant::now();
         for k in 0..=span {
             let frame = if reverse { start.checked_sub(k) } else { Some(start + k).filter(|f| *f < n) };
             let Some(frame) = frame else { break };
             for id in &ids {
                 if cancel.is_cancelled() {
                     return Err(Error::Cancelled);
+                }
+                if let Some(limit) = self.budget.max_seconds.filter(|l| started.elapsed().as_secs_f64() > *l) {
+                    return Err(Error::Budget(format!("tracking took more than {limit} s")));
                 }
                 let cached = self.objects.get(id).is_some_and(|o| o.cond.contains_key(&frame));
                 let stored = self.objects.get(id).and_then(|o| o.cond.get(&frame)).and_then(|o| o.result.clone());
