@@ -151,6 +151,9 @@ impl ObjectTracker for Sam2Mask {
         cancel: &dyn Fn() -> bool,
         out: &mut dyn FnMut(usize, i64, TrackedFrame),
     ) -> effectcraft_segment::Result<()> {
-        self.run_track(req, frames, cancel, out).map_err(|e| e.to_string())
+        self.touch();
+        let r = self.run_track(req, frames, cancel, out).map_err(|e| e.to_string());
+        self.touch();
+        r
     }
 }

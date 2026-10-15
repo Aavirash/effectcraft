@@ -38,6 +38,13 @@ frames before the corrected frame are not rebuilt, so frames just after it can d
 Tracked frames of a session are in memory; a project reopened in a new process re-tracks the whole span after a stroke
 change (its saved tracking is stale as a whole).
 
+## Memory and limits
+The weights take about 156 MB. A model idle for 10 minutes is unloaded (a toast says so; the choice stays) and loads
+again when a Propagate or a stroke needs it. The tracker holds the memory banks of the objects it follows (about 2 MB per
+stored frame, pruned to the frames later ones can still look at) and refuses to grow past 2 GiB, or past a time limit when
+one is set, with a clear error instead of running out of memory. Two runs of the same prompts give bit-identical masks on
+the CPU.
+
 ## How it works
 `crates/sam2` is a Rust port (on [candle](https://github.com/huggingface/candle), native only) of the Hugging Face
 `transformers` SAM 2 implementation, Apache-2.0 (see its `NOTICE`). Every stage is checked against PyTorch by

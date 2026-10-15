@@ -105,3 +105,40 @@ fn models_are_listed_chosen_and_verified() {
     }
     let _ = std::fs::remove_dir_all(d);
 }
+
+/// A Roto Brush model that has been idle for ten minutes is unloaded (the choice stays), one in use is not,
+/// and a model that does not track use is never unloaded.
+#[test]
+fn an_idle_roto_model_is_unloaded() {
+    use effectcraft_segment::{Loaded, MaskModel, ModelInfo, Prompt};
+    struct Fake(Option<f64>);
+    impl MaskModel for Fake {
+        fn info(&self) -> &'static ModelInfo {
+            &effectcraft_segment::SAM2_TINY
+        }
+        fn segment(&self, _: &[[f32; 3]], _: usize, _: usize, _: &Prompt) -> effectcraft_segment::Result<Vec<f32>> {
+            Err("no weights".into())
+        }
+        fn idle_secs(&self) -> Option<f64> {
+            self.0
+        }
+    }
+    crate::tests_roto::hold_roto_cache_test_lock();
+    let (mut s, d) = session("idle");
+    for (idle, unloaded) in [(Some(5.0), false), (None, false), (Some(601.0), true)] {
+        let m: Arc<dyn MaskModel> = Arc::new(Fake(idle));
+        s.models.set_active(Task::Mask, Some(Loaded::Mask(m)));
+        assert_eq!(s.models.status(Task::Mask).active.as_deref(), Some("sam2.1-hiera-tiny"));
+        s.poll_models();
+        assert_eq!(s.models.status(Task::Mask).active.is_none(), unloaded, "idle {idle:?}");
+        assert_eq!(crate::effects::roto::installed_model().is_none(), unloaded, "the effect's model follows");
+        if unloaded {
+            assert!(s.events.iter().any(|e| matches!(e, crate::Event::Toast { message, .. } if message.contains("unloaded after 10 minutes"))));
+        }
+    }
+    // the choice survives, and with the classic engine chosen reloading does nothing
+    s.reload_roto_model();
+    assert!(s.models.status(Task::Mask).active.is_none());
+    crate::effects::roto::set_model(None);
+    let _ = std::fs::remove_dir_all(d);
+}

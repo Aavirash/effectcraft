@@ -196,6 +196,8 @@ fn points_p(p: &Value, cmd: &str) -> Result<Vec<[f64; 2]>> {
 
 fn stroke(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "roto.stroke";
+    // A model unloaded for being idle comes back before the stroke is segmented with it.
+    s.reload_roto_model();
     let (cid, lid) = match roto_p(s, p, cmd) {
         Ok((c, l, _)) => (c, l),
         Err(_) => layer_p(s, p, cmd)?,

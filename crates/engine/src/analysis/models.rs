@@ -63,7 +63,7 @@ impl Models {
         self.face_model.lock().ok().and_then(|m| m.clone())
     }
 
-    fn set_active(&self, task: Task, model: Option<Loaded>) {
+    pub(crate) fn set_active(&self, task: Task, model: Option<Loaded>) {
         activate(self.lane(task), &self.face_model, task, model);
     }
 }
@@ -127,6 +127,9 @@ fn kind(task: Task) -> &'static Kind {
         Task::Face => &FACE,
     }
 }
+
+/// How long a Roto Brush model may sit unused before its memory is freed.
+const ROTO_MODEL_IDLE: Duration = Duration::from_secs(600);
 
 /// How long a job that needs the Roto Brush model waits for it to load (or download) before it
 /// gives up. A worker that never reports back must not hang the command.
@@ -290,8 +293,35 @@ impl Session {
         Err(format!("{} is still loading: try again when it is ready, or pass wait: true", info.name))
     }
 
+    /// Free a Roto Brush model that has been idle for [`ROTO_MODEL_IDLE`] (and is not under a job). The
+    /// choice stays: it loads again when a job or a stroke needs it.
+    fn unload_idle_roto_model(&mut self) {
+        if self.is_roto_running() || self.models.status(Task::Mask).busy.is_some() {
+            return;
+        }
+        let Some(m) = crate::effects::roto::installed_model() else { return };
+        if m.idle_secs().is_some_and(|s| s >= ROTO_MODEL_IDLE.as_secs_f64()) {
+            let name = m.info().name;
+            drop(m);
+            self.models.set_active(Task::Mask, None);
+            self.events.push(crate::Event::Toast {
+                message: format!("{name} unloaded after {} minutes idle; it loads again when it is used", ROTO_MODEL_IDLE.as_secs() / 60),
+                error: false,
+            });
+        }
+    }
+
+    /// Load the chosen Roto Brush model again if it was unloaded for being idle (before a stroke uses it).
+    pub fn reload_roto_model(&mut self) {
+        let chosen = self.chosen_model(Task::Mask).to_string();
+        if chosen != seg::CLASSICAL && self.models.status(Task::Mask).active.is_none() && self.models.status(Task::Mask).busy.is_none() {
+            self.apply_model(Task::Mask, true);
+        }
+    }
+
     /// Finish what the model workers did: a toast, and loading a model that just arrived.
     pub fn poll_models(&mut self) {
+        self.unload_idle_roto_model();
         for task in [Task::Mask, Task::Face] {
             let done = self.models.lane(task).lock().ok().and_then(|mut s| s.done.take());
             if let Some((message, error)) = done {

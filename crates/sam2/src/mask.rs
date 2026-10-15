@@ -54,11 +54,17 @@ fn fingerprint(rgb: &[[f32; 3]], w: usize, h: usize) -> u64 {
 pub struct Sam2Mask {
     model: Arc<VideoModel>,
     last: Mutex<Option<(u64, Arc<Encoded>)>>,
+    used: Mutex<std::time::Instant>,
 }
 
 impl Sam2Mask {
     pub fn new(model: Arc<VideoModel>) -> Sam2Mask {
-        Sam2Mask { model, last: Mutex::new(None) }
+        Sam2Mask { model, last: Mutex::new(None), used: Mutex::new(std::time::Instant::now()) }
+    }
+
+    /// Note that the model is being used (for [`MaskModel::idle_secs`]).
+    pub(crate) fn touch(&self) {
+        *self.used.lock().unwrap_or_else(PoisonError::into_inner) = std::time::Instant::now();
     }
 
     /// The video model, for trackers built on the same weights.
@@ -103,11 +109,16 @@ impl MaskModel for Sam2Mask {
     }
 
     fn segment(&self, rgb: &[[f32; 3]], w: usize, h: usize, prompt: &effectcraft_segment::Prompt) -> effectcraft_segment::Result<Vec<f32>> {
+        self.touch();
         self.probability(rgb, w, h, prompt).map_err(|e| e.to_string())
     }
 
     fn tracker(&self) -> Option<&dyn effectcraft_segment::ObjectTracker> {
         Some(self)
+    }
+
+    fn idle_secs(&self) -> Option<f64> {
+        Some(self.used.lock().unwrap_or_else(PoisonError::into_inner).elapsed().as_secs_f64())
     }
 }
 
