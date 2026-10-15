@@ -1835,6 +1835,7 @@ dependencies = [
  "candle-core",
  "candle-nn",
  "effectcraft-segment",
+ "rayon",
 ]
 
 [[package]]

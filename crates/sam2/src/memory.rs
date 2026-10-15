@@ -8,7 +8,7 @@ use candle_core::Tensor;
 
 use crate::Result;
 use crate::neck::sine_position;
-use crate::nn::{LayerNorm, apply, layer_norm, linear};
+use crate::nn::{LayerNorm, apply, gelu, layer_norm, linear};
 use crate::weights::Weights;
 use candle_nn::Linear;
 
@@ -49,7 +49,7 @@ impl FuserBlock {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let h = norm_channels_first(&self.norm, &self.depthwise.forward(x)?)?;
         let h = h.permute((0, 2, 3, 1))?.contiguous()?;
-        let h = apply(&self.pw2, &apply(&self.pw1, &h)?.gelu_erf()?)?;
+        let h = apply(&self.pw2, &gelu(&apply(&self.pw1, &h)?)?)?;
         let h = h.broadcast_mul(&self.scale)?.permute((0, 3, 1, 2))?.contiguous()?;
         Ok((x + h)?)
     }
@@ -108,7 +108,7 @@ impl MemoryEncoder {
     pub fn encode(&self, features: &Tensor, mask: &Tensor) -> Result<(Tensor, Tensor)> {
         let mut m = mask.clone();
         for (conv, ln) in &self.down {
-            m = norm_channels_first(ln, &conv.forward(&m)?)?.gelu_erf()?;
+            m = gelu(&norm_channels_first(ln, &conv.forward(&m)?)?)?;
         }
         let m = self.final_conv.forward(&m)?;
         let mut x = (self.feature_projection.forward(features)? + m)?;

@@ -5,7 +5,7 @@
 
 use candle_core::{Device, Tensor};
 
-use crate::nn::{LayerNorm, layer_norm};
+use crate::nn::{LayerNorm, gelu, layer_norm};
 use crate::weights::Weights;
 use crate::{Error, Result};
 
@@ -166,8 +166,8 @@ impl PromptEncoder {
             Ok(x.conv2d(&c.0, 0, c.3, 1, 1)?.broadcast_add(&c.1.reshape((1, c.1.dim(0)?, 1, 1))?)?)
         };
         let cl = |x: &Tensor, ln: &LayerNorm| -> Result<Tensor> { Ok(ln.forward(&x.permute((0, 2, 3, 1))?)?.permute((0, 3, 1, 2))?.contiguous()?) };
-        let x = cl(&step(mask, c1)?, &self.mask.ln1)?.gelu_erf()?;
-        let x = cl(&step(&x, c2)?, &self.mask.ln2)?.gelu_erf()?;
+        let x = gelu(&cl(&step(mask, c1)?, &self.mask.ln1)?)?;
+        let x = gelu(&cl(&step(&x, c2)?, &self.mask.ln2)?)?;
         step(&x, c3)
     }
 }

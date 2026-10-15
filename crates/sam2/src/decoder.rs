@@ -8,7 +8,7 @@
 use candle_core::{D, Tensor};
 use candle_nn::{Linear, ops::sigmoid, ops::softmax};
 
-use crate::nn::{LayerNorm, apply, layer_norm, linear};
+use crate::nn::{LayerNorm, apply, gelu, layer_norm, linear};
 use crate::weights::Weights;
 use crate::{Error, Result};
 
@@ -218,8 +218,10 @@ impl MaskDecoder {
         let (s0, s1) = high;
         let up = add_bias(emb.conv_transpose2d(&self.up1.0, 0, 0, 2, 1)?, &self.up1.1)?;
         let up = (up + s1)?;
-        let up = self.up_ln.forward(&up.permute((0, 2, 3, 1))?)?.permute((0, 3, 1, 2))?.contiguous()?.gelu_erf()?;
-        let up = (add_bias(up.conv_transpose2d(&self.up2.0, 0, 0, 2, 1)?, &self.up2.1)? + s0)?.gelu_erf()?;
+        let up = self.up_ln.forward(&up.permute((0, 2, 3, 1))?)?.permute((0, 3, 1, 2))?.contiguous()?;
+        let up = gelu(&up)?;
+        let up = (add_bias(up.conv_transpose2d(&self.up2.0, 0, 0, 2, 1)?, &self.up2.1)? + s0)?;
+        let up = gelu(&up)?;
 
         let hyper: Vec<Tensor> = self.hyper.iter().enumerate().map(|(i, m)| m.forward(&mask_tokens_out.narrow(1, i, 1)?.squeeze(1)?)).collect::<Result<_>>()?;
         let hyper = Tensor::stack(&hyper, 1)?;
