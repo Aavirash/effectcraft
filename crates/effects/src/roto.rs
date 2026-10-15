@@ -553,17 +553,19 @@ impl Chain {
     ) -> Result<Option<TrackSummary>, String> {
         let Some(tracker) = self.model.as_ref().and_then(|m| m.tracker()) else { return Ok(None) };
         let (Some(_), true) = (self.data.base, self.data.span[1] >= self.data.span[0]) else { return Err("no base frame".into()) };
-        let prompts: Vec<(i64, effectcraft_segment::Prompt)> = self
-            .data
-            .stroke_frames()
-            .into_iter()
-            .filter(|f| self.data.in_span(*f))
-            .filter_map(|f| {
-                let strokes = self.data.strokes_at(f);
-                let p = rb::tracker_prompt(&strokes, self.opts.scale);
-                p.points.iter().any(|(_, fg)| *fg).then_some((f, p))
-            })
-            .collect();
+        // A prompt is a few clicks from the strokes and a box around what the classic engine makes of
+        // them on that frame (clicks alone pick a part of the object, not all of it).
+        let mut prompts: Vec<(i64, effectcraft_segment::Prompt)> = vec![];
+        for f in self.data.stroke_frames().into_iter().filter(|f| self.data.in_span(*f)) {
+            let strokes = self.data.strokes_at(f);
+            let p = match frame(f) {
+                Some(img) => rb::tracker_prompt_boxed(&strokes, self.opts.scale, &rb::segment(&img, &strokes, None, &self.opts, self.refine_radius)),
+                None => rb::tracker_prompt(&strokes, self.opts.scale),
+            };
+            if p.points.iter().any(|(_, fg)| *fg) {
+                prompts.push((f, p));
+            }
+        }
         if prompts.is_empty() {
             return Err("no foreground strokes to follow".into());
         }

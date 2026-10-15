@@ -612,3 +612,26 @@ fn tracked_segmentation_handles_absent_objects_and_bad_maps() {
     let wrong = segment_tracked(&img, &refs, vec![1.0; 3], false, &opts, 0.0);
     assert!(iou(&wrong.matte, &gt) > 0.95);
 }
+
+#[test]
+fn tracker_prompts_carry_the_box_of_the_classic_matte() {
+    let (img, gt) = frame_at(center(0));
+    let st = base_strokes(0);
+    let refs: Vec<&Stroke> = st.iter().collect();
+    let classic = segment(&img, &refs, None, &SegOpts::default(), 0.0);
+    let p = tracker_prompt_boxed(&refs, 1.0, &classic);
+    let b = p.bbox.expect("a box");
+    let c = center(0);
+    // the box reaches the disk's edges, with a margin
+    assert!(b[0] <= (c[0] - R) as f32 && b[0] > (c[0] - R) as f32 - 12.0, "{b:?}");
+    assert!(b[2] >= (c[0] + R) as f32 && b[2] < (c[0] + R) as f32 + 12.0, "{b:?}");
+    assert!(b[1] <= (c[1] - R) as f32 && b[3] >= (c[1] + R) as f32, "{b:?}");
+    assert!(iou(&classic.matte, &gt) > 0.95);
+    // no matte, no box; a box the user drew wins
+    let none = tracker_prompt_boxed(&refs, 1.0, &FrameSeg::empty(W as usize, H as usize));
+    assert_eq!(none.bbox, None);
+    let bx = Stroke { kind: StrokeKind::Box, frame: 0, radius: 0.0, points: vec![[10.0, 10.0], [50.0, 60.0]] };
+    let mut with_box: Vec<&Stroke> = refs.clone();
+    with_box.push(&bx);
+    assert_eq!(tracker_prompt_boxed(&with_box, 1.0, &classic).bbox, Some([10.0, 10.0, 50.0, 60.0]));
+}

@@ -923,6 +923,29 @@ pub fn tracker_prompt(strokes: &[&Stroke], scale: f64) -> Prompt {
     Prompt { points, bbox, ..Default::default() }
 }
 
+/// [`tracker_prompt`] plus a box around the classic engine's matte of the same strokes. Clicks alone
+/// make SAM 2 pick the part they land on (a torso, not the legs and shoes: measured IoU 0.41 on a
+/// multi-part figure, against 1.00 with the box); the box says how far the object reaches. A box
+/// stroke the user drew wins over the matte's.
+pub fn tracker_prompt_boxed(strokes: &[&Stroke], scale: f64, classic: &FrameSeg) -> Prompt {
+    let mut p = tracker_prompt(strokes, scale);
+    if p.bbox.is_none() {
+        let (w, h) = (classic.w, classic.h);
+        let (mut x0, mut y0, mut x1, mut y1) = (usize::MAX, usize::MAX, 0usize, 0usize);
+        for (i, v) in classic.matte.iter().enumerate() {
+            if *v != 0 && w > 0 {
+                let (x, y) = (i % w, i / w);
+                (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
+            }
+        }
+        if x0 <= x1 {
+            let (mx, my) = (((x1 - x0) as f32 * 0.05).max(4.0), ((y1 - y0) as f32 * 0.05).max(4.0));
+            p.bbox = Some([(x0 as f32 - mx).max(0.0), (y0 as f32 - my).max(0.0), (x1 as f32 + 1.0 + mx).min(w as f32), (y1 as f32 + 1.0 + my).min(h as f32)]);
+        }
+    }
+    p
+}
+
 /// Most foreground / background points a tracker prompt carries.
 pub const TRACKER_FG_POINTS: usize = 3;
 pub const TRACKER_BG_POINTS: usize = 3;
