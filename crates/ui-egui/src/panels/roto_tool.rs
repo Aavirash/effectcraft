@@ -243,6 +243,20 @@ fn run_stroke(app: &mut EffectcraftApp, layer: u64, kind: &str, points: &[[f64; 
     }
 }
 
+/// The span bar's colour for a frame a tracker followed: green when it is sure, amber when it is
+/// doubtful, red when it is not, slate when the object was absent.
+pub(crate) fn trust_color(confidence: f32, occluded: bool) -> Color32 {
+    if occluded {
+        Color32::from_rgb(110, 118, 150)
+    } else if confidence >= 0.85 {
+        Color32::from_rgb(70, 200, 90)
+    } else if confidence >= 0.5 {
+        Color32::from_rgb(230, 180, 50)
+    } else {
+        Color32::from_rgb(220, 70, 60)
+    }
+}
+
 /// The segmentation span bar (above the panel's bottom bar): the layer's frames, the span, the
 /// base frame (yellow), computed frames (green) and stroke frames. Click to go to a frame; drag
 /// the span's ends to change it.
@@ -264,10 +278,17 @@ pub fn span_bar(app: &mut EffectcraftApp, ui: &mut egui::Ui, p: &egui::Painter, 
         let sp = Rect::from_min_max(pos2(x_of(d.span[0] as f64), track.min.y), pos2(x_of(d.span[1] as f64 + 1.0), track.max.y));
         let frozen = fx::is_frozen(&params);
         p.rect_filled(sp, 2.0, if frozen { Color32::from_rgb(60, 110, 190) } else { Color32::from_rgb(90, 90, 96) });
+        // Computed frames: green, or (frames a tracker followed) coloured by its confidence, with
+        // frames where the object was absent in slate.
+        let trust = app.session.roto_trust(cid, layer.id, uid);
         for (f, done) in app.session.roto_computed(cid, layer.id, uid) {
             if done {
-                let cr = Rect::from_min_max(pos2(x_of(f as f64), track.max.y - 4.0), pos2(x_of(f as f64 + 1.0), track.max.y));
-                p.rect_filled(cr, 0.0, Color32::from_rgb(70, 200, 90));
+                let (color, h) = match trust.get(&f) {
+                    Some(t) => (trust_color(t.confidence, t.occluded), 6.0),
+                    None => (Color32::from_rgb(70, 200, 90), 4.0),
+                };
+                let cr = Rect::from_min_max(pos2(x_of(f as f64), track.max.y - h), pos2(x_of(f as f64 + 1.0), track.max.y));
+                p.rect_filled(cr, 0.0, color);
             }
         }
         for f in d.stroke_frames() {
@@ -361,5 +382,23 @@ pub fn bar_buttons(app: &mut EffectcraftApp, ui: &mut egui::Ui, p: &egui::Painte
         if let Some(pr) = app.session.roto_progress() {
             p.text(pos2(r.max.x + 8.0, bar.center().y), Align2::LEFT_CENTER, pr.banner(), Tokens::ui(11.5), t.text_dim);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn confidence_colours_run_from_green_to_red_and_absent_is_slate() {
+        let (g, a, r, s) = (trust_color(0.99, false), trust_color(0.6, false), trust_color(0.1, false), trust_color(0.99, true));
+        assert_eq!(g, Color32::from_rgb(70, 200, 90));
+        assert_eq!(a, Color32::from_rgb(230, 180, 50));
+        assert_eq!(r, Color32::from_rgb(220, 70, 60));
+        assert_eq!(s, Color32::from_rgb(110, 118, 150));
+        // the boundaries
+        assert_eq!(trust_color(0.85, false), g);
+        assert_eq!(trust_color(0.5, false), a);
+        assert_eq!(trust_color(f32::NAN, false), r);
     }
 }

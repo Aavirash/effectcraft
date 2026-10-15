@@ -838,6 +838,25 @@ impl Session {
         changed
     }
 
+    /// How far to trust the frames a tracker followed (SAM 2), by layer frame: its confidence and
+    /// whether the object was absent. Frames the classic engine made have no entry.
+    pub fn roto_trust(&self, comp: ItemId, layer: LayerId, effect: Uid) -> BTreeMap<i64, fx::FrameTrust> {
+        let mut out = BTreeMap::new();
+        let Some(c) = self.project.comp(comp) else { return out };
+        let Some(l) = c.layer(layer) else { return out };
+        let Some(g) = l.props.find_group(effect) else { return out };
+        if is_object_matte(g) {
+            return out;
+        }
+        let ch = fx::Chain::new(&params_static(g), layer_size(&self.project, c, l), c.frame_rate.as_f64(), 1.0);
+        for f in ch.keys.keys() {
+            if let Some(t) = ch.trust_at(*f) {
+                out.insert(*f, t);
+            }
+        }
+        out
+    }
+
     /// The computed frames of an instance (full resolution), by layer frame.
     pub fn roto_computed(&self, comp: ItemId, layer: LayerId, effect: Uid) -> BTreeMap<i64, bool> {
         let mut out = BTreeMap::new();

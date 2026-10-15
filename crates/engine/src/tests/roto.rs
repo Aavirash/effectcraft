@@ -977,7 +977,9 @@ impl effectcraft_segment::ObjectTracker for Recorder {
 /// corrected frame; the frames before it keep their tracked results.
 #[test]
 fn a_correction_re_tracks_only_the_frames_it_changes() {
-    let (mut s, clip, _) = painted(center, "disk-retrack.mov");
+    let (mut s, clip, uid) = painted(center, "disk-retrack.mov");
+    let cid = s.active_comp_id().unwrap();
+    assert!(s.roto_trust(cid, clip, uid).is_empty(), "no tracker data before tracking");
     let rec = std::sync::Arc::new(Recorder::default());
     effectcraft_effects::roto::set_model(Some(rec.clone()));
     let run = |s: &mut Session| s.execute_checked("roto.propagate", json!({"layer": clip.0, "direction": "forward", "wait": true}));
@@ -1000,4 +1002,8 @@ fn a_correction_re_tracks_only_the_frames_it_changes() {
     let st = s.execute("roto.status", json!({"layer": clip.0, "frame": 3})).unwrap();
     assert_eq!(st["source"], "tracker", "{st}");
     assert_eq!(st["tracker"]["frames"].as_object().unwrap().len(), 21, "{st}");
+    // The span bar's data: the tracker's confidence for every tracked frame.
+    let trust = s.roto_trust(cid, clip, uid);
+    assert_eq!(trust.len(), 21);
+    assert!(trust.values().all(|t| t.confidence > 0.9 && !t.occluded));
 }
