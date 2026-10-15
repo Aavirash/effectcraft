@@ -96,6 +96,30 @@ def main(model_dir, out):
         for o in model.propagate_in_video_iterator(sess, start_frame_idx=PROMPT_FRAME, reverse=True):
             record("rev", o)
 
+    # The same object prompted with a mask instead of a click (binary, at the model's 1024 x 1024).
+    msess = Sam2VideoInferenceSession(video=pixels, video_height=SIZE, video_width=SIZE, dtype=torch.float32)
+    mobj = msess.obj_id_to_idx(1)
+    yy, xx = np.mgrid[0:1024, 0:1024].astype(np.float32)
+    cx, cy = (80 + 12 * PROMPT_FRAME) * scale, 128 * scale
+    disc = torch.from_numpy((np.hypot(xx + 0.5 - cx, yy + 0.5 - cy) < 34 * scale).astype(np.float32))[None, None]
+    taps["maskprompt.input"] = disc.clone()
+    msess.add_mask_inputs(mobj, PROMPT_FRAME, disc)
+    msess.obj_with_new_inputs = [1]
+    with torch.no_grad():
+        o = model(msess, frame_idx=PROMPT_FRAME)
+        taps[f"maskprompt.prompt.{o.frame_idx}.pred_masks"] = o.pred_masks.detach().float().clone()
+        taps[f"maskprompt.prompt.{o.frame_idx}.score"] = o.object_score_logits.detach().float().clone()
+        for o in model.propagate_in_video_iterator(msess, start_frame_idx=PROMPT_FRAME):
+            taps[f"maskprompt.fwd.{o.frame_idx}.pred_masks"] = o.pred_masks.detach().float().clone()
+            taps[f"maskprompt.fwd.{o.frame_idx}.score"] = o.object_score_logits.detach().float().clone()
+        for o in model.propagate_in_video_iterator(msess, start_frame_idx=PROMPT_FRAME, reverse=True):
+            taps[f"maskprompt.rev.{o.frame_idx}.pred_masks"] = o.pred_masks.detach().float().clone()
+            taps[f"maskprompt.rev.{o.frame_idx}.score"] = o.object_score_logits.detach().float().clone()
+    md = msess.output_dict_per_obj[mobj]
+    for kind in ("cond_frame_outputs", "non_cond_frame_outputs"):
+        for f, oo in md[kind].items():
+            taps[f"maskstate.{f}.object_pointer"] = oo["object_pointer"].detach().float().clone()
+
     d = sess.output_dict_per_obj[obj_idx]
     for kind in ("cond_frame_outputs", "non_cond_frame_outputs"):
         for f, o in d[kind].items():

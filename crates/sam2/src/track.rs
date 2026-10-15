@@ -13,6 +13,7 @@ use effectcraft_segment::{ClipFrame, ObjectTracker, TrackRequest, TrackedFrame};
 
 use crate::mask::{Sam2Mask, preprocess};
 use crate::prompt::{INPUT_SIZE, Prompt};
+use crate::resize::mask_to_model;
 use crate::session::{Cancel, Direction, FrameMask, FrameSource, ObjectId, VideoTracker};
 use crate::{Error, Result};
 
@@ -89,6 +90,17 @@ impl Sam2Mask {
                 return Err(Error::Cancelled);
             }
             let (w, h) = sizes.borrow().get(&idx).copied().ok_or_else(|| Error::Compute("frame size unknown".into()))?;
+            // A prompt that is only a mask (probability per pixel of the frame) prompts with the mask.
+            if let (true, true, Some(m)) = (p.points.is_empty(), p.bbox.is_none(), p.mask.as_ref()) {
+                if m.len() != w * h {
+                    return Err(Error::Input(format!("a mask prompt of {} values does not fit a {w}x{h} frame", m.len())));
+                }
+                let binary: Vec<u8> = m.iter().map(|v| u8::from(*v >= 0.5)).collect();
+                tracker.prompt_mask(idx, object_id(oi), &mask_to_model(&binary, w, h)?)?;
+                let e = first_of.entry(oi).or_insert(idx);
+                *e = (*e).min(idx);
+                continue;
+            }
             let (sx, sy) = (INPUT_SIZE as f32 / w as f32, INPUT_SIZE as f32 / h as f32);
             let prompt = Prompt {
                 points: p.points.iter().map(|(c, fg)| ([c[0] * sx, c[1] * sy], *fg)).collect(),

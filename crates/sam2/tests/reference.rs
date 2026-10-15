@@ -456,3 +456,91 @@ fn sam2_tracks_two_objects_in_one_pass() {
     let empty = TrackRequest { first: 10, count: n, objects: vec![] };
     assert!(model.tracker().unwrap().track(&empty, &mut get, &|| false, &mut |_, _, _| {}).is_err());
 }
+
+/// A mask prompt instead of clicks: the mask is the prompt frame's output, and tracking forwards and
+/// backwards from it matches `Sam2VideoModel` given the same mask.
+#[test]
+fn mask_prompted_tracking_matches_sam2_video_model() {
+    use effectcraft_sam2::session::{Cancel, Direction, ObjectId, VideoModel, VideoTracker};
+    let Some((w, r)) = load_video() else { return };
+    let model = std::sync::Arc::new(VideoModel::load(&w).unwrap());
+    let mut tracker = VideoTracker::new(model, Box::new(Clip(r.get("clip.pixel_values").unwrap().clone()))).unwrap();
+    let obj = ObjectId(1);
+    let first = tracker.prompt_mask(2, obj, r.get("maskprompt.input").unwrap()).unwrap();
+    let check = |tag: &str, m: &effectcraft_sam2::session::FrameMask| {
+        let want = r.get(&format!("maskprompt.{tag}.{}.pred_masks", m.frame)).unwrap().flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        let want_score = r.get(&format!("maskprompt.{tag}.{}.score", m.frame)).unwrap().flatten_all().unwrap().to_vec1::<f32>().unwrap()[0];
+        let err = m.logits.iter().zip(&want).map(|(a, b)| (a - b).abs()).fold(0f32, f32::max);
+        let j = iou(&m.logits, &want);
+        eprintln!("mask prompt {tag} frame {}: logit error {err:.4}, IoU {j:.4}, score {:.3} (want {want_score:.3})", m.frame, m.object_score);
+        assert!(j >= VIDEO_MIN_IOU, "{tag} frame {} IoU {j}", m.frame);
+        assert!(err < VIDEO_LOGIT_TOL, "{tag} frame {} logit error {err}", m.frame);
+        assert!((m.object_score - want_score).abs() < 0.05, "{tag} frame {} score {} vs {want_score}", m.frame, m.object_score);
+    };
+    check("prompt", &first);
+    let cancel = Cancel::new();
+    let mut fwd = vec![];
+    tracker.propagate(2, Direction::Forward, None, &cancel, &mut |m| fwd.push(m)).unwrap();
+    fwd.iter().for_each(|m| check("fwd", m));
+    let mut rev = vec![];
+    tracker.propagate(2, Direction::Backward, None, &cancel, &mut |m| rev.push(m)).unwrap();
+    rev.iter().for_each(|m| check("rev", m));
+    assert_eq!((fwd.len(), rev.len()), (5, 3));
+    // hostile masks are errors
+    let bad = Tensor::zeros((1, 1, 8, 8), candle_core::DType::F32, &Device::Cpu).unwrap();
+    assert!(tracker.prompt_mask(2, obj, &bad).is_err());
+    let nan = (Tensor::zeros((1, 1, 1024, 1024), candle_core::DType::F32, &Device::Cpu).unwrap() + f64::NAN).unwrap();
+    assert!(tracker.prompt_mask(2, obj, &nan).is_err());
+    assert!(tracker.prompt_mask(99, obj, r.get("maskprompt.input").unwrap()).is_err());
+}
+
+/// The tracker interface takes a mask as a prompt: the disc's true mask on frame 1 tracks the disc.
+#[test]
+fn a_mask_prompt_through_the_object_tracker_interface() {
+    use effectcraft_segment::{ClipFrame, MaskModel, Prompt, TrackRequest};
+    let Some((w, _)) = load() else { return };
+    let (fw, fh, n) = (128usize, 96usize, 4usize);
+    let centre = |t: usize| (40.0 + 8.0 * t as f32, 48.0f32);
+    let inside = |t: usize, x: usize, y: usize| ((x as f32 - centre(t).0).powi(2) + (y as f32 - centre(t).1).powi(2)).sqrt() < 26.0;
+    let frames: Vec<std::sync::Arc<ClipFrame>> = (0..n)
+        .map(|t| {
+            let mut rgb = vec![[0f32; 3]; fw * fh];
+            for y in 0..fh {
+                for x in 0..fw {
+                    let bg = 0.3 + 0.2 * (x as f32 / 9.0).sin() * (y as f32 / 7.0).cos();
+                    rgb[y * fw + x] = if inside(t, x, y) { [0.85, 0.4, 0.15] } else { [bg, bg * 0.8 + 0.1, bg * 0.6 + 0.3] };
+                }
+            }
+            std::sync::Arc::new(ClipFrame { rgb, w: fw, h: fh })
+        })
+        .collect();
+    let model = effectcraft_sam2::mask::Sam2Mask::new(std::sync::Arc::new(effectcraft_sam2::session::VideoModel::load(&w).unwrap()));
+    let mask: Vec<f32> = (0..fw * fh).map(|i| f32::from(inside(1, i % fw, i / fw))).collect();
+    let mut get = |f: i64| frames.get(f as usize).cloned();
+    let req = TrackRequest::single(0, n, vec![(1, Prompt { points: vec![], bbox: None, mask: Some(mask) })]);
+    let mut seen = std::collections::BTreeMap::new();
+    model
+        .tracker()
+        .unwrap()
+        .track(&req, &mut get, &|| false, &mut |_, f, t| {
+            seen.insert(f, t);
+        })
+        .unwrap();
+    assert_eq!(seen.len(), n);
+    for (f, t) in &seen {
+        let (mut i, mut u) = (0usize, 0usize);
+        for y in 0..fh {
+            for x in 0..fw {
+                let (a, b) = (t.prob[y * fw + x] > 0.5, inside(*f as usize, x, y));
+                i += usize::from(a && b);
+                u += usize::from(a || b);
+            }
+        }
+        let j = i as f64 / u.max(1) as f64;
+        eprintln!("mask-prompted frame {f}: IoU {j:.3}");
+        assert!(j > 0.85 && !t.occluded, "frame {f}: IoU {j}");
+    }
+    // a mask that does not fit the frame is an error
+    let bad = TrackRequest::single(0, n, vec![(1, Prompt { points: vec![], bbox: None, mask: Some(vec![1.0; 5]) })]);
+    assert!(model.tracker().unwrap().track(&bad, &mut get, &|| false, &mut |_, _, _| {}).is_err());
+}

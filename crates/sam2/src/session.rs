@@ -19,6 +19,7 @@ use crate::memory::{Memory, MemoryEncoder};
 use crate::model::ImageModel;
 use crate::nn::{apply, linear};
 use crate::prompt::{INPUT_SIZE, Prompt};
+use crate::resize::antialias_bilinear;
 use crate::weights::Weights;
 use crate::{Error, Result};
 
@@ -87,6 +88,8 @@ pub struct VideoModel {
     no_object_pointer: Tensor,
     pointer_proj: FeedForward,
     pointer_time_proj: Linear,
+    /// `mask_downsample`: a 4 x 4 stride-4 convolution taking a mask prompt to the prompt encoder's resolution.
+    mask_down: (Tensor, Tensor),
 }
 
 impl VideoModel {
@@ -99,6 +102,7 @@ impl VideoModel {
             no_object_pointer: w.get("no_object_pointer", &[1, 256])?,
             pointer_proj: FeedForward::load(w, "object_pointer_proj", 256, 256, 256, 3, false)?,
             pointer_time_proj: linear(w, "temporal_positional_encoding_projection_layer", 256, 64)?,
+            mask_down: (w.get("mask_downsample.weight", &[1, 1, 4, 4])?, w.get("mask_downsample.bias", &[1])?),
         })
     }
 
@@ -329,6 +333,57 @@ impl<'a> VideoTracker<'a> {
         }
         self.objects.entry(object).or_default();
         self.step(object, frame, Some(prompt), false, true)
+    }
+
+    /// Prompt an object on a frame with a mask: `[1, 1, 1024, 1024]` of 0 and 1 (see
+    /// [`crate::resize::mask_to_model`]). The mask becomes the frame's output as it is (no decode of
+    /// the mask itself); the decoder only makes the object pointer. Like a click prompt, the frame is a
+    /// conditioning frame unless it has been tracked already.
+    pub fn prompt_mask(&mut self, frame: usize, object: ObjectId, mask: &Tensor) -> Result<FrameMask> {
+        self.check_frame(frame)?;
+        if mask.dims() != [1, 1, INPUT_SIZE, INPUT_SIZE] {
+            return Err(Error::Input(format!("a mask prompt must be [1, 1, {INPUT_SIZE}, {INPUT_SIZE}], got {:?}", mask.dims())));
+        }
+        let values = mask.flatten_all()?.to_vec1::<f32>()?;
+        if values.iter().any(|v| !v.is_finite()) {
+            return Err(Error::Input("a mask prompt must be finite".into()));
+        }
+        let tracked = self.objects.get(&object).is_some_and(|o| o.non_cond.contains_key(&frame));
+        self.objects.entry(object).or_default();
+        self.step_mask(object, frame, mask, &values, !tracked)
+    }
+
+    /// The reference's `_use_mask_as_output`: the mask is the output, the decoder makes the pointer.
+    fn step_mask(&mut self, id: ObjectId, frame: usize, mask: &Tensor, values: &[f32], conditioning: bool) -> Result<FrameMask> {
+        let feats = self.features(frame)?;
+        let model = self.model.clone();
+        let present = values.iter().any(|v| *v > 0.0);
+        let high = ((mask * 20.0)? - 10.0)?;
+        let low = antialias_bilinear(&high.flatten_all()?.to_vec1::<f32>()?, (INPUT_SIZE, INPUT_SIZE), (4 * GRID, 4 * GRID))?;
+        // The pointer: the decoder with the mask as its dense prompt and no clicks, on the frame's features
+        // without the no-memory embedding.
+        let down = mask.conv2d(&model.mask_down.0, 0, 4, 1, 1)?.broadcast_add(&model.mask_down.1.reshape((1, 1, 1, 1))?)?;
+        let dense = model.image.prompt.dense_mask(&down)?;
+        let out = model.image.decode_embedded(&feats.low, &feats.high, &model.image.prompt.sparse_none()?, &dense, true)?;
+        let ious = out.iou.flatten_all()?.to_vec1::<f32>()?;
+        let best = ious.iter().enumerate().fold((0usize, f32::NEG_INFINITY), |b, (i, v)| if *v > b.1 { (i, *v) } else { b }).0;
+        let token = out.sam_tokens.narrow(1, best, 1)?.squeeze(1)?;
+        let decoder_present = scalar(&out.object_score)? > 0.0;
+        let pointer = if decoder_present { model.pointer_proj.forward(&token)? } else { model.no_object_pointer.clone() };
+        let pointer = if present { pointer } else { model.no_object_pointer.clone() };
+        let memory = model.memory_encoder.memory(&feats.low, &high, present)?;
+        let score = if present { 10.0 } else { -10.0 };
+        let result = FrameMask { frame, object: id, logits: low, iou: 1.0, object_score: score, occluded: !present };
+        let state = self.objects.entry(id).or_default();
+        let entry = FrameOut { memory, pointer, result: conditioning.then(|| result.clone()) };
+        if conditioning {
+            state.non_cond.remove(&frame);
+            state.cond.insert(frame, entry);
+        } else {
+            state.non_cond.insert(frame, entry);
+            Self::prune(state, frame);
+        }
+        Ok(result)
     }
 
     /// Track every object from `start` through `max_frames` frames (the rest of the clip when
