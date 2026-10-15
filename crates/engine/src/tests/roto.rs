@@ -940,3 +940,64 @@ fn without_a_tracker_the_chain_is_exactly_the_classic_engine() {
     }
     forget(&s, clip, uid);
 }
+
+/// Records the windows it is asked to track, and follows the disc exactly like [`Exact`].
+#[derive(Default)]
+struct Recorder {
+    requests: std::sync::Mutex<Vec<(i64, usize, Vec<i64>)>>,
+}
+
+impl effectcraft_segment::MaskModel for Recorder {
+    fn info(&self) -> &'static effectcraft_segment::ModelInfo {
+        &effectcraft_segment::SAM2_TINY
+    }
+    fn segment(&self, _: &[[f32; 3]], _: usize, _: usize, _: &effectcraft_segment::Prompt) -> effectcraft_segment::Result<Vec<f32>> {
+        Err("no weights".into())
+    }
+    fn tracker(&self) -> Option<&dyn effectcraft_segment::ObjectTracker> {
+        Some(self)
+    }
+}
+
+impl effectcraft_segment::ObjectTracker for Recorder {
+    fn track(
+        &self,
+        req: &effectcraft_segment::TrackRequest,
+        frame: &mut dyn FnMut(i64) -> Option<std::sync::Arc<effectcraft_segment::ClipFrame>>,
+        cancel: &dyn Fn() -> bool,
+        out: &mut dyn FnMut(usize, i64, effectcraft_segment::TrackedFrame),
+    ) -> effectcraft_segment::Result<()> {
+        let prompted = req.objects.iter().flatten().map(|(f, _)| *f).collect();
+        self.requests.lock().unwrap().push((req.first, req.count, prompted));
+        effectcraft_segment::ObjectTracker::track(&Exact, req, frame, cancel, out)
+    }
+}
+
+/// A correction stroke re-tracks only what it changes: the frames from it on, restarted at the
+/// corrected frame; the frames before it keep their tracked results.
+#[test]
+fn a_correction_re_tracks_only_the_frames_it_changes() {
+    let (mut s, clip, _) = painted(center, "disk-retrack.mov");
+    let rec = std::sync::Arc::new(Recorder::default());
+    effectcraft_effects::roto::set_model(Some(rec.clone()));
+    let run = |s: &mut Session| s.execute_checked("roto.propagate", json!({"layer": clip.0, "direction": "forward", "wait": true}));
+    let first = run(&mut s);
+    assert_eq!(rec.requests.lock().unwrap().as_slice(), [(0, 21, vec![0])], "the first pass tracks the whole span");
+    first.unwrap();
+    // Nothing changed: nothing to track.
+    run(&mut s).unwrap();
+    assert_eq!(rec.requests.lock().unwrap().len(), 1, "an unchanged span is not tracked again");
+    // A correction on frame 8: the frames from 8 on are tracked again, restarting at frame 8.
+    let c = center(8);
+    s.execute_checked("roto.stroke", json!({"layer": clip.0, "frame": 8, "points": line([c[0] - 20.0, c[1]], [c[0] + 20.0, c[1]]), "radius": 6})).unwrap();
+    let again = run(&mut s);
+    let reqs = rec.requests.lock().unwrap().clone();
+    effectcraft_effects::roto::set_model(None);
+    again.unwrap();
+    assert_eq!(reqs.len(), 2);
+    assert_eq!(reqs[1], (8, 13, vec![8]), "the window runs from the corrected frame to the end of the span");
+    // The frames before the correction are still the first pass's, the rest the second's.
+    let st = s.execute("roto.status", json!({"layer": clip.0, "frame": 3})).unwrap();
+    assert_eq!(st["source"], "tracker", "{st}");
+    assert_eq!(st["tracker"]["frames"].as_object().unwrap().len(), 21, "{st}");
+}

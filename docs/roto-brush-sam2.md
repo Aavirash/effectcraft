@@ -29,6 +29,15 @@ strokes and span they came from are unchanged. Changing a stroke or the span mak
 Choosing another model, or the classic engine, leaves them in place and `roto.status` says so; a classic Propagate
 replaces them with classic mattes. Object Matte saves nothing.
 
+## Corrections re-track only what they change
+A correction stroke changes the keys of the frames from it on (in both directions from the base), so Propagate tracks
+only those again: the window starts at the nearest prompted frame at or before the first frame it needs (the corrected
+frame, which restarts the object with its own prompt) and runs to the last frame it needs. Frames before the correction
+keep their tracked results, and a Propagate with nothing changed does no tracking. The older non-conditioning memory
+frames before the corrected frame are not rebuilt, so frames just after it can differ slightly from a from-scratch pass.
+Tracked frames of a session are in memory; a project reopened in a new process re-tracks the whole span after a stroke
+change (its saved tracking is stale as a whole).
+
 ## How it works
 `crates/sam2` is a Rust port (on [candle](https://github.com/huggingface/candle), native only) of the Hugging Face
 `transformers` SAM 2 implementation, Apache-2.0 (see its `NOTICE`). Every stage is checked against PyTorch by

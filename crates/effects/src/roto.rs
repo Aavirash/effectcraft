@@ -540,8 +540,9 @@ impl Chain {
         self.model.as_ref().is_some_and(|m| m.tracker().is_some())
     }
 
-    /// Follow the object through the whole span with the model's tracker, from the strokes on
-    /// their frames, and cache every frame's segmentation (under the tracker's keys, with its
+    /// Follow the object through the span with the model's tracker, from the strokes on their
+    /// frames (only the frames without a tracked result yet: after a correction stroke, the frames it
+    /// changes, tracked on from the nearest prompted frame), and cache every frame's segmentation (under the tracker's keys, with its
     /// confidence). The strokes stay hard constraints and the edges are refined at full
     /// resolution; frames the tracker can't give are left to [`Chain::ensure`]'s classic engine.
     /// `progress` gets the number of frames finished. `Ok(None)`: no tracker, nothing done.
@@ -553,9 +554,19 @@ impl Chain {
     ) -> Result<Option<TrackSummary>, String> {
         let Some(tracker) = self.model.as_ref().and_then(|m| m.tracker()) else { return Ok(None) };
         let (Some(_), true) = (self.data.base, self.data.span[1] >= self.data.span[0]) else { return Err("no base frame".into()) };
+        // Frames of the span that already have a tracked result (this session's, or the saved
+        // tracking) are kept: only the rest is tracked. A correction stroke changes the keys of the
+        // frames from it on (both directions), so only those come back here.
+        let (lo_span, hi_span) = (self.data.span[0], self.data.span[1]);
+        let needed: Vec<i64> = (lo_span..=hi_span)
+            .filter(|f| self.keys.get(f).is_some_and(|k| self.saved_seg(*f, self.opts.scale).is_none() && cached(tracked_key(*k), self.opts.scale).is_none()))
+            .collect();
+        let (Some(&need_lo), Some(&need_hi)) = (needed.first(), needed.last()) else {
+            return Ok(Some(TrackSummary::default()));
+        };
         // A prompt is a few clicks from the strokes and a box around what the classic engine makes of
         // them on that frame (clicks alone pick a part of the object, not all of it).
-        let mut prompts: Vec<(i64, effectcraft_segment::Prompt)> = vec![];
+        let mut all_prompts: Vec<(i64, effectcraft_segment::Prompt)> = vec![];
         for f in self.data.stroke_frames().into_iter().filter(|f| self.data.in_span(*f)) {
             let strokes = self.data.strokes_at(f);
             let p = match frame(f) {
@@ -563,13 +574,20 @@ impl Chain {
                 None => rb::tracker_prompt(&strokes, self.opts.scale),
             };
             if p.points.iter().any(|(_, fg)| *fg) {
-                prompts.push((f, p));
+                all_prompts.push((f, p));
             }
         }
-        if prompts.is_empty() {
+        if all_prompts.is_empty() {
             return Err("no foreground strokes to follow".into());
         }
-        let req = TrackRequest::single(self.data.span[0], (self.data.span[1] - self.data.span[0] + 1) as usize, prompts);
+        // The window to track: from the nearest prompted frame at or before the first frame needed
+        // (a correction restarts the object there) to the last frame needed, reaching the first
+        // prompted frame when everything needed lies before it.
+        let first_prompt = all_prompts.first().map_or(need_lo, |p| p.0);
+        let lo = all_prompts.iter().map(|p| p.0).filter(|f| *f <= need_lo).max().unwrap_or(need_lo);
+        let hi = if need_hi < first_prompt { first_prompt } else { need_hi };
+        let prompts: Vec<(i64, effectcraft_segment::Prompt)> = all_prompts.into_iter().filter(|p| p.0 >= lo && p.0 <= hi).collect();
+        let req = TrackRequest::single(lo, (hi - lo + 1) as usize, prompts);
         let frame = std::cell::RefCell::new(frame);
         let mut summary = TrackSummary::default();
         tracker.track(
