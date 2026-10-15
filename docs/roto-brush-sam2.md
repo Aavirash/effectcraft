@@ -103,3 +103,18 @@ per frame:
 MobileSAM prompts every frame independently from the flow-warped matte, so it follows the object while the flow does and
 loses it when it is hidden; SAM 2's streaming memory is what lets it re-acquire the object. The synthetic clips are easy (one
 textured disc), so the "move" and "light" rows mostly show all three working; the last two rows are the difference.
+
+### Corrections needed (`--fixes`)
+`bench --roto --fixes` also counts the correction strokes each tracker needs before every frame reaches IoU 0.9: after each
+run it paints what a user would on the first frame under the target (a short foreground stroke through the true object's
+centre, and a background stroke on the biggest false-positive blob), up to 6. 16 frames, debug build:
+
+| Clip | Classical | MobileSAM | SAM 2.1 Tiny |
+|---|---|---|---|
+| move | 0 | 0 | 0 |
+| light | 0 | 0 | 0 |
+| occlusion | more than 6 | more than 6 | 0 |
+| reenter | more than 6 | more than 6 | 0 |
+
+The simulated user is simple (one stroke pair per round, always on the first bad frame), so "more than 6" means this
+correction model never recovers the flow-based engines on those clips, not that no human could. Peak memory is not measured.

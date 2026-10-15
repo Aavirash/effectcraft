@@ -11,13 +11,14 @@ use effectcraft_segment::{ClipFrame, MaskModel, TrackRequest};
 use serde::Serialize;
 use web_time::Instant;
 
-use super::{FrameSeg, SegOpts, Stroke, StrokeKind, iou, propagate_with, rgb_of, segment_tracked, segment_with, tracker_prompt};
+use super::{FrameSeg, SegOpts, Stroke, StrokeKind, iou, propagate_with, rgb_of, segment_tracked, segment_with, tracker_prompt_boxed};
 
 pub const W: u32 = 200;
 pub const H: u32 = 150;
 const R: f64 = 32.0;
 
 /// A clip with the true matte of the visible object on every frame.
+#[derive(Clone)]
 pub struct Scenario {
     pub name: &'static str,
     pub what: &'static str,
@@ -42,6 +43,12 @@ pub struct Run {
     /// Mean IoU over the frames after the object's last absence (re-appearance), if it had one.
     pub after_return: Option<f64>,
     pub per_frame: Vec<f64>,
+    /// Correction strokes needed before every frame reaches the target IoU (`>N`: not within N); set by
+    /// [`with_fixes`], `None` when not measured.
+    pub fixes: Option<String>,
+    /// The matte of every frame (not serialised).
+    #[serde(skip)]
+    pub mattes: Vec<Vec<u8>>,
 }
 
 fn noise(x: f64, y: f64, seed: u32) -> f64 {
@@ -182,6 +189,8 @@ fn metrics(sc: &Scenario, tracker: &str, mattes: &[Vec<u8>], secs: f64) -> Run {
         secs_per_frame: secs / n,
         after_return,
         per_frame,
+        fixes: None,
+        mattes: mattes.to_vec(),
     }
 }
 
@@ -190,7 +199,7 @@ fn metrics(sc: &Scenario, tracker: &str, mattes: &[Vec<u8>], secs: f64) -> Run {
 pub fn run_flow(sc: &Scenario, tracker: &str, model: Option<&dyn MaskModel>) -> Run {
     let opts = SegOpts::default();
     let start = Instant::now();
-    let refs: Vec<&Stroke> = sc.strokes.iter().collect();
+    let refs: Vec<&Stroke> = sc.strokes.iter().filter(|s| s.frame == sc.base as i64).collect();
     let mut segs: Vec<Option<FrameSeg>> = vec![None; sc.frames.len()];
     if let Some(first) = sc.frames.get(sc.base) {
         let base = segment_with(first, &refs, None, &opts, 0.0, model);
@@ -201,7 +210,8 @@ pub fn run_flow(sc: &Scenario, tracker: &str, model: Option<&dyn MaskModel>) -> 
     for f in sc.base + 1..sc.frames.len() {
         let (Some(prev_img), Some(img)) = (sc.frames.get(f - 1), sc.frames.get(f)) else { break };
         let Some(Some(prev)) = segs.get(f - 1) else { break };
-        let next = propagate_with(prev_img, prev, img, &[], &opts, 0.0, model);
+        let here: Vec<&Stroke> = sc.strokes.iter().filter(|s| s.frame == f as i64).collect();
+        let next = propagate_with(prev_img, prev, img, &here, &opts, 0.0, model);
         if let Some(slot) = segs.get_mut(f) {
             *slot = Some(next);
         }
@@ -218,16 +228,23 @@ pub fn run_flow(sc: &Scenario, tracker: &str, model: Option<&dyn MaskModel>) -> 
 pub fn run_tracker(sc: &Scenario, tracker: &str, model: &dyn MaskModel) -> Option<Run> {
     let t = model.tracker()?;
     let opts = SegOpts::default();
-    let refs: Vec<&Stroke> = sc.strokes.iter().collect();
+    let at = |f: usize| -> Vec<&Stroke> { sc.strokes.iter().filter(|s| s.frame == f as i64).collect() };
     let clip: Vec<Arc<ClipFrame>> = sc.frames.iter().map(|i| Arc::new(ClipFrame { rgb: rgb_of(i), w: i.width as usize, h: i.height as usize })).collect();
-    let req = TrackRequest::single(0, sc.frames.len(), vec![(sc.base as i64, tracker_prompt(&refs, 1.0))]);
+    // a prompt per stroke frame: a few clicks and the box of the classic matte (as Chain::track does)
+    let mut prompts = vec![];
+    for f in 0..sc.frames.len() {
+        let strokes = at(f);
+        let Some(img) = sc.frames.get(f).filter(|_| strokes.iter().any(|s| s.kind == StrokeKind::Fg)) else { continue };
+        prompts.push((f as i64, tracker_prompt_boxed(&strokes, 1.0, &super::segment(img, &strokes, None, &opts, 0.0))));
+    }
+    let req = TrackRequest::single(0, sc.frames.len(), prompts);
     let start = Instant::now();
     let mut mattes: Vec<Vec<u8>> = vec![vec![0u8; (W * H) as usize]; sc.frames.len()];
     let mut get = |f: i64| usize::try_from(f).ok().and_then(|i| clip.get(i).cloned());
     let r = t.track(&req, &mut get, &|| false, &mut |_, f, tf| {
         let (Ok(i), true) = (usize::try_from(f), tf.prob.len() == (W * H) as usize) else { return };
         let Some(img) = sc.frames.get(i) else { return };
-        let strokes: Vec<&Stroke> = if i == sc.base { refs.clone() } else { vec![] };
+        let strokes = at(i);
         if let Some(slot) = mattes.get_mut(i) {
             *slot = segment_tracked(img, &strokes, tf.prob, tf.occluded, &opts, 0.0).matte;
         }
@@ -236,14 +253,74 @@ pub fn run_tracker(sc: &Scenario, tracker: &str, model: &dyn MaskModel) -> Optio
     Some(metrics(sc, tracker, &mattes, start.elapsed().as_secs_f64()))
 }
 
+/// The correction a user would paint on frame `f` where `pred` is wrong: a short foreground stroke through
+/// the true object's centre, and a background stroke on the biggest false-positive blob's centre.
+fn correction(sc: &Scenario, f: usize, pred: &[u8]) -> Vec<Stroke> {
+    let truth = sc.truth.get(f).map(Vec::as_slice).unwrap_or(&[]);
+    let centre = |keep: &dyn Fn(usize) -> bool| -> Option<[f64; 2]> {
+        let (mut sx, mut sy, mut n) = (0.0, 0.0, 0.0);
+        for i in (0..truth.len().min(pred.len())).filter(|i| keep(*i)) {
+            sx += (i % W as usize) as f64 + 0.5;
+            sy += (i / W as usize) as f64 + 0.5;
+            n += 1.0;
+        }
+        (n > 0.0).then(|| [sx / n, sy / n])
+    };
+    let mut out = vec![];
+    if let Some(c) = centre(&|i| truth.get(i).is_some_and(|v| *v != 0)) {
+        out.push(line(StrokeKind::Fg, f as i64, [c[0] - 12.0, c[1]], [c[0] + 12.0, c[1]], 5.0));
+    }
+    if let Some(c) = centre(&|i| pred.get(i).is_some_and(|v| *v != 0) && truth.get(i).is_some_and(|v| *v == 0)) {
+        out.push(line(StrokeKind::Bg, f as i64, [c[0] - 6.0, c[1]], [c[0] + 6.0, c[1]], 6.0));
+    }
+    out
+}
+
+/// Repeat `run` on `sc`, each time painting the correction a user would on the first frame under `target` IoU,
+/// until every frame reaches it or `max` corrections were needed. Sets `fixes` on the first run's result: the
+/// number of corrections, or `>max`.
+pub fn with_fixes(sc: &Scenario, target: f64, max: usize, run: &dyn Fn(&Scenario) -> Option<Run>) -> Option<Run> {
+    let mut cur = sc.clone();
+    let mut first: Option<Run> = None;
+    for k in 0..=max {
+        let r = run(&cur)?;
+        let bad = r.per_frame.iter().position(|v| *v < target);
+        let first_run = first.get_or_insert_with(|| r.clone());
+        let Some(f) = bad else {
+            first_run.fixes = Some(k.to_string());
+            break;
+        };
+        if k == max {
+            first_run.fixes = Some(format!(">{max}"));
+            break;
+        }
+        let pred = r.mattes.get(f).cloned().unwrap_or_default();
+        let fix = correction(&cur, f, &pred);
+        if fix.is_empty() {
+            first_run.fixes = Some(format!(">{max}"));
+            break;
+        }
+        cur.strokes.extend(fix);
+    }
+    first
+}
+
 /// A fixed-width table of the runs, grouped by scenario.
 pub fn table(runs: &[Run]) -> String {
-    let mut out = format!("{:<10} {:<12} {:>8} {:>8} {:>8} {:>10} {:>9}\n", "clip", "tracker", "meanIoU", "minIoU", "flicker", "after ret.", "s/frame");
+    let mut out =
+        format!("{:<10} {:<12} {:>8} {:>8} {:>8} {:>10} {:>9} {:>6}\n", "clip", "tracker", "meanIoU", "minIoU", "flicker", "after ret.", "s/frame", "fixes");
     for r in runs {
         let back = r.after_return.map_or_else(|| "-".to_string(), |v| format!("{v:.3}"));
         out.push_str(&format!(
-            "{:<10} {:<12} {:>8.3} {:>8.3} {:>8.3} {:>10} {:>9.3}\n",
-            r.scenario, r.tracker, r.mean_iou, r.min_iou, r.flicker, back, r.secs_per_frame
+            "{:<10} {:<12} {:>8.3} {:>8.3} {:>8.3} {:>10} {:>9.3} {:>6}\n",
+            r.scenario,
+            r.tracker,
+            r.mean_iou,
+            r.min_iou,
+            r.flicker,
+            back,
+            r.secs_per_frame,
+            r.fixes.as_deref().unwrap_or("-")
         ));
     }
     out
@@ -281,6 +358,19 @@ mod tests {
         assert!(run.mean_iou > 0.9, "mean IoU {}", run.mean_iou);
         assert_eq!(run.per_frame.len(), 24);
         assert!(table(&[run]).contains("classical"));
+    }
+
+    #[test]
+    fn corrections_are_counted_until_every_frame_reaches_the_target() {
+        let all = scenarios(24);
+        let classical = |s: &Scenario| Some(run_flow(s, "classical", None));
+        // plain motion needs none
+        let easy = all.iter().find(|s| s.name == "move").and_then(|s| with_fixes(s, 0.9, 6, &classical)).unwrap();
+        assert_eq!(easy.fixes.as_deref(), Some("0"));
+        // after the disk has left and returned the classic engine has lost it: it needs a correction (or never gets there)
+        let hard = all.iter().find(|s| s.name == "reenter").and_then(|s| with_fixes(s, 0.9, 6, &classical)).unwrap();
+        assert_ne!(hard.fixes.as_deref(), Some("0"), "{:?}", hard.fixes);
+        assert!(table(&[easy, hard]).contains("fixes"));
     }
 
     #[test]

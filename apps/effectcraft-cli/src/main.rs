@@ -27,7 +27,7 @@
 //!     (--gpu: CPU vs GPU ms/frame for every comp at Full and Half)
 //! effectcraft-cli bench --ops [--small] [--layers N] [--comps N] [--footage N]   everyday-operation timings
 //!     on a large generated project (open, save, auto-save, undo/redo, timeline, Project panel)
-//! effectcraft-cli bench --roto [--frames N] [--sam2 model.safetensors] [--mobilesam mobile_sam.pt] [--json]   Roto Brush trackers on synthetic clips with known mattes
+//! effectcraft-cli bench --roto [--frames N] [--sam2 model.safetensors] [--mobilesam mobile_sam.pt] [--fixes] [--json]   Roto Brush trackers on synthetic clips with known mattes
 //!     (classical engine, MobileSAM and SAM 2.1 Tiny when installed; IoU, flicker, re-appearance, seconds per frame)
 //! effectcraft-cli script FILE.jsx [F.ecproj] | --eval CODE    run an After Effects-style script
 //! effectcraft-cli mcp [--autosave | --bridge PORT]            MCP server on stdio
@@ -126,7 +126,7 @@ const USAGE: &str = "usage: effectcraft-cli <info|commands|exec|run|props|get|se
   bench --ops [--small] [--layers N] [--comps N] [--footage N]
                                            everyday operations on a large generated project: startup, open,
                                            save, auto-save, edits + undo/redo, timeline, Project panel
-  bench --roto [--frames N] [--sam2 FILE] [--mobilesam FILE] [--json]
+  bench --roto [--frames N] [--sam2 FILE] [--mobilesam FILE] [--fixes] [--json]
                                            Roto Brush trackers on synthetic clips with known mattes: movement,
                                            lighting change, occlusion, leaving and re-entering the frame
   script FILE.jsx [F.ecproj] | --eval CODE run JavaScript with the After Effects-style object model
@@ -195,6 +195,7 @@ const VALUED: &[&str] = &[
 /// Options without a value. Any other `--option` is a usage error.
 const FLAGS: &[&str] = &[
     "--json",
+    "--fixes",
     "--save",
     "--demo",
     "--empty",
@@ -1033,14 +1034,17 @@ fn bench_roto(args: &Args) -> Result<(), Failure> {
     if sam2.is_none() {
         note!("bench --roto: SAM 2.1 Tiny is not installed; no SAM 2 column");
     }
+    // `--fixes`: also count the correction strokes each needs before every frame reaches IoU 0.9 (up to 6).
+    let fixes = args.flag("--fixes");
+    let measure = |sc: &bench::Scenario, run: &dyn Fn(&bench::Scenario) -> Option<bench::Run>| if fixes { bench::with_fixes(sc, 0.9, 6, run) } else { run(sc) };
     let mut runs = vec![];
     for sc in bench::scenarios(frames) {
-        runs.push(bench::run_flow(&sc, "classical", None));
+        runs.extend(measure(&sc, &|s| Some(bench::run_flow(s, "classical", None))));
         if let Some(m) = &mobilesam {
-            runs.push(bench::run_flow(&sc, "mobilesam", Some(m.as_ref())));
+            runs.extend(measure(&sc, &|s| Some(bench::run_flow(s, "mobilesam", Some(m.as_ref())))));
         }
-        if let Some(run) = sam2.as_ref().and_then(|m| bench::run_tracker(&sc, "sam2-tiny", m.as_ref())) {
-            runs.push(run);
+        if let Some(m) = &sam2 {
+            runs.extend(measure(&sc, &|s| bench::run_tracker(s, "sam2-tiny", m.as_ref())));
         }
     }
     if args.flag("--json") {
