@@ -811,10 +811,19 @@ mod script_font_tests {
                     let row = &galley.rows[0].glyphs;
                     assert_eq!(row.len(), 2, "A\u{3042} should shape to two glyphs");
                     let (latin, kana) = (bottom(&row[0]), bottom(&row[1]));
-                    let drift = (kana - latin).abs();
+                    let drift = kana - latin;
+                    // Without the correction the kana sits 3-5 pt *above* the Latin ink, so the sign is
+                    // what tells the two apart. With it, the kana reaches a little *below* the Latin
+                    // one, by however far the face's kana overshoot past the baseline - measured at
+                    // 1.94 pt for Noto Sans CJK JP against Yu Gothic's 0.4 - plus up to half a point of
+                    // whole-point rounding in `pos.y` for each glyph.
                     assert!(
-                        drift < 1.5,
-                        "the kana sits {drift:.2} pt off the Latin baseline at {size} pt in {family:?} (latin {latin}, kana {kana}); the fallback tweak is missing or wrong"
+                        drift > -0.5,
+                        "the kana sits {drift:.2} pt above the Latin baseline at {size} pt in {family:?} (latin {latin}, kana {kana}); the fallback tweak is missing or wrong"
+                    );
+                    assert!(
+                        drift < 2.5,
+                        "the kana sits {drift:.2} pt below the Latin baseline at {size} pt in {family:?} (latin {latin}, kana {kana}); the fallback tweak is too large"
                     );
                 }
             }
