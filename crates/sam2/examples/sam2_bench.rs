@@ -56,6 +56,20 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         let _ = effectcraft_sam2::neck::sine_position(128, h, w)?;
     }
     println!("sine positions for the four levels: {:.0} ms", t.elapsed().as_secs_f64() * 1e3);
+    // What a tracked frame adds to the encode: memory attention over the memory bank (7 memory frames and
+    // 16 object pointers of 4 tokens), then the memory encoder.
+    let weights = effectcraft_sam2::weights::Weights::open(&file)?;
+    let attn = effectcraft_sam2::memattn::MemoryAttention::load(&weights)?;
+    let cur = Tensor::randn(0f32, 1.0, (4096, 256), &Device::Cpu)?;
+    let cur_pos = Tensor::randn(0f32, 1.0, (4096, 256), &Device::Cpu)?;
+    let m = 7 * 4096 + 64;
+    let mem = Tensor::randn(0f32, 1.0, (m, 64), &Device::Cpu)?;
+    let mem_pos = Tensor::randn(0f32, 1.0, (m, 64), &Device::Cpu)?;
+    for run in 0..2 {
+        let t = Instant::now();
+        let _ = attn.forward(&cur, &cur_pos, &mem, &mem_pos, 64)?;
+        println!("memory attention (run {run}, {m} memory tokens): {:.0} ms", t.elapsed().as_secs_f64() * 1e3);
+    }
     println!("threads: {}", std::thread::available_parallelism().map_or(1, |n| n.get()));
     Ok(())
 }

@@ -64,10 +64,19 @@ the CPU.
 SAM 2 is prompted with at most three foreground and three background points per frame: it was trained on a handful
 of clicks, and measured confidence collapses with many (0.99 with 1–7 points, 0.25 with 16, 0.00 with 32).
 
-## Speed (this PC: 16 threads, CPU only)
-A 1024 × 1024 frame takes about **3.4 s** to encode (release build); a click on an encoded frame about 120 ms. Tracking a
-clip costs one encode per frame, so a 300-frame clip takes on the order of 17 minutes on a CPU. Candle has no AMD/Vulkan
-backend; GPU work is Phase 6 of the plan (the early Hiera blocks are memory-bound and have headroom on the CPU too).
+## Speed (this PC: 16 threads, CPU only, release build)
+| Step | Time |
+|---|---|
+| Encode one 1024 × 1024 frame | about **2.4 s** (3.4 s before the speed work: a parallel GELU, cached position encodings, pooling without permutes) |
+| A click on an encoded frame | about 105 ms |
+| Memory attention on a tracked frame (full bank of 7 memory frames) | about **2.4 s** |
+| A tracked frame in all | about **5 s** (the first six have fewer memories) |
+
+A 300-frame clip therefore takes on the order of 25 minutes on this CPU. (An earlier version of this page said one encode
+per frame; the memory attention is as large as the encode.) What was tried and did not help: chunking the queries of the
+global and memory attention to keep scores in cache. Candle has no AMD/Vulkan backend, so a GPU path is future work (a Burn
+or hand-written wgpu route); `cargo run --release -p effectcraft-sam2 --example sam2_bench` and `--example op_bench` time the
+pieces.
 
 ## Benchmark
 `effectcraft-cli bench --roto [--frames N] [--sam2 model.safetensors] [--mobilesam mobile_sam.pt]` runs synthetic clips
