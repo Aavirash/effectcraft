@@ -431,6 +431,9 @@ fn status(s: &mut Session, p: &Value) -> Result<Value> {
     out["strokeFrames"] = json!(d.stroke_frames());
     out["frozen"] = json!(frozen_of(&g));
     out["pending"] = json!(s.roto_pending.contains(&(cid, lid, uid)));
+    // The model Settings chose and whether this layer segments with it (propagate refuses or waits otherwise).
+    out["model"] = s.roto_model();
+    out["notice"] = json!(s.roto_model_notice(s.uses_roto_model(cid, lid, uid)));
     out["limits"] = json!(rt::frame_limits(&comp, &layer));
     let frame = frame_p(s, p, cid, &layer);
     out["frame"] = json!(frame);
@@ -464,7 +467,8 @@ fn status(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     // Where each frame's matte came from, and how far to trust it: frames a tracker followed
-    // report its confidence and whether the object was absent; the rest came from the classic engine.
+    // report its confidence and whether the object was absent; frames the model segmented on
+    // their own report "model"; the rest came from the classic engine.
     {
         let size = rt::layer_size(&s.project, &comp, &layer);
         let chain = fx::Chain::new(&params_static(&g), size, comp.frame_rate.as_f64(), 1.0);
@@ -474,7 +478,13 @@ fn status(s: &mut Session, p: &Value) -> Result<Value> {
             .filter_map(|(f, k)| fx::trust(*k).map(|t| (f.to_string(), json!({"confidence": t.confidence, "occluded": t.occluded}))))
             .collect();
         out["tracker"] = json!({"model": s.models_roto_active(), "frames": tracked});
-        out["source"] = json!(if tracked.contains_key(&frame.to_string()) { "tracker" } else { "classical" });
+        out["source"] = json!(if tracked.contains_key(&frame.to_string()) {
+            "tracker"
+        } else if chain.model.is_some() {
+            "model"
+        } else {
+            "classical"
+        });
     }
     let computed = s.roto_computed(cid, lid, uid);
     out["computed"] = json!(computed.iter().filter(|(_, c)| **c).map(|(f, _)| *f).collect::<Vec<_>>());

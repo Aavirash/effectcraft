@@ -677,6 +677,7 @@ fn object_matte_mattes_persist_in_the_disk_cache() {
 fn sam2_tracks_the_clip_through_roto_propagate() {
     let Ok(weights) = std::env::var("EFFECTCRAFT_SAM2") else { return };
     let dir = std::env::temp_dir().join(format!("ec-roto-sam2-{}", std::process::id()));
+    hold_roto_cache_test_lock();
     let (mut s, clip, _) = painted(center, "disk-sam2.mov");
     s.models_dir = Some(dir.join("models"));
     std::fs::create_dir_all(dir.join("models")).unwrap();
@@ -704,6 +705,49 @@ fn sam2_tracks_the_clip_through_roto_propagate() {
     let st = s.execute("roto.status", json!({"layer": clip.0, "frame": 12})).unwrap();
     assert_eq!(st["source"], "classical", "{st}");
     assert_eq!(st["tracker"]["frames"].as_object().unwrap().len(), 0);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Choosing a model that is not installed must not fall back to the classic engine silently:
+/// propagate refuses and `roto.status` says why. Choosing the classic engine runs it again.
+#[test]
+fn a_selected_model_that_is_not_installed_refuses_to_propagate() {
+    hold_roto_cache_test_lock();
+    let (mut s, clip, _) = painted(center, "disk-not-installed.mov");
+    s.models_dir = Some(std::env::temp_dir().join(format!("ec-roto-none-{}", std::process::id())));
+    s.execute_checked("roto.model.select", json!({"id": "sam2.1-hiera-tiny"})).unwrap();
+    let st = s.execute("roto.status", json!({"layer": clip.0})).unwrap();
+    assert_eq!(st["model"]["selected"], "sam2.1-hiera-tiny", "{st}");
+    assert_eq!(st["model"]["installed"], false, "{st}");
+    assert!(st["notice"].as_str().unwrap().contains("not installed"), "{st}");
+    let e = s.execute_checked("roto.propagate", json!({"layer": clip.0, "direction": "both", "wait": true})).unwrap_err().to_string();
+    assert!(e.contains("not installed"), "{e}");
+    assert_eq!(s.execute("roto.status", json!({"layer": clip.0, "frame": 10})).unwrap()["source"], "classical");
+    s.execute_checked("roto.model.select", json!({"id": "classical"})).unwrap();
+    let r = s.execute_checked("roto.propagate", json!({"layer": clip.0, "direction": "both", "wait": true})).unwrap();
+    assert_eq!(r["frames"], 21, "{r}");
+    assert!(s.execute("roto.status", json!({"layer": clip.0})).unwrap()["notice"].is_null());
+}
+
+/// Selecting SAM 2 without `wait` and propagating at once: propagate loads the model first, so the
+/// tracker (not the classic engine) does the work. Needs EFFECTCRAFT_SAM2 like the test above.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn sam2_selected_without_wait_is_loaded_before_propagate() {
+    let Ok(weights) = std::env::var("EFFECTCRAFT_SAM2") else { return };
+    hold_roto_cache_test_lock();
+    let dir = std::env::temp_dir().join(format!("ec-roto-sam2-wait-{}", std::process::id()));
+    let (mut s, clip, _) = painted(center, "disk-sam2-wait.mov");
+    s.models_dir = Some(dir.join("models"));
+    std::fs::create_dir_all(dir.join("models")).unwrap();
+    s.execute_checked("roto.model.install", json!({"path": weights})).unwrap();
+    s.execute_checked("roto.model.select", json!({"id": "sam2.1-hiera-tiny"})).unwrap();
+    let r = s.execute_checked("roto.propagate", json!({"layer": clip.0, "direction": "both", "wait": true})).unwrap();
+    assert_eq!(r["frames"], 21, "{r}");
+    let st = s.execute("roto.status", json!({"layer": clip.0, "frame": 12})).unwrap();
+    assert_eq!(st["source"], "tracker", "{st}");
+    assert_eq!(st["tracker"]["model"], "sam2.1-hiera-tiny");
+    assert!(st["notice"].is_null(), "{st}");
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -735,6 +779,7 @@ fn a_failing_tracker_falls_back_to_the_classic_engine() {
             Err("the tracker broke".into())
         }
     }
+    hold_roto_cache_test_lock();
     let (mut s, clip, _) = painted(center, "disk-broken-tracker.mov");
     effectcraft_effects::roto::set_model(Some(Arc::new(Broken)));
     let r = s.execute_checked("roto.propagate", json!({"layer": clip.0, "direction": "both", "wait": true}));

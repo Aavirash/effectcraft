@@ -621,9 +621,21 @@ impl Session {
         }
     }
 
+    /// Whether `effect` on `layer` segments with the model Settings chose: Object Matte always,
+    /// Roto Brush unless it is version 1.0 (the classic engine).
+    pub(crate) fn uses_roto_model(&self, comp: ItemId, layer: LayerId, effect: Uid) -> bool {
+        let g = self.project.comp(comp).and_then(|c| c.layer(layer)).and_then(|l| l.effects()).and_then(|f| f.groups().find(|g| g.uid == effect));
+        g.is_some_and(|g| is_object_matte(g) || fx::uses_model(&params_static(g)))
+    }
+
     /// Start propagating (or freezing) Roto Brush `effect` on `layer`. `wait`: block until done
     /// (wasm32 always does). Returns the number of frames.
     pub fn start_roto(&mut self, comp: ItemId, layer: LayerId, effect: Uid, task: RotoTask, dir: Direction, wait: bool) -> Result<usize, String> {
+        // The model must be in use before the job starts: otherwise it would run on the classic
+        // engine without saying so.
+        if self.uses_roto_model(comp, layer, effect) {
+            self.ensure_roto_model(wait)?;
+        }
         if self.is_roto_running() {
             if !wait {
                 return Err("a Roto Brush job is already running".into());
@@ -786,11 +798,14 @@ impl Session {
     pub fn poll_roto(&mut self, auto: bool) -> bool {
         self.poll_models();
         let changed = self.poll_roto_job();
-        if auto && self.roto_job.is_none() && self.offloaded_roto().is_none() && self.state.roto.auto_propagate {
+        // Edited instances stay pending while the model they will segment with is still loading.
+        let loading = self.roto_model_loading();
+        if auto && self.roto_job.is_none() && self.offloaded_roto().is_none() && self.state.roto.auto_propagate && !loading {
             while let Some((c, l, e)) = self.roto_pending.first().copied() {
                 self.roto_pending.remove(0);
-                if self.start_roto(c, l, e, RotoTask::Propagate, Direction::Both, false).is_ok() {
-                    return true;
+                match self.start_roto(c, l, e, RotoTask::Propagate, Direction::Both, false) {
+                    Ok(_) => return true,
+                    Err(message) => self.events.push(Event::Toast { message, error: true }),
                 }
             }
         }

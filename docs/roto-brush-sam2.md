@@ -12,12 +12,19 @@ Apache-2.0). It is optional: nothing changes until you install the model and cho
    whole span in both directions, using SAM 2's streaming memory, so it keeps tracking through occlusion and when the
    object leaves the frame and returns. Each frame's probability map is then refined by the same graph cut as every other
    Roto Brush frame: your strokes stay hard constraints and edges snap to colour.
-4. `roto.status {frame}` reports `source` (`tracker` or `classical`) and, for tracked frames, `tracker.frames[f]`:
-   `confidence` (0–1, the model's object score times its predicted mask quality) and `occluded` (the object is not
-   in the frame: an empty matte).
+4. `roto.status {frame}` reports `source` (`tracker`, `model` for a frame the model segmented on its own, or
+   `classical`) and, for tracked frames, `tracker.frames[f]`: `confidence` (0–1, the model's object score times its
+   predicted mask quality) and `occluded` (the object is not in the frame: an empty matte). `model` says what Settings
+   chose and whether it is installed, loaded and loading; `notice` says when it is not the one in use for the layer.
 
-If the model is missing, fails, or is deselected, the classic engine runs exactly as before (`roto.status` says
-`classical`, and the job's `trackerNote` says why).
+Propagate never falls back to the classic engine without saying so. With SAM 2 chosen but not installed, or failing to
+load, it refuses with the reason. While it is still loading, `wait: true` (agents) loads it first; without `wait` it
+refuses, and the load goes on in the background. Deselecting SAM 2 (choosing Classic) runs Propagate exactly as before,
+and Roto Brush 1.0 never uses a model.
+
+Tracked frames live in the session that ran Propagate and are not saved in the project file. A separate render process
+(`effectcraft-cli render-frame`) does not have them, so render in the same session: in the app, or in one `run` that
+includes `roto.propagate` and then `comp.saveFrameAs`.
 
 ## How it works
 `crates/sam2` is a Rust port (on [candle](https://github.com/huggingface/candle), native only) of the Hugging Face

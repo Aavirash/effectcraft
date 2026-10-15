@@ -191,9 +191,15 @@ pub fn set_model(m: Option<Arc<dyn MaskModel>>) {
     }
 }
 
+/// Whether an instance with `params` segments with the model Settings chose: Roto Brush 2.0 and
+/// 3.0 do, 1.0 is the classic engine.
+pub fn uses_model(params: &Params) -> bool {
+    e(params, "version") != 0
+}
+
 /// The model an instance segments with: its version's choice of the installed one.
 pub fn model_for(params: &Params) -> Option<Arc<dyn MaskModel>> {
-    if e(params, "version") == 0 {
+    if !uses_model(params) {
         return None;
     }
     installed_model()
