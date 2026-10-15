@@ -27,8 +27,8 @@
 //!     (--gpu: CPU vs GPU ms/frame for every comp at Full and Half)
 //! effectcraft-cli bench --ops [--small] [--layers N] [--comps N] [--footage N]   everyday-operation timings
 //!     on a large generated project (open, save, auto-save, undo/redo, timeline, Project panel)
-//! effectcraft-cli bench --roto [--frames N] [--json]   Roto Brush trackers on synthetic clips with known mattes
-//!     (classical engine, MobileSAM when installed; IoU, flicker, re-appearance, seconds per frame)
+//! effectcraft-cli bench --roto [--frames N] [--sam2 model.safetensors] [--json]   Roto Brush trackers on synthetic clips with known mattes
+//!     (classical engine, MobileSAM and SAM 2.1 Tiny when installed; IoU, flicker, re-appearance, seconds per frame)
 //! effectcraft-cli script FILE.jsx [F.ecproj] | --eval CODE    run an After Effects-style script
 //! effectcraft-cli mcp [--autosave | --bridge PORT]            MCP server on stdio
 //!
@@ -126,7 +126,8 @@ const USAGE: &str = "usage: effectcraft-cli <info|commands|exec|run|props|get|se
   bench --ops [--small] [--layers N] [--comps N] [--footage N]
                                            everyday operations on a large generated project: startup, open,
                                            save, auto-save, edits + undo/redo, timeline, Project panel
-  bench --roto [--frames N] [--json]       Roto Brush trackers on synthetic clips with known mattes: movement,
+  bench --roto [--frames N] [--sam2 FILE] [--json]
+                                           Roto Brush trackers on synthetic clips with known mattes: movement,
                                            lighting change, occlusion, leaving and re-entering the frame
   script FILE.jsx [F.ecproj] | --eval CODE run JavaScript with the After Effects-style object model
                                            (app.project, comps, layers, properties…); prints writeLn
@@ -142,6 +143,7 @@ options: --project F.ecproj | --demo | --empty   --save | --save-as F   --bridge
 const VALUED: &[&str] = &[
     "--n",
     "--frames",
+    "--sam2",
     "--play",
     "--layers",
     "--comps",
@@ -1023,11 +1025,21 @@ fn bench_roto(args: &Args) -> Result<(), Failure> {
     if mobilesam.is_none() {
         note!("bench --roto: MobileSAM is not installed; comparing the classical engine only");
     }
+    // `--sam2 FILE` uses the weights at FILE; otherwise the installed ones.
+    let sam2_file = args.opt("--sam2").map(std::path::PathBuf::from).or_else(|| session.model_path(&effectcraft_segment::SAM2_TINY));
+    let sam2: Option<std::sync::Arc<dyn MaskModel>> =
+        sam2_file.and_then(|p| std::fs::read(p).ok()).and_then(|bytes| effectcraft_sam2::mask::load(&bytes).ok()).map(|m| m as std::sync::Arc<dyn MaskModel>);
+    if sam2.is_none() {
+        note!("bench --roto: SAM 2.1 Tiny is not installed; no SAM 2 column");
+    }
     let mut runs = vec![];
     for sc in bench::scenarios(frames) {
         runs.push(bench::run_flow(&sc, "classical", None));
         if let Some(m) = &mobilesam {
             runs.push(bench::run_flow(&sc, "mobilesam", Some(m.as_ref())));
+        }
+        if let Some(run) = sam2.as_ref().and_then(|m| bench::run_tracker(&sc, "sam2-tiny", m.as_ref())) {
+            runs.push(run);
         }
     }
     if args.flag("--json") {

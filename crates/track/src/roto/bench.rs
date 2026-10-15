@@ -5,11 +5,13 @@
 //! later SAM 2) is added when the caller has one. `effectcraft-cli bench --roto` prints the table.
 
 use effectcraft_raster::Image;
-use effectcraft_segment::MaskModel;
+use std::sync::Arc;
+
+use effectcraft_segment::{ClipFrame, MaskModel, TrackRequest};
 use serde::Serialize;
 use web_time::Instant;
 
-use super::{FrameSeg, SegOpts, Stroke, StrokeKind, iou, propagate_with, segment_with};
+use super::{FrameSeg, SegOpts, Stroke, StrokeKind, iou, propagate_with, rgb_of, segment_tracked, segment_with, tracker_prompt};
 
 pub const W: u32 = 200;
 pub const H: u32 = 150;
@@ -208,6 +210,30 @@ pub fn run_flow(sc: &Scenario, tracker: &str, model: Option<&dyn MaskModel>) -> 
     let empty = vec![0u8; (W * H) as usize];
     let mattes: Vec<Vec<u8>> = segs.into_iter().map(|s| s.map_or_else(|| empty.clone(), |s| s.matte)).collect();
     metrics(sc, tracker, &mattes, secs)
+}
+
+/// Follow the object through the whole clip with the model's video tracker, as the Roto Brush's
+/// tracking pass does (prompt from the strokes, probability maps refined by the same graph cut).
+/// `None` when the model has no tracker or the tracker fails.
+pub fn run_tracker(sc: &Scenario, tracker: &str, model: &dyn MaskModel) -> Option<Run> {
+    let t = model.tracker()?;
+    let opts = SegOpts::default();
+    let refs: Vec<&Stroke> = sc.strokes.iter().collect();
+    let clip: Vec<Arc<ClipFrame>> = sc.frames.iter().map(|i| Arc::new(ClipFrame { rgb: rgb_of(i), w: i.width as usize, h: i.height as usize })).collect();
+    let req = TrackRequest { first: 0, count: sc.frames.len(), prompts: vec![(sc.base as i64, tracker_prompt(&refs, 1.0))] };
+    let start = Instant::now();
+    let mut mattes: Vec<Vec<u8>> = vec![vec![0u8; (W * H) as usize]; sc.frames.len()];
+    let mut get = |f: i64| usize::try_from(f).ok().and_then(|i| clip.get(i).cloned());
+    let r = t.track(&req, &mut get, &|| false, &mut |f, tf| {
+        let (Ok(i), true) = (usize::try_from(f), tf.prob.len() == (W * H) as usize) else { return };
+        let Some(img) = sc.frames.get(i) else { return };
+        let strokes: Vec<&Stroke> = if i == sc.base { refs.clone() } else { vec![] };
+        if let Some(slot) = mattes.get_mut(i) {
+            *slot = segment_tracked(img, &strokes, tf.prob, tf.occluded, &opts, 0.0).matte;
+        }
+    });
+    r.ok()?;
+    Some(metrics(sc, tracker, &mattes, start.elapsed().as_secs_f64()))
 }
 
 /// A fixed-width table of the runs, grouped by scenario.
