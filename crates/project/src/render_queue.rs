@@ -444,7 +444,11 @@ impl RenderSettings {
     }
     pub fn output_size(&self, comp: &Comp) -> (u32, u32) {
         let s = self.resolution.clamp(0.01, 4.0);
-        (((comp.width as f64 * s).round() as u32).max(1), ((comp.height as f64 * s).round() as u32).max(1))
+        // A 30 000 px comp at 4x would otherwise request 120 000 px sides, overflowing
+        // `w * h * 4` in the exporters. The resize path clamps to the same limit.
+        let w = ((comp.width as f64 * s).round() as u32).max(1).min(30_000);
+        let h = ((comp.height as f64 * s).round() as u32).max(1).min(30_000);
+        (w, h)
     }
     pub fn resolution_label(&self) -> &'static str {
         match self.resolution {
@@ -1661,6 +1665,16 @@ mod tests {
         m.crop = Crop { enabled: true, use_roi: true, roi: Some([100.0, 50.0, 800.0, 400.0]), ..Default::default() };
         let half = RenderSettings { resolution: 0.5, ..Default::default() };
         assert_eq!(m.output_size(&c, &half), (400, 200));
+    }
+
+    #[test]
+    fn output_size_never_exceeds_the_comp_limit() {
+        // 30 000 px at 4x must not request 120 000 px sides (exporter `w * h * 4`).
+        let c = Comp::new(30_000, 30_000, FrameRate::new(30, 1), Tick::from_seconds_f64(1.0));
+        let rs = RenderSettings { resolution: 4.0, ..Default::default() };
+        assert_eq!(rs.output_size(&c), (30_000, 30_000));
+        let m = OutputModule::for_format(OutputFormat::PngSequence);
+        assert_eq!(m.output_size(&c, &rs), (30_000, 30_000));
     }
 
     #[test]
