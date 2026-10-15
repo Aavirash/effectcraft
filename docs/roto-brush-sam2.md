@@ -16,15 +16,18 @@ Apache-2.0). It is optional: nothing changes until you install the model and cho
    `classical`) and, for tracked frames, `tracker.frames[f]`: `confidence` (0–1, the model's object score times its
    predicted mask quality) and `occluded` (the object is not in the frame: an empty matte). `model` says what Settings
    chose and whether it is installed, loaded and loading; `notice` says when it is not the one in use for the layer.
+   `tracker.saved` names the model the saved frames came from.
 
 Propagate never falls back to the classic engine without saying so. With SAM 2 chosen but not installed, or failing to
 load, it refuses with the reason. While it is still loading, `wait: true` (agents) loads it first; without `wait` it
 refuses, and the load goes on in the background. Deselecting SAM 2 (choosing Classic) runs Propagate exactly as before,
 and Roto Brush 1.0 never uses a model.
 
-Tracked frames live in the session that ran Propagate and are not saved in the project file. A separate render process
-(`effectcraft-cli render-frame`) does not have them, so render in the same session: in the app, or in one `run` that
-includes `roto.propagate` and then `comp.saveFrameAs`.
+Tracked frames are saved in the project with the instance, as Freeze's are, so a saved project renders the same when it
+reopens, in the app or with `effectcraft-cli`, without the model being loaded or chosen there. They apply while the
+strokes and span they came from are unchanged. Changing a stroke or the span makes them stale until the next Propagate.
+Choosing another model, or the classic engine, leaves them in place and `roto.status` says so; a classic Propagate
+replaces them with classic mattes. Object Matte saves nothing.
 
 ## How it works
 `crates/sam2` is a Rust port (on [candle](https://github.com/huggingface/candle), native only) of the Hugging Face

@@ -227,7 +227,7 @@ pub fn job_frames(params: &Params, limits: [i64; 2]) -> Vec<i64> {
 pub fn chain(params: &Params, layer_size: [f64; 2], fps: f64, f: i64, scale: f64, model: Option<Arc<dyn MaskModel>>) -> Option<Chain> {
     let data = roto_data(params, layer_size, f, model.is_some())?;
     let keys = data.chain_keys(seed(params, layer_size, fps, model.as_deref()));
-    Some(Chain { data: Arc::new(data), keys, opts: seg_opts(scale), refine_radius: 0.0, model })
+    Some(Chain { data: Arc::new(data), keys, opts: seg_opts(scale), refine_radius: 0.0, model, saved: None })
 }
 
 /// Frame `f`'s segmentation at full resolution, computing what is missing (the background

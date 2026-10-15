@@ -433,7 +433,6 @@ fn status(s: &mut Session, p: &Value) -> Result<Value> {
     out["pending"] = json!(s.roto_pending.contains(&(cid, lid, uid)));
     // The model Settings chose and whether this layer segments with it (propagate refuses or waits otherwise).
     out["model"] = s.roto_model();
-    out["notice"] = json!(s.roto_model_notice(s.uses_roto_model(cid, lid, uid)));
     out["limits"] = json!(rt::frame_limits(&comp, &layer));
     let frame = frame_p(s, p, cid, &layer);
     out["frame"] = json!(frame);
@@ -444,7 +443,7 @@ fn status(s: &mut Session, p: &Value) -> Result<Value> {
         let fps = comp.frame_rate.as_f64();
         let ps = params_static(&g);
         let chain = fx::Chain::new(&ps, size, fps, 1.0);
-        let seg = match chain.keys.get(&frame).and_then(|k| fx::cached(*k, 1.0)) {
+        let seg = match chain.cached_seg(frame, 1.0) {
             Some(sg) => Some(sg),
             None if compute => {
                 let index = layer.effects().and_then(|f| f.groups().position(|x| x.uid == uid)).unwrap_or(0);
@@ -474,10 +473,12 @@ fn status(s: &mut Session, p: &Value) -> Result<Value> {
         let chain = fx::Chain::new(&params_static(&g), size, comp.frame_rate.as_f64(), 1.0);
         let tracked: serde_json::Map<String, Value> = chain
             .keys
-            .iter()
-            .filter_map(|(f, k)| fx::trust(*k).map(|t| (f.to_string(), json!({"confidence": t.confidence, "occluded": t.occluded}))))
+            .keys()
+            .filter_map(|f| chain.trust_at(*f).map(|t| (f.to_string(), json!({"confidence": t.confidence, "occluded": t.occluded}))))
             .collect();
-        out["tracker"] = json!({"model": s.models_roto_active(), "frames": tracked});
+        out["tracker"] = json!({"model": s.models_roto_active(), "saved": chain.saved_model(), "frames": tracked});
+        let notice = s.roto_model_notice(s.uses_roto_model(cid, lid, uid)).or_else(|| s.saved_tracking_notice(chain.saved_model()));
+        out["notice"] = json!(notice);
         out["source"] = json!(if tracked.contains_key(&frame.to_string()) {
             "tracker"
         } else if chain.model.is_some() {

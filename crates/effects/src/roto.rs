@@ -31,7 +31,7 @@ use effectcraft_project::ParamUi;
 use effectcraft_raster::Image;
 use effectcraft_segment::{ClipFrame, MaskModel, TrackRequest};
 use effectcraft_track::roto::refine::{self, MatteParams};
-use effectcraft_track::roto::{self as rb, RotoData, SegOpts, rle};
+use effectcraft_track::roto::{self as rb, Gmm, RotoData, SegOpts, rle};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -46,6 +46,8 @@ pub const ID: &str = "ec.matte.rotobrush";
 pub const STROKES: &str = "strokes";
 pub const INPUT_KEY: &str = "inputKey";
 pub const FROZEN: &str = "frozen";
+/// The saved tracking (see [`TrackCache`]).
+pub const TRACKED: &str = "tracked";
 
 /// Default segmentation span each side of the base frame (frames).
 pub const DEFAULT_SPAN: i64 = 20;
@@ -95,6 +97,7 @@ pub fn specs() -> Vec<EffectSpec> {
             p(STROKES, "Strokes", Value::Str(String::new()), ParamUi::Hidden),
             p(INPUT_KEY, "Input Key", Value::Str(String::new()), ParamUi::Hidden),
             p(FROZEN, "Frozen", Value::Str(String::new()), ParamUi::Hidden),
+            p(TRACKED, "Tracked", Value::Str(String::new()), ParamUi::Hidden),
         ],
         render,
         gpu: false,
@@ -214,6 +217,11 @@ pub fn installed_model() -> Option<Arc<dyn MaskModel>> {
 /// Seed of the chain keys: what the frames are (the engine-maintained Input Key), the layer
 /// size, the frame rate, the segmentation settings and the model.
 pub fn seed(params: &Params, layer_size: [f64; 2], fps: f64) -> u64 {
+    seed_with(params, layer_size, fps, model_for(params).map_or(effectcraft_segment::CLASSICAL, |m| m.info().id))
+}
+
+/// [`seed`] with the segmenting model named by its id (saved tracking names the one that made it).
+fn seed_with(params: &Params, layer_size: [f64; 2], fps: f64, model: &str) -> u64 {
     let mut h = 0xcbf2_9ce4_8422_2325;
     fnv(&mut h, s(params, INPUT_KEY).as_bytes());
     for v in [
@@ -227,7 +235,7 @@ pub fn seed(params: &Params, layer_size: [f64; 2], fps: f64) -> u64 {
         fnv(&mut h, &v.to_bits().to_le_bytes());
     }
     fnv(&mut h, &[e(params, "quality") as u8, e(params, "version") as u8]);
-    fnv(&mut h, model_for(params).map_or(effectcraft_segment::CLASSICAL, |m| m.info().id).as_bytes());
+    fnv(&mut h, model.as_bytes());
     h
 }
 
@@ -388,13 +396,57 @@ pub struct Chain {
     pub refine_radius: f64,
     /// The trained model (Version 2.0 / 3.0 with one installed).
     pub model: Option<Arc<dyn MaskModel>>,
+    /// The saved tracking, while it applies (see [`TrackCache`]).
+    pub(crate) saved: Option<SavedTracking>,
 }
 
 impl Chain {
     pub fn new(params: &Params, layer_size: [f64; 2], fps: f64, scale: f64) -> Chain {
         let data = data(params);
         let keys = data.chain_keys(seed(params, layer_size, fps));
-        Chain { refine_radius: data.refine_radius(), data, keys, opts: seg_opts(params, scale), model: model_for(params) }
+        let saved = saved_for(params, &data, layer_size, fps);
+        Chain { refine_radius: data.refine_radius(), data, keys, opts: seg_opts(params, scale), model: model_for(params), saved }
+    }
+
+    /// Frame `f`'s segmentation at `scale` from the saved tracking or the caches; computes nothing.
+    pub fn cached_seg(&self, f: i64, scale: f64) -> Option<Arc<FrameSeg>> {
+        self.saved_seg(f, scale).or_else(|| self.keys.get(&f).and_then(|k| cached(*k, scale)))
+    }
+
+    /// The tracker's trust in frame `f`: from the saved tracking, else from this session's tracking.
+    pub fn trust_at(&self, f: i64) -> Option<FrameTrust> {
+        if let Some(fr) = self.saved.as_ref().and_then(|t| t.cache.frames.get(&f)) {
+            return Some(FrameTrust { confidence: fr.c, occluded: fr.o });
+        }
+        trust(*self.keys.get(&f)?)
+    }
+
+    /// The model the saved tracking was made with, while it applies.
+    pub fn saved_model(&self) -> Option<&str> {
+        self.saved.as_ref().map(|t| t.cache.model.as_str())
+    }
+
+    /// Frame `f` of the saved tracking at `scale` (decoded once, then cached).
+    fn saved_seg(&self, f: i64, scale: f64) -> Option<Arc<FrameSeg>> {
+        let t = self.saved.as_ref()?;
+        let k = tracked_key(*t.keys.get(&f)?);
+        if let Some(s) = cached(k, scale) {
+            return Some(s);
+        }
+        let full = match cached(k, 1.0) {
+            Some(s) => s,
+            None => {
+                let s = Arc::new(decode_tracked(&t.cache, f)?);
+                store(k, 1.0, s.clone());
+                s
+            }
+        };
+        if scale == 1.0 {
+            return Some(full);
+        }
+        let s = Arc::new(downscale(&full, scale));
+        store(k, scale, s.clone());
+        Some(s)
     }
 
     /// Frame `f`'s segmentation at this chain's scale: cached, or computed from the nearest
@@ -403,9 +455,12 @@ impl Chain {
     pub fn ensure(&self, f: i64, frame: &mut dyn FnMut(i64) -> Option<Arc<Image>>, cancel: &dyn Fn() -> bool) -> Option<Arc<FrameSeg>> {
         let sc = self.opts.scale;
         let lookup = |g: i64| -> Option<Arc<FrameSeg>> {
+            // A frame the tracker followed wins over the classic engine's: the saved tracking, else
+            // this session's.
+            if let Some(s) = self.saved_seg(g, sc) {
+                return Some(s);
+            }
             let k = *self.keys.get(&g)?;
-            // A frame the tracker followed wins over the classic engine's (memory only: its
-            // confidence is not persisted).
             if let Some(s) = cached(tracked_key(k), sc) {
                 return Some(s);
             }
@@ -652,6 +707,128 @@ fn frozen(params: &Params) -> Option<Arc<FrozenCache>> {
     }
     m.insert(h, d.clone());
     Some(d)
+}
+
+// ------------------------------------------------------------------ saved tracking
+
+/// The tracker's frames of an instance, saved with the project (the hidden [`TRACKED`] parameter,
+/// as [`FrozenCache`] is). They apply while `key` matches the instance's inputs ([`tracks_key`]),
+/// whichever model Settings choose: a stroke or span change makes them stale, and the next Propagate
+/// replaces them (with the classic engine, that leaves none).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct TrackCache {
+    /// What the frames were tracked from ([`tracks_key`]).
+    pub key: String,
+    /// The tracker's model id.
+    pub model: String,
+    /// The mattes' width and height (the layer's size).
+    pub size: [usize; 2],
+    pub frames: BTreeMap<i64, TrackFrame>,
+}
+
+/// One tracked frame: its matte and Refine Edge band (RLE, base64), its colour models and the
+/// tracker's trust in it.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TrackFrame {
+    /// Matte (RLE, base64).
+    pub m: String,
+    /// Refine Edge band (RLE, base64).
+    pub r: String,
+    pub fg: Gmm,
+    pub bg: Gmm,
+    /// 0–1: the tracker's confidence.
+    pub c: f32,
+    /// The object is not in the frame.
+    pub o: bool,
+}
+
+impl TrackCache {
+    pub fn from_json(s: &str) -> Option<TrackCache> {
+        if s.trim().is_empty() {
+            return None;
+        }
+        serde_json::from_str(s).ok()
+    }
+    pub fn to_json(&self) -> String {
+        serde_json::to_string(self).unwrap_or_default()
+    }
+}
+
+/// What saved tracking depends on: the chain keys of its frames (the inputs and the model).
+pub fn tracks_key(keys: &BTreeMap<i64, u64>) -> String {
+    let mut h = 0xcbf2_9ce4_8422_2325;
+    for (f, k) in keys {
+        fnv(&mut h, &f.to_le_bytes());
+        fnv(&mut h, &k.to_le_bytes());
+    }
+    format!("{h:016x}")
+}
+
+/// The saved tracking of `params`, parsed once per content.
+fn saved_tracks(params: &Params) -> Option<Arc<TrackCache>> {
+    static C: OnceLock<Mutex<HashMap<u64, Arc<TrackCache>>>> = OnceLock::new();
+    let j = s(params, TRACKED);
+    if j.is_empty() {
+        return None;
+    }
+    let mut h = 0xcbf2_9ce4_8422_2325;
+    fnv(&mut h, j.as_bytes());
+    let c = C.get_or_init(Default::default);
+    if let Some(d) = c.lock().unwrap_or_else(|e| e.into_inner()).get(&h) {
+        return Some(d.clone());
+    }
+    let d = Arc::new(TrackCache::from_json(j)?);
+    let mut m = c.lock().unwrap_or_else(|e| e.into_inner());
+    if m.len() > 8 {
+        m.clear();
+    }
+    m.insert(h, d.clone());
+    Some(d)
+}
+
+/// A saved tracking that applies to a chain: its frames, keyed under the model that made them.
+pub(crate) struct SavedTracking {
+    cache: Arc<TrackCache>,
+    keys: BTreeMap<i64, u64>,
+}
+
+/// The saved tracking of `params` if it applies: the inputs are the instance's now. It does not depend
+/// on which model Settings choose or has loaded, so a project renders the same anywhere.
+fn saved_for(params: &Params, data: &RotoData, layer_size: [f64; 2], fps: f64) -> Option<SavedTracking> {
+    let cache = saved_tracks(params)?;
+    let keys = data.chain_keys(seed_with(params, layer_size, fps, &cache.model));
+    (tracks_key(&keys) == cache.key).then_some(SavedTracking { cache, keys })
+}
+
+/// Decode a tracked frame of saved tracking (full resolution).
+fn decode_tracked(cache: &TrackCache, f: i64) -> Option<FrameSeg> {
+    let fr = cache.frames.get(&f)?;
+    // The size comes from the project file: checked, so a corrupt one is ignored rather than overflowing.
+    let [w, h] = cache.size;
+    let n = w.checked_mul(h)?;
+    let matte = rle::decode(&fr.m)?;
+    let refine = rle::decode(&fr.r)?;
+    (matte.len() == n && refine.len() == n).then(|| FrameSeg { w, h, matte, refine, fg: fr.fg.clone(), bg: fr.bg.clone() })
+}
+
+/// The tracking a chain has just made, to save with its instance: every frame of its span that the
+/// tracker followed, at full resolution, with its trust. `None` when it followed none.
+pub fn tracks_of(ch: &Chain) -> Option<TrackCache> {
+    let model = ch.model.as_ref()?.info().id;
+    let mut size = None;
+    let mut frames = BTreeMap::new();
+    for (f, k) in &ch.keys {
+        let (Some(seg), Some(t)) = (cached(tracked_key(*k), 1.0), trust(*k)) else { continue };
+        size.get_or_insert([seg.w, seg.h]);
+        frames.insert(
+            *f,
+            TrackFrame { m: rle::encode(&seg.matte), r: rle::encode(&seg.refine), fg: seg.fg.clone(), bg: seg.bg.clone(), c: t.confidence, o: t.occluded },
+        );
+    }
+    let cache = TrackCache { key: tracks_key(&ch.keys), model: model.to_string(), size: size?, frames };
+    (!cache.frames.is_empty()).then_some(cache)
 }
 
 /// Encode one frame for [`FrozenCache`].

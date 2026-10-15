@@ -240,6 +240,18 @@ impl Session {
         }
     }
 
+    /// What `roto.status` says when the saved tracking applies but Settings choose another model (`None`:
+    /// they agree, or nothing is saved).
+    pub fn saved_tracking_notice(&self, saved: Option<&str>) -> Option<String> {
+        let saved = saved?;
+        let chosen = self.chosen_model(Task::Mask);
+        if saved == chosen {
+            return None;
+        }
+        let name = |id: &str| seg::info(id).map_or(ROTO.classic_name, |m| m.name);
+        Some(format!("The saved tracking was made with {}; {} is chosen: Propagate again to replace it", name(saved), name(chosen)))
+    }
+
     /// Make sure the Roto Brush model Settings chose is in use before a job that segments with it
     /// starts, so the job never runs on the classic engine without saying so. With `wait`, a load
     /// under way is waited for and one not started is loaded here; without it, a model that is not

@@ -700,8 +700,13 @@ fn sam2_tracks_the_clip_through_roto_propagate() {
     assert_eq!(frames.len(), 21);
     assert!(frames.values().all(|t| t["occluded"] == false && t["confidence"].as_f64().unwrap() > 0.3), "{frames:?}");
     assert_eq!(st["tracker"]["model"], "sam2.1-hiera-tiny");
-    // Back to the classic engine: same strokes, its own segmentation, no tracker data.
+    // Settings choose the classic engine: the saved tracking stays until a Propagate replaces it.
     s.execute_checked("roto.model.select", json!({"id": "classical", "wait": true})).unwrap();
+    let st = s.execute("roto.status", json!({"layer": clip.0, "frame": 12})).unwrap();
+    assert_eq!(st["source"], "tracker", "{st}");
+    assert!(st["notice"].as_str().unwrap().contains("Propagate again"), "{st}");
+    // A classic Propagate: its own segmentation, no tracker data.
+    s.execute_checked("roto.propagate", json!({"layer": clip.0, "direction": "both", "wait": true})).unwrap();
     let st = s.execute("roto.status", json!({"layer": clip.0, "frame": 12})).unwrap();
     assert_eq!(st["source"], "classical", "{st}");
     assert_eq!(st["tracker"]["frames"].as_object().unwrap().len(), 0);
@@ -749,6 +754,116 @@ fn sam2_selected_without_wait_is_loaded_before_propagate() {
     assert_eq!(st["tracker"]["model"], "sam2.1-hiera-tiny");
     assert!(st["notice"].is_null(), "{st}");
     let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A tracker that follows the disc exactly: its true mask on every frame of the request. A stand-in
+/// for SAM 2, so the saved tracking can be tested without the weights.
+struct Exact;
+
+impl effectcraft_segment::MaskModel for Exact {
+    fn info(&self) -> &'static effectcraft_segment::ModelInfo {
+        &effectcraft_segment::SAM2_TINY
+    }
+    fn segment(&self, _: &[[f32; 3]], _: usize, _: usize, _: &effectcraft_segment::Prompt) -> effectcraft_segment::Result<Vec<f32>> {
+        Err("no weights".into())
+    }
+    fn tracker(&self) -> Option<&dyn effectcraft_segment::ObjectTracker> {
+        Some(self)
+    }
+}
+
+impl effectcraft_segment::ObjectTracker for Exact {
+    fn track(
+        &self,
+        req: &effectcraft_segment::TrackRequest,
+        frame: &mut dyn FnMut(i64) -> Option<std::sync::Arc<effectcraft_segment::ClipFrame>>,
+        _: &dyn Fn() -> bool,
+        out: &mut dyn FnMut(i64, effectcraft_segment::TrackedFrame),
+    ) -> effectcraft_segment::Result<()> {
+        for g in req.first..req.first + req.count as i64 {
+            let Some(img) = frame(g) else { return Err(format!("no frame {g}")) };
+            let c = center(g as u32);
+            let prob = (0..img.w * img.h)
+                .map(|i| ((((i % img.w) as f64 + 0.5 - c[0]).hypot((i / img.w) as f64 + 0.5 - c[1])) <= R) as u8 as f32)
+                .collect::<Vec<f32>>();
+            out(g, effectcraft_segment::TrackedFrame { prob, w: img.w, h: img.h, confidence: 0.99, occluded: false });
+        }
+        Ok(())
+    }
+}
+
+/// Saved tracking is part of the project: written with the instance, it applies when the project
+/// opens, with or without the model loaded, and Settings choosing the classic engine leaves it in place
+/// until a Propagate replaces it.
+#[test]
+fn saved_tracking_is_kept_in_the_project_and_applies_when_it_reopens() {
+    let sam2 = "sam2.1-hiera-tiny";
+    let (s, clip, uid, path) = saved_project("saved");
+    // Reopened with SAM 2 chosen but not loaded (none is installed here): the saved frames apply.
+    forget(&s, clip, uid);
+    let mut s2 = Session::default();
+    s2.execute_checked("file.open", json!({"path": path})).unwrap();
+    s2.execute_checked("roto.model.select", json!({"id": sam2})).unwrap();
+    let st = s2.execute("roto.status", json!({"layer": clip.0, "frame": 12})).unwrap();
+    assert_eq!(st["source"], "tracker", "{st}");
+    assert_eq!(st["tracker"]["saved"], sam2, "{st}");
+    assert_eq!(st["tracker"]["frames"].as_object().unwrap().len(), 21, "{st}");
+    let j = iou_at(&mut s2, clip, 12, center(12));
+    assert!(j > 0.9, "IoU of a saved frame: {j}");
+    // The render path (Chain::ensure) reads the same frame.
+    let comp = s2.active_comp().unwrap();
+    let l = comp.layer(clip).unwrap();
+    let g = l.props.find_group(uid).unwrap();
+    let size = crate::roto::layer_size(&s2.project, comp, l);
+    let ch = effectcraft_effects::roto::Chain::new(&crate::roto::params_static(g), size, comp.frame_rate.as_f64(), 1.0);
+    let seg = ch.ensure(12, &mut |_| None, &|| false).expect("the render path reads the saved frame");
+    let truth = rle::decode(&gt(center(12))).unwrap();
+    let inter = seg.matte.iter().zip(&truth).filter(|(a, b)| **a != 0 && **b != 0).count();
+    let uni = seg.matte.iter().zip(&truth).filter(|(a, b)| **a != 0 || **b != 0).count();
+    assert!(inter as f64 / uni as f64 > 0.9, "the render path's frame: IoU {}", inter as f64 / uni as f64);
+    // Settings choose the classic engine: the saved frames still apply, and the notice says so.
+    s2.execute_checked("roto.model.select", json!({"id": "classical"})).unwrap();
+    let st = s2.execute("roto.status", json!({"layer": clip.0, "frame": 12})).unwrap();
+    assert_eq!(st["source"], "tracker", "{st}");
+    assert!(st["notice"].as_str().unwrap().contains("Propagate again"), "{st}");
+    // A classic Propagate replaces the saved tracking with nothing.
+    s2.execute_checked("roto.propagate", json!({"layer": clip.0, "direction": "both", "wait": true})).unwrap();
+    let st = s2.execute("roto.status", json!({"layer": clip.0, "frame": 12})).unwrap();
+    assert_eq!(st["source"], "classical", "{st}");
+    assert!(st["tracker"]["saved"].is_null() && st["notice"].is_null(), "{st}");
+    let _ = std::fs::remove_dir_all(std::path::Path::new(&path).parent().unwrap());
+}
+
+/// A tracked clip saved to a project file: the session that tracked it, its layer and instance, and the
+/// file.
+fn saved_project(name: &str) -> (Session, LayerId, u64, String) {
+    let (mut s, clip, uid) = painted(center, &format!("disk-{name}.mov"));
+    effectcraft_effects::roto::set_model(Some(std::sync::Arc::new(Exact)));
+    let r = s.execute_checked("roto.propagate", json!({"layer": clip.0, "direction": "both", "wait": true}));
+    effectcraft_effects::roto::set_model(None);
+    assert_eq!(r.unwrap()["frames"], 21);
+    let dir = std::env::temp_dir().join(format!("ec-roto-{name}-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("tracked.ecproj").to_string_lossy().to_string();
+    s.execute_checked("file.saveAs", json!({"path": path})).unwrap();
+    let saved = std::fs::read_to_string(&path).unwrap();
+    assert!(saved.contains("sam2.1-hiera-tiny"), "the project file carries the tracking and the model that made it");
+    (s, clip, uid, path)
+}
+
+/// A stroke change makes the saved tracking stale: the instance is classical until the next Propagate.
+#[test]
+fn a_stroke_change_makes_the_saved_tracking_stale() {
+    let (_s, clip, _uid, path) = saved_project("stale");
+    let mut s2 = Session::default();
+    s2.execute_checked("file.open", json!({"path": path})).unwrap();
+    s2.execute_checked("roto.model.select", json!({"id": "sam2.1-hiera-tiny"})).unwrap();
+    assert_eq!(s2.execute("roto.status", json!({"layer": clip.0, "frame": 12})).unwrap()["source"], "tracker");
+    s2.execute_checked("roto.stroke", json!({"layer": clip.0, "kind": "bg", "points": line([10.0, 10.0], [60.0, 12.0]), "radius": 4})).unwrap();
+    let st = s2.execute("roto.status", json!({"layer": clip.0, "frame": 12})).unwrap();
+    assert_eq!(st["source"], "classical", "{st}");
+    assert_eq!(st["tracker"]["frames"].as_object().unwrap().len(), 0, "{st}");
+    let _ = std::fs::remove_dir_all(std::path::Path::new(&path).parent().unwrap());
 }
 
 /// A model whose tracker always fails: Roto Brush must carry on with the classic engine and say so.

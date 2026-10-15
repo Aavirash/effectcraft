@@ -22,7 +22,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use effectcraft_effects::object_matte as om;
-use effectcraft_effects::roto::{self as fx, FROZEN, FrozenCache, INPUT_KEY};
+use effectcraft_effects::roto::{self as fx, FROZEN, FrozenCache, INPUT_KEY, TRACKED};
 use effectcraft_effects::{Params, flatten_params};
 use effectcraft_keyframe::Value;
 use effectcraft_project::{GroupKind, ItemId, ItemKind, Layer, LayerId, Project, PropGroup, Uid};
@@ -135,6 +135,8 @@ pub struct RotoShared {
     pub cancel: AtomicBool,
     pub state: Mutex<RotoProgress>,
     frozen: Mutex<Option<FrozenCache>>,
+    /// The tracker's frames, as the saved tracking (JSON) to store with the instance.
+    saved: Mutex<Option<String>>,
 }
 
 pub struct RotoJob {
@@ -253,6 +255,7 @@ pub(crate) fn sync(before: &Project, after: &mut Project) -> Vec<(ItemId, LayerI
             set_str(g, INPUT_KEY, key);
             if had {
                 set_str(g, FROZEN, String::new());
+                set_str(g, TRACKED, String::new());
             }
         }
     }
@@ -459,11 +462,19 @@ async fn run_work(w: Work, shared: &RotoShared) {
             s.finished = true;
             return;
         }
+        // The frames it followed replace the saved tracking (see `poll_roto_job`): none if it failed.
+        *lock(&shared.saved) = Some(match &result {
+            Ok(_) => fx::tracks_of(&chain).map(|t| t.to_json()).unwrap_or_default(),
+            Err(_) => String::new(),
+        });
         let mut s = lock(&shared.state);
         match result {
             Ok(summary) => s.tracked = summary,
             Err(e) => s.tracker_note = Some(format!("tracker unavailable, classic engine used: {e}")),
         }
+    } else if w.task == RotoTask::Propagate && !w.object_matte {
+        // With the classic engine, Propagate leaves no saved tracking behind.
+        *lock(&shared.saved) = Some(String::new());
     }
     for (k, f) in w.frames.iter().enumerate() {
         if cancel() {
@@ -738,6 +749,17 @@ impl Session {
         Ok(n)
     }
 
+    /// Save the tracker's frames in the instance, unless its strokes changed while it tracked. No undo
+    /// step: the frames are a cache of the strokes and the span (a stale copy is ignored).
+    fn save_tracks(&mut self, cid: ItemId, lid: LayerId, uid: Uid, strokes: &str, json: String) {
+        let p = Arc::make_mut(&mut self.project);
+        if let Some(g) = p.comp_mut(cid).and_then(|c| c.layer_mut(lid)).and_then(|l| l.props.find_group_mut(uid))
+            && guard_of(g) == strokes
+        {
+            set_str(g, TRACKED, json);
+        }
+    }
+
     /// Finish a done job: Freeze writes the frozen mattes (one undo step).
     fn poll_roto_job(&mut self) -> bool {
         let Some(job) = &self.roto_job else { return false };
@@ -764,6 +786,10 @@ impl Session {
             RotoTask::Propagate => {
                 let verb = if job.object_matte { "tracked" } else { "propagated" };
                 self.events.push(Event::Toast { message: format!("{name}: {verb} {} frame(s) in {:.1} s", st.done, st.elapsed), error: false });
+                // The frames the tracker followed are saved with the instance.
+                if let Some(json) = lock(&job.shared.saved).take() {
+                    self.save_tracks(job.comp, job.layer, job.effect, &job.strokes, json);
+                }
                 // Rendered frames depend on the cache: redraw.
                 self.bump();
             }
