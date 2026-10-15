@@ -144,3 +144,24 @@ fn blending_options_alone_create_the_group_in_one_undo_step() {
     s.execute("layer.style.add", json!({"layers": [a], "style": "Blending Options"})).unwrap();
     assert!(s.active_comp().unwrap().layer(effectcraft_project::LayerId(a)).unwrap().layer_styles().is_some());
 }
+
+/// Removing the last style keeps a Layer Styles group whose Blending Options were changed (a
+/// group with Blending Options only is a state of its own since #1389); at their defaults the
+/// group goes, as before.
+#[test]
+fn removing_the_last_style_keeps_changed_blending_options() {
+    let (mut s, a, b) = session();
+    let fill = "layerStyles/blendingOptions/advancedBlending/fillOpacity";
+    s.execute("layer.style.add", json!({"layers": [a], "style": "blendingOptions"})).unwrap();
+    s.execute("prop.set", json!({"layer": a, "path": fill, "value": 40})).unwrap();
+    s.execute("layer.style.dropShadow", json!({"layers": [a]})).unwrap();
+    s.execute("layer.style.remove", json!({"layer": a, "style": "dropShadow"})).unwrap();
+    let v = s.execute("prop.get", json!({"layer": a, "path": fill})).unwrap();
+    assert_eq!(v["value"].as_f64(), Some(40.0), "{v}");
+    assert!(styles_of(&s, a).is_empty());
+    // At the defaults (here on the other layer, through the same command) the group goes.
+    s.execute("layer.style.add", json!({"layers": [b], "style": "blendingOptions"})).unwrap();
+    s.execute("layer.style.dropShadow", json!({"layers": [b]})).unwrap();
+    s.execute("layer.style.remove", json!({"layer": b, "style": "dropShadow"})).unwrap();
+    assert!(s.active_comp().unwrap().layer(effectcraft_project::LayerId(b)).unwrap().layer_styles().is_none());
+}

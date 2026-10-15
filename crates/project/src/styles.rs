@@ -312,6 +312,22 @@ impl Layer {
     pub fn can_have_styles(&self) -> bool {
         self.source.is_av() && !self.switches.adjustment
     }
+    /// Do the layer's styles change its pixels: the group on, and a style on or Advanced
+    /// Blending away from its defaults (animated counts as changed).
+    pub fn styles_change_pixels(&self) -> bool {
+        self.layer_styles()
+            .filter(|g| g.enabled && self.can_have_styles())
+            .is_some_and(|g| g.groups().any(|s| s.enabled && s.match_id != BLENDING) || g.sub(BLENDING).is_some_and(|bo| !blending_is_default(bo)))
+    }
+}
+
+/// Is Advanced Blending of this Blending Options group at its defaults (no keys, no
+/// expression)? Global Light is the comp's and doesn't count.
+pub fn blending_is_default(bo: &PropGroup) -> bool {
+    let mut next = 0;
+    let fresh = blending_options(&mut Ids(&mut next), &GlobalLight::default());
+    let (Some(adv), Some(def)) = (bo.sub("advancedBlending"), fresh.sub("advancedBlending")) else { return true };
+    def.props().all(|d| adv.get(&d.match_id).is_none_or(|p| same_anim(p, d)))
 }
 
 /// Give `layer` its Layer Styles group (Blending Options only, after Transform) when it has none.

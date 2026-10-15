@@ -152,8 +152,9 @@ fn remove(s: &mut Session, p: &Value) -> Result<Value> {
                 return Err(bad("layer.style.remove", "Blending Options can't be removed"));
             }
             g.children.retain(|c| c.uid() != uid);
-            // The last style gone removes the Layer Styles group, as in AE.
-            if g.children.iter().all(|c| c.match_id() == st::BLENDING) {
+            // The last style gone removes the Layer Styles group, as in AE, unless its Blending
+            // Options were changed (they can be edited with no style since #1389).
+            if g.children.iter().all(|c| c.match_id() == st::BLENDING) && g.sub(st::BLENDING).is_none_or(st::blending_is_default) {
                 l.props.children.retain(|c| c.match_id() != GROUP);
             }
         }

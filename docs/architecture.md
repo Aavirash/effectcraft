@@ -245,7 +245,8 @@ opacity fades the whole stack; Knockout and the R/G/B channel switches apply at 
 reuses the cached source/masks/effects. Global Light is one setting per comp, mirrored into every
 layer's Blending Options and kept in step after each edit. Blending Options can be edited in the Layer Style dialog
 before any style is added: the first change creates the Layer Styles group with Blending Options
-only (`layer.style.add` with `blendingOptions`), in the same undo step as the change.
+only (`layer.style.add` with `blendingOptions`), in the same undo step as the change. Removing
+the last style keeps the group when its Advanced Blending is not at the defaults.
 
 **Paint and Puppet** are effects whose instances carry nested groups. Paint (`effects::paint`)
 holds Brush / Clone / Eraser strokes (Path, Stroke Options, Transform, hidden Duration span);
