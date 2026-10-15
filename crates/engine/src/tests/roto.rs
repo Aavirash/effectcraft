@@ -778,7 +778,7 @@ impl effectcraft_segment::ObjectTracker for Exact {
         req: &effectcraft_segment::TrackRequest,
         frame: &mut dyn FnMut(i64) -> Option<std::sync::Arc<effectcraft_segment::ClipFrame>>,
         _: &dyn Fn() -> bool,
-        out: &mut dyn FnMut(i64, effectcraft_segment::TrackedFrame),
+        out: &mut dyn FnMut(usize, i64, effectcraft_segment::TrackedFrame),
     ) -> effectcraft_segment::Result<()> {
         for g in req.first..req.first + req.count as i64 {
             let Some(img) = frame(g) else { return Err(format!("no frame {g}")) };
@@ -786,7 +786,7 @@ impl effectcraft_segment::ObjectTracker for Exact {
             let prob = (0..img.w * img.h)
                 .map(|i| ((((i % img.w) as f64 + 0.5 - c[0]).hypot((i / img.w) as f64 + 0.5 - c[1])) <= R) as u8 as f32)
                 .collect::<Vec<f32>>();
-            out(g, effectcraft_segment::TrackedFrame { prob, w: img.w, h: img.h, confidence: 0.99, occluded: false });
+            out(0, g, effectcraft_segment::TrackedFrame { prob, w: img.w, h: img.h, confidence: 0.99, occluded: false });
         }
         Ok(())
     }
@@ -889,7 +889,7 @@ fn a_failing_tracker_falls_back_to_the_classic_engine() {
             _: &TrackRequest,
             _: &mut dyn FnMut(i64) -> Option<Arc<ClipFrame>>,
             _: &dyn Fn() -> bool,
-            _: &mut dyn FnMut(i64, TrackedFrame),
+            _: &mut dyn FnMut(usize, i64, TrackedFrame),
         ) -> effectcraft_segment::Result<()> {
             Err("the tracker broke".into())
         }

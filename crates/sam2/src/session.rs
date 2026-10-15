@@ -334,11 +334,24 @@ impl<'a> VideoTracker<'a> {
     /// Track every object from `start` through `max_frames` frames (the rest of the clip when
     /// `None`) in `direction`, calling `out` for each object on each frame as it is finished.
     pub fn propagate(&mut self, start: usize, direction: Direction, max_frames: Option<usize>, cancel: &Cancel, out: &mut dyn FnMut(FrameMask)) -> Result<()> {
+        self.propagate_objects(None, start, direction, max_frames, cancel, out)
+    }
+
+    /// [`VideoTracker::propagate`] for the listed objects only (`None`: every prompted object).
+    pub fn propagate_objects(
+        &mut self,
+        only: Option<&[ObjectId]>,
+        start: usize,
+        direction: Direction,
+        max_frames: Option<usize>,
+        cancel: &Cancel,
+        out: &mut dyn FnMut(FrameMask),
+    ) -> Result<()> {
         self.check_frame(start)?;
         let n = self.frames.num_frames();
         let reverse = direction == Direction::Backward;
         let span = max_frames.unwrap_or(n).min(n);
-        let ids: Vec<ObjectId> = self.objects.iter().filter(|(_, o)| !o.cond.is_empty()).map(|(id, _)| *id).collect();
+        let ids: Vec<ObjectId> = self.objects.iter().filter(|(id, o)| !o.cond.is_empty() && only.is_none_or(|l| l.contains(id))).map(|(id, _)| *id).collect();
         if ids.is_empty() {
             return Err(Error::Input("no object has been prompted".into()));
         }

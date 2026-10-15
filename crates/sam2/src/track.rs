@@ -50,32 +50,41 @@ fn to_frame(m: &FrameMask, size: (usize, usize)) -> Result<TrackedFrame> {
     Ok(TrackedFrame { prob, w, h, confidence: (presence * m.iou.clamp(0.0, 1.0)).clamp(0.0, 1.0), occluded: m.occluded })
 }
 
+/// Most objects one request may track.
+const MAX_OBJECTS: usize = 32;
+
 impl Sam2Mask {
-    fn run_track(&self, req: &TrackRequest, frames: Frames<'_>, cancel: &dyn Fn() -> bool, out: &mut dyn FnMut(i64, TrackedFrame)) -> Result<()> {
+    fn run_track(&self, req: &TrackRequest, frames: Frames<'_>, cancel: &dyn Fn() -> bool, out: &mut dyn FnMut(usize, i64, TrackedFrame)) -> Result<()> {
         if req.count == 0 || req.count > MAX_CLIP {
             return Err(Error::Input(format!("a tracking request needs 1 to {MAX_CLIP} frames, got {}", req.count)));
         }
-        if req.prompts.is_empty() {
-            return Err(Error::Input("tracking needs a prompt on at least one frame".into()));
+        if req.objects.is_empty() || req.objects.len() > MAX_OBJECTS || req.objects.iter().any(|o| o.is_empty()) {
+            return Err(Error::Input(format!("tracking needs 1 to {MAX_OBJECTS} objects, each with a prompt on at least one frame")));
         }
         let sizes = Rc::new(RefCell::new(HashMap::new()));
         let source = Source { first: req.first, count: req.count, fetch: RefCell::new(frames), sizes: sizes.clone() };
         // Prompt coordinates are in the frame's pixels and the model works at 1024 x 1024, so the
         // prompted frames' sizes are needed first.
         let mut prompt_frames = vec![];
-        for (frame, p) in &req.prompts {
-            let idx = usize::try_from(frame - req.first)
-                .ok()
-                .filter(|i| *i < req.count)
-                .ok_or_else(|| Error::Input(format!("prompt frame {frame} is outside the clip")))?;
-            let f = (source.fetch.borrow_mut())(*frame).ok_or_else(|| Error::Input(format!("frame {frame} is not available")))?;
-            sizes.borrow_mut().insert(idx, (f.w, f.h));
-            prompt_frames.push((idx, p));
+        for (oi, prompts) in req.objects.iter().enumerate() {
+            for (frame, p) in prompts {
+                let idx = usize::try_from(frame - req.first)
+                    .ok()
+                    .filter(|i| *i < req.count)
+                    .ok_or_else(|| Error::Input(format!("prompt frame {frame} is outside the clip")))?;
+                if !sizes.borrow().contains_key(&idx) {
+                    let f = (source.fetch.borrow_mut())(*frame).ok_or_else(|| Error::Input(format!("frame {frame} is not available")))?;
+                    sizes.borrow_mut().insert(idx, (f.w, f.h));
+                }
+                prompt_frames.push((oi, idx, p));
+            }
         }
         let mut tracker = VideoTracker::new(self.video_model().clone(), Box::new(source))?;
-        let object = ObjectId(1);
-        let mut prompted = vec![];
-        for (idx, p) in prompt_frames {
+        let object_id = |oi: usize| ObjectId(oi as u32 + 1);
+        // each object's first prompted frame: its pass starts there, forwards and backwards
+        let mut starts: std::collections::BTreeMap<usize, Vec<ObjectId>> = Default::default();
+        let mut first_of: HashMap<usize, usize> = HashMap::new();
+        for (oi, idx, p) in prompt_frames {
             if cancel() {
                 return Err(Error::Cancelled);
             }
@@ -85,34 +94,38 @@ impl Sam2Mask {
                 points: p.points.iter().map(|(c, fg)| ([c[0] * sx, c[1] * sy], *fg)).collect(),
                 bbox: p.bbox.map(|b| [b[0] * sx, b[1] * sy, b[2] * sx, b[3] * sy]),
             };
-            tracker.prompt(idx, object, &prompt)?;
-            prompted.push(idx);
+            tracker.prompt(idx, object_id(oi), &prompt)?;
+            let e = first_of.entry(oi).or_insert(idx);
+            *e = (*e).min(idx);
         }
-        let first = prompted.iter().copied().min().unwrap_or(0);
+        for (oi, idx) in first_of {
+            starts.entry(idx).or_default().push(object_id(oi));
+        }
         let flag = Cancel::new();
         let mut failure: Option<Error> = None;
         let mut emit = |m: FrameMask| {
             if cancel() {
                 flag.cancel();
             }
+            let oi = (m.object.0 as usize).saturating_sub(1);
             match to_frame(&m, sizes.borrow().get(&m.frame).copied().unwrap_or((0, 0))) {
-                Ok(t) => out(req.first + m.frame as i64, t),
+                Ok(t) => out(oi, req.first + m.frame as i64, t),
                 Err(e) => {
                     failure.get_or_insert(e);
                     flag.cancel();
                 }
             }
         };
-        tracker.propagate(first, Direction::Forward, None, &flag, &mut emit)?;
-        if first > 0 {
-            // frame `first` was reported by the forward pass; the backward pass starts there again
-            let mut skip_first = true;
-            tracker.propagate(first, Direction::Backward, None, &flag, &mut |m| {
-                if std::mem::take(&mut skip_first) {
-                    return;
-                }
-                emit(m);
-            })?;
+        for (start, ids) in starts {
+            tracker.propagate_objects(Some(&ids), start, Direction::Forward, None, &flag, &mut emit)?;
+            if start > 0 {
+                // the start frame was reported by the forward pass; the backward pass passes it again
+                tracker.propagate_objects(Some(&ids), start, Direction::Backward, None, &flag, &mut |m| {
+                    if m.frame != start {
+                        emit(m);
+                    }
+                })?;
+            }
         }
         failure.map_or(Ok(()), Err)
     }
@@ -124,7 +137,7 @@ impl ObjectTracker for Sam2Mask {
         req: &TrackRequest,
         frames: &mut dyn FnMut(i64) -> Option<Arc<ClipFrame>>,
         cancel: &dyn Fn() -> bool,
-        out: &mut dyn FnMut(i64, TrackedFrame),
+        out: &mut dyn FnMut(usize, i64, TrackedFrame),
     ) -> effectcraft_segment::Result<()> {
         self.run_track(req, frames, cancel, out).map_err(|e| e.to_string())
     }

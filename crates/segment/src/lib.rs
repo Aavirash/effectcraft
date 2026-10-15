@@ -59,13 +59,22 @@ pub struct ClipFrame {
     pub h: usize,
 }
 
-/// What to track: the clip's frames `first..first + count` (the host's frame numbers) and the
-/// prompts of the one object, each on its frame.
+/// What to track: the clip's frames `first..first + count` (the host's frame numbers) and, for
+/// each object, its prompts on their frames. Objects are tracked in one pass, so the cost of
+/// encoding each frame is shared.
 #[derive(Clone, Debug)]
 pub struct TrackRequest {
     pub first: i64,
     pub count: usize,
-    pub prompts: Vec<(i64, Prompt)>,
+    /// One entry per object: its prompts, each on its frame.
+    pub objects: Vec<Vec<(i64, Prompt)>>,
+}
+
+impl TrackRequest {
+    /// A request for a single object.
+    pub fn single(first: i64, count: usize, prompts: Vec<(i64, Prompt)>) -> TrackRequest {
+        TrackRequest { first, count, objects: vec![prompts] }
+    }
 }
 
 /// A tracker's answer for one frame.
@@ -84,14 +93,15 @@ pub struct TrackedFrame {
 /// A video tracker with memory (SAM 2): given prompts on some frames, it follows the object
 /// through the clip in both directions. Optional: a [`MaskModel`] may offer one.
 pub trait ObjectTracker: Send + Sync {
-    /// Track the object. `frames(i)` supplies frame `i` (`None`: unavailable); `cancel()` is polled
-    /// between frames; `out(i, result)` is called as soon as each frame is finished.
+    /// Track the objects. `frames(i)` supplies frame `i` (`None`: unavailable); `cancel()` is polled
+    /// between frames; `out(object, i, result)` is called as soon as each object's frame is finished
+    /// (`object` indexes `req.objects`).
     fn track(
         &self,
         req: &TrackRequest,
         frames: &mut dyn FnMut(i64) -> Option<Arc<ClipFrame>>,
         cancel: &dyn Fn() -> bool,
-        out: &mut dyn FnMut(i64, TrackedFrame),
+        out: &mut dyn FnMut(usize, i64, TrackedFrame),
     ) -> Result<()>;
 }
 

@@ -569,7 +569,7 @@ impl Chain {
         if prompts.is_empty() {
             return Err("no foreground strokes to follow".into());
         }
-        let req = TrackRequest { first: self.data.span[0], count: (self.data.span[1] - self.data.span[0] + 1) as usize, prompts };
+        let req = TrackRequest::single(self.data.span[0], (self.data.span[1] - self.data.span[0] + 1) as usize, prompts);
         let frame = std::cell::RefCell::new(frame);
         let mut summary = TrackSummary::default();
         tracker.track(
@@ -579,7 +579,7 @@ impl Chain {
                 Some(Arc::new(ClipFrame { rgb: rb::rgb_of(&img), w: img.width as usize, h: img.height as usize }))
             },
             cancel,
-            &mut |g, t| {
+            &mut |_, g, t| {
                 let (Some(key), Some(img)) = (self.keys.get(&g).copied(), (frame.borrow_mut())(g)) else { return };
                 let strokes = self.data.strokes_at(g);
                 let seg = rb::segment_tracked(&img, &strokes, t.prob, t.occluded, &self.opts, self.refine_radius);

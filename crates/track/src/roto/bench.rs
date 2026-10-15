@@ -220,11 +220,11 @@ pub fn run_tracker(sc: &Scenario, tracker: &str, model: &dyn MaskModel) -> Optio
     let opts = SegOpts::default();
     let refs: Vec<&Stroke> = sc.strokes.iter().collect();
     let clip: Vec<Arc<ClipFrame>> = sc.frames.iter().map(|i| Arc::new(ClipFrame { rgb: rgb_of(i), w: i.width as usize, h: i.height as usize })).collect();
-    let req = TrackRequest { first: 0, count: sc.frames.len(), prompts: vec![(sc.base as i64, tracker_prompt(&refs, 1.0))] };
+    let req = TrackRequest::single(0, sc.frames.len(), vec![(sc.base as i64, tracker_prompt(&refs, 1.0))]);
     let start = Instant::now();
     let mut mattes: Vec<Vec<u8>> = vec![vec![0u8; (W * H) as usize]; sc.frames.len()];
     let mut get = |f: i64| usize::try_from(f).ok().and_then(|i| clip.get(i).cloned());
-    let r = t.track(&req, &mut get, &|| false, &mut |f, tf| {
+    let r = t.track(&req, &mut get, &|| false, &mut |_, f, tf| {
         let (Ok(i), true) = (usize::try_from(f), tf.prob.len() == (W * H) as usize) else { return };
         let Some(img) = sc.frames.get(i) else { return };
         let strokes: Vec<&Stroke> = if i == sc.base { refs.clone() } else { vec![] };

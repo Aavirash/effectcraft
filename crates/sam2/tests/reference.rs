@@ -364,13 +364,14 @@ fn sam2_tracks_a_clip_through_the_object_tracker_interface() {
     let model = effectcraft_sam2::mask::Sam2Mask::new(std::sync::Arc::new(effectcraft_sam2::session::VideoModel::load(&w).unwrap()));
     assert!(model.tracker().is_some());
     let c = centre(1);
-    let req = TrackRequest { first: 100, count: n, prompts: vec![(101, Prompt { points: vec![([c.0, c.1], true)], bbox: None, mask: None })] };
+    let req = TrackRequest::single(100, n, vec![(101, Prompt { points: vec![([c.0, c.1], true)], bbox: None, mask: None })]);
     let mut seen = std::collections::BTreeMap::new();
     let mut get = |f: i64| frames.get((f - 100) as usize).cloned();
     model
         .tracker()
         .unwrap()
-        .track(&req, &mut get, &|| false, &mut |f, t| {
+        .track(&req, &mut get, &|| false, &mut |o, f, t| {
+            assert_eq!(o, 0);
             assert!(seen.insert(f, t).is_none(), "frame {f} reported twice");
         })
         .unwrap();
@@ -391,9 +392,67 @@ fn sam2_tracks_a_clip_through_the_object_tracker_interface() {
         assert!(j > 0.85 && !t.occluded && t.confidence > 0.3, "frame {f}: IoU {j}");
     }
     // Cancelling before the work starts, and bad requests, are errors.
-    assert!(model.tracker().unwrap().track(&req, &mut get, &|| true, &mut |_, _| {}).is_err());
-    let none = TrackRequest { first: 100, count: n, prompts: vec![] };
-    assert!(model.tracker().unwrap().track(&none, &mut get, &|| false, &mut |_, _| {}).is_err());
-    let outside = TrackRequest { first: 100, count: n, prompts: vec![(500, Prompt { points: vec![([1.0, 1.0], true)], bbox: None, mask: None })] };
-    assert!(model.tracker().unwrap().track(&outside, &mut get, &|| false, &mut |_, _| {}).is_err());
+    assert!(model.tracker().unwrap().track(&req, &mut get, &|| true, &mut |_, _, _| {}).is_err());
+    let none = TrackRequest::single(100, n, vec![]);
+    assert!(model.tracker().unwrap().track(&none, &mut get, &|| false, &mut |_, _, _| {}).is_err());
+    let outside = TrackRequest::single(100, n, vec![(500, Prompt { points: vec![([1.0, 1.0], true)], bbox: None, mask: None })]);
+    assert!(model.tracker().unwrap().track(&outside, &mut get, &|| false, &mut |_, _, _| {}).is_err());
+}
+
+/// Two objects in one pass: each follows its own disc, every frame is reported once per object, and
+/// objects may start on different frames.
+#[test]
+fn sam2_tracks_two_objects_in_one_pass() {
+    use effectcraft_segment::{ClipFrame, MaskModel, Prompt, TrackRequest};
+    let Some((w, _)) = load() else { return };
+    let (fw, fh, n) = (160usize, 120usize, 4usize);
+    // A red disc moving right and a blue one moving left, never touching.
+    let a = |t: usize| (36.0 + 6.0 * t as f32, 40.0f32);
+    let b = |t: usize| (124.0 - 6.0 * t as f32, 84.0f32);
+    let hit = |c: (f32, f32), x: usize, y: usize| ((x as f32 - c.0).powi(2) + (y as f32 - c.1).powi(2)).sqrt() < 20.0;
+    let frames: Vec<std::sync::Arc<ClipFrame>> = (0..n)
+        .map(|t| {
+            let mut rgb = vec![[0f32; 3]; fw * fh];
+            for y in 0..fh {
+                for x in 0..fw {
+                    let bg = 0.45 + 0.1 * (x as f32 / 9.0).sin() * (y as f32 / 7.0).cos();
+                    rgb[y * fw + x] = if hit(a(t), x, y) {
+                        [0.9, 0.15, 0.1]
+                    } else if hit(b(t), x, y) {
+                        [0.1, 0.25, 0.9]
+                    } else {
+                        [bg, bg * 0.9, bg * 0.8]
+                    };
+                }
+            }
+            std::sync::Arc::new(ClipFrame { rgb, w: fw, h: fh })
+        })
+        .collect();
+    let model = effectcraft_sam2::mask::Sam2Mask::new(std::sync::Arc::new(effectcraft_sam2::session::VideoModel::load(&w).unwrap()));
+    let click = |c: (f32, f32)| Prompt { points: vec![([c.0, c.1], true)], bbox: None, mask: None };
+    // object 0 is prompted on frame 0, object 1 on frame 2
+    let req = TrackRequest { first: 10, count: n, objects: vec![vec![(10, click(a(0)))], vec![(12, click(b(2)))]] };
+    let mut get = |f: i64| frames.get((f - 10) as usize).cloned();
+    let mut seen: std::collections::BTreeMap<(usize, i64), effectcraft_segment::TrackedFrame> = Default::default();
+    model.tracker().unwrap().track(&req, &mut get, &|| false, &mut |o, f, t| assert!(seen.insert((o, f), t).is_none(), "object {o} frame {f} twice")).unwrap();
+    assert_eq!(seen.len(), 2 * n, "{:?}", seen.keys().collect::<Vec<_>>());
+    for ((o, f), t) in &seen {
+        let k = (f - 10) as usize;
+        let c = if *o == 0 { a(k) } else { b(k) };
+        let (mut i, mut u) = (0usize, 0usize);
+        for y in 0..fh {
+            for x in 0..fw {
+                let (p, q) = (t.prob[y * fw + x] > 0.5, hit(c, x, y));
+                i += usize::from(p && q);
+                u += usize::from(p || q);
+            }
+        }
+        let j = i as f64 / u.max(1) as f64;
+        eprintln!("object {o} frame {f}: IoU {j:.3}, confidence {:.2}", t.confidence);
+        assert!(j > 0.85, "object {o} frame {f}: IoU {j}");
+    }
+    let too_many = TrackRequest { first: 10, count: n, objects: vec![vec![(10, click(a(0)))]; 40] };
+    assert!(model.tracker().unwrap().track(&too_many, &mut get, &|| false, &mut |_, _, _| {}).is_err());
+    let empty = TrackRequest { first: 10, count: n, objects: vec![] };
+    assert!(model.tracker().unwrap().track(&empty, &mut get, &|| false, &mut |_, _, _| {}).is_err());
 }
