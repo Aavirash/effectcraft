@@ -706,3 +706,47 @@ fn sam2_tracks_the_clip_through_roto_propagate() {
     assert_eq!(st["tracker"]["frames"].as_object().unwrap().len(), 0);
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// A model whose tracker always fails: Roto Brush must carry on with the classic engine and say so.
+#[test]
+fn a_failing_tracker_falls_back_to_the_classic_engine() {
+    use effectcraft_segment::{ClipFrame, MaskModel, ModelInfo, ObjectTracker, Prompt, TrackRequest, TrackedFrame};
+    use std::sync::Arc;
+    struct Broken;
+    impl MaskModel for Broken {
+        fn info(&self) -> &'static ModelInfo {
+            &effectcraft_segment::SAM2_TINY
+        }
+        fn segment(&self, _: &[[f32; 3]], _: usize, _: usize, _: &Prompt) -> effectcraft_segment::Result<Vec<f32>> {
+            Err("no weights".into())
+        }
+        fn tracker(&self) -> Option<&dyn ObjectTracker> {
+            Some(self)
+        }
+    }
+    impl ObjectTracker for Broken {
+        fn track(
+            &self,
+            _: &TrackRequest,
+            _: &mut dyn FnMut(i64) -> Option<Arc<ClipFrame>>,
+            _: &dyn Fn() -> bool,
+            _: &mut dyn FnMut(i64, TrackedFrame),
+        ) -> effectcraft_segment::Result<()> {
+            Err("the tracker broke".into())
+        }
+    }
+    let (mut s, clip, _) = painted(center, "disk-broken-tracker.mov");
+    effectcraft_effects::roto::set_model(Some(Arc::new(Broken)));
+    let r = s.execute_checked("roto.propagate", json!({"layer": clip.0, "direction": "both", "wait": true}));
+    effectcraft_effects::roto::set_model(None);
+    let r = r.unwrap();
+    assert_eq!(r["frames"], 21, "{r}");
+    let st = s.execute("roto.status", json!({"layer": clip.0, "frame": 10})).unwrap();
+    assert_eq!(st["source"], "classical", "{st}");
+    assert_eq!(st["tracker"]["frames"].as_object().unwrap().len(), 0);
+    let mut worst: f64 = 1.0;
+    for f in 0..=20 {
+        worst = worst.min(iou_at(&mut s, clip, f, center(f)));
+    }
+    assert!(worst > 0.9, "the classic engine should have carried the clip: {worst}");
+}
