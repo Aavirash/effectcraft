@@ -27,7 +27,7 @@
 //!     (--gpu: CPU vs GPU ms/frame for every comp at Full and Half)
 //! effectcraft-cli bench --ops [--small] [--layers N] [--comps N] [--footage N]   everyday-operation timings
 //!     on a large generated project (open, save, auto-save, undo/redo, timeline, Project panel)
-//! effectcraft-cli bench --roto [--frames N] [--sam2 model.safetensors] [--json]   Roto Brush trackers on synthetic clips with known mattes
+//! effectcraft-cli bench --roto [--frames N] [--sam2 model.safetensors] [--mobilesam mobile_sam.pt] [--json]   Roto Brush trackers on synthetic clips with known mattes
 //!     (classical engine, MobileSAM and SAM 2.1 Tiny when installed; IoU, flicker, re-appearance, seconds per frame)
 //! effectcraft-cli script FILE.jsx [F.ecproj] | --eval CODE    run an After Effects-style script
 //! effectcraft-cli mcp [--autosave | --bridge PORT]            MCP server on stdio
@@ -126,7 +126,7 @@ const USAGE: &str = "usage: effectcraft-cli <info|commands|exec|run|props|get|se
   bench --ops [--small] [--layers N] [--comps N] [--footage N]
                                            everyday operations on a large generated project: startup, open,
                                            save, auto-save, edits + undo/redo, timeline, Project panel
-  bench --roto [--frames N] [--sam2 FILE] [--json]
+  bench --roto [--frames N] [--sam2 FILE] [--mobilesam FILE] [--json]
                                            Roto Brush trackers on synthetic clips with known mattes: movement,
                                            lighting change, occlusion, leaving and re-entering the frame
   script FILE.jsx [F.ecproj] | --eval CODE run JavaScript with the After Effects-style object model
@@ -144,6 +144,7 @@ const VALUED: &[&str] = &[
     "--n",
     "--frames",
     "--sam2",
+    "--mobilesam",
     "--play",
     "--layers",
     "--comps",
@@ -1015,13 +1016,13 @@ fn bench_roto(args: &Args) -> Result<(), Failure> {
     use effectcraft_track::roto::bench;
     let frames = args.num("--frames")?.unwrap_or(24.0).clamp(12.0, 240.0) as usize;
     let session = effectcraft_host::session();
+    // `--mobilesam FILE` uses the weights at FILE; otherwise the installed ones.
+    let mobilesam_file = args.opt("--mobilesam").map(std::path::PathBuf::from).or_else(|| session.model_path(&MOBILE_SAM));
     let mobilesam: Option<std::sync::Arc<dyn MaskModel>> =
-        session.model_path(&MOBILE_SAM).and_then(|p| std::fs::read(p).ok()).and_then(|bytes| effectcraft_segment::load(MOBILE_SAM.id, &bytes).ok()).and_then(
-            |m| match m {
-                Loaded::Mask(m) => Some(m),
-                _ => None,
-            },
-        );
+        mobilesam_file.and_then(|p| std::fs::read(p).ok()).and_then(|bytes| effectcraft_segment::load(MOBILE_SAM.id, &bytes).ok()).and_then(|m| match m {
+            Loaded::Mask(m) => Some(m),
+            _ => None,
+        });
     if mobilesam.is_none() {
         note!("bench --roto: MobileSAM is not installed; comparing the classical engine only");
     }

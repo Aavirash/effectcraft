@@ -44,14 +44,18 @@ clip costs one encode per frame, so a 300-frame clip takes on the order of 17 mi
 backend; GPU work is Phase 6 of the plan (the early Hiera blocks are memory-bound and have headroom on the CPU too).
 
 ## Benchmark
-`effectcraft-cli bench --roto [--frames N] [--sam2 model.safetensors]` runs synthetic clips with known mattes. 12 frames,
-debug build, mean IoU (after the object returns):
+`effectcraft-cli bench --roto [--frames N] [--sam2 model.safetensors] [--mobilesam mobile_sam.pt]` runs synthetic clips
+with known mattes through all three. 12 frames, debug build, this PC; mean IoU (mean IoU after the object returns), seconds
+per frame:
 
-| Clip | Classical | SAM 2.1 Tiny |
-|---|---|---|
-| move | 0.982 | 0.993 |
-| light | 0.981 | 0.992 |
-| occlusion | 0.978 | 0.988 |
-| reenter | 0.632 (0.000) | 0.975 (0.967) |
+| Clip | Classical | MobileSAM | SAM 2.1 Tiny |
+|---|---|---|---|
+| move | 0.982 | 0.992 | 0.993 |
+| light | 0.981 | 0.992 | 0.992 |
+| occlusion | 0.978 | 0.881 | 0.988 |
+| reenter | 0.632 (0.000) | 0.499 (0.725) | 0.975 (0.967) |
+| s/frame | 0.01 | 1.1 | 8.2 |
 
-MobileSAM's column appears when it is installed.
+MobileSAM prompts every frame independently from the flow-warped matte, so it follows the object while the flow does and
+loses it when it is hidden; SAM 2's streaming memory is what lets it re-acquire the object. The synthetic clips are easy
+(one textured disc), so the "move" and "light" rows mostly show all three working; the re-entry row is the difference.
