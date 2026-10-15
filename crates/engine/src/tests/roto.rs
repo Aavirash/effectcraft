@@ -750,3 +750,33 @@ fn a_failing_tracker_falls_back_to_the_classic_engine() {
     }
     assert!(worst > 0.9, "the classic engine should have carried the clip: {worst}");
 }
+
+/// Without a tracking model the Roto Brush chain is exactly the classic engine: every frame
+/// equals a direct call of `segment_with` / `propagate_with` (no model), bit for bit.
+#[test]
+fn without_a_tracker_the_chain_is_exactly_the_classic_engine() {
+    use effectcraft_track::roto as rb;
+    use std::sync::Arc;
+    let (s, clip, uid) = painted(center, "disk-bitexact.mov");
+    forget(&s, clip, uid);
+    let comp = s.active_comp().unwrap();
+    let l = comp.layer(clip).unwrap();
+    let g = l.props.find_group(uid).unwrap();
+    let size = crate::roto::layer_size(&s.project, comp, l);
+    let chain = effectcraft_effects::roto::Chain::new(&crate::roto::params_static(g), size, comp.frame_rate.as_f64(), 1.0);
+    assert!(!chain.has_tracker());
+    let img = |f: i64| Arc::new(draw(center(f as u32)));
+    let mut prev: Option<(Arc<Image>, rb::FrameSeg)> = None;
+    for f in 0..=5i64 {
+        let got = chain.ensure(f, &mut |g| Some(img(g)), &|| false).unwrap();
+        let cur = img(f);
+        let strokes = chain.data.strokes_at(f);
+        let want = match &prev {
+            None => rb::segment_with(&cur, &strokes, None, &chain.opts, chain.refine_radius, None),
+            Some((pi, ps)) => rb::propagate_with(pi, ps, &cur, &strokes, &chain.opts, chain.refine_radius, None),
+        };
+        assert_eq!(*got, want, "frame {f} differs from the classic engine");
+        prev = Some((cur, want));
+    }
+    forget(&s, clip, uid);
+}
