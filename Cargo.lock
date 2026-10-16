@@ -1930,6 +1930,7 @@ dependencies = [
  "effectcraft-path",
  "effectcraft-project",
  "effectcraft-render",
+ "effectcraft-segment",
  "effectcraft-text",
  "effectcraft-time",
  "eframe",
