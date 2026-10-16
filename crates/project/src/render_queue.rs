@@ -442,12 +442,17 @@ impl RenderSettings {
     pub fn frame_time(&self, comp: &Comp, i: u64) -> Tick {
         self.rate(comp).tick_of(self.first_frame(comp) + i as i64)
     }
-    pub fn output_size(&self, comp: &Comp) -> (u32, u32) {
+    pub fn effective_scale(&self, comp: &Comp) -> f64 {
         let s = self.resolution.clamp(0.01, 4.0);
-        // A 30 000 px comp at 4x would otherwise request 120 000 px sides, overflowing
-        // `w * h * 4` in the exporters. The resize path clamps to the same limit.
-        let w = ((comp.width as f64 * s).round() as u32).max(1).min(30_000);
-        let h = ((comp.height as f64 * s).round() as u32).max(1).min(30_000);
+        let max = f64::from(crate::limits::MAX_SIZE);
+        s.min(max / f64::from(comp.width.max(1))).min(max / f64::from(comp.height.max(1)))
+    }
+    pub fn output_size(&self, comp: &Comp) -> (u32, u32) {
+        let s = self.effective_scale(comp);
+        // The scale is clamped so neither side exceeds the comp limit, keeping the aspect
+        // ratio: a 30 000 px side at 4x renders at 1x instead of cropping to a corner.
+        let w = ((comp.width as f64 * s).round() as u32).max(1);
+        let h = ((comp.height as f64 * s).round() as u32).max(1);
         (w, h)
     }
     pub fn resolution_label(&self) -> &'static str {
@@ -1120,7 +1125,7 @@ impl OutputModule {
     /// rounding).
     pub fn output_size(&self, comp: &Comp, settings: &RenderSettings) -> (u32, u32) {
         let (w, h) = settings.output_size(comp);
-        let (w, h) = self.frame_size(w, h, settings.resolution.clamp(0.01, 4.0));
+        let (w, h) = self.frame_size(w, h, settings.effective_scale(comp));
         self.format.coded_size(w, h)
     }
     /// Every setting as `(label, value)` lines (render logs).
@@ -1669,12 +1674,24 @@ mod tests {
 
     #[test]
     fn output_size_never_exceeds_the_comp_limit() {
-        // 30 000 px at 4x must not request 120 000 px sides (exporter `w * h * 4`).
-        let c = Comp::new(30_000, 30_000, FrameRate::new(30, 1), Tick::from_seconds_f64(1.0));
+        // The effective scale is clamped so neither side exceeds the limit (exporter
+        // `w * h * 4` would overflow at 120 000 px sides); the pipeline renders at the
+        // same scale, so it never requests a frame larger than this reports.
         let rs = RenderSettings { resolution: 4.0, ..Default::default() };
-        assert_eq!(rs.output_size(&c), (30_000, 30_000));
         let m = OutputModule::for_format(OutputFormat::PngSequence);
-        assert_eq!(m.output_size(&c, &rs), (30_000, 30_000));
+        let square = Comp::new(30_000, 30_000, FrameRate::new(30, 1), Tick::from_seconds_f64(1.0));
+        assert_eq!(rs.effective_scale(&square), 1.0);
+        assert_eq!(rs.output_size(&square), (30_000, 30_000));
+        assert_eq!(m.output_size(&square, &rs), (30_000, 30_000));
+        // Wide comps keep their aspect ratio instead of clamping each side on its own.
+        let wide = Comp::new(30_000, 15_000, FrameRate::new(30, 1), Tick::from_seconds_f64(1.0));
+        assert_eq!(rs.effective_scale(&wide), 1.0);
+        assert_eq!(rs.output_size(&wide), (30_000, 15_000));
+        assert_eq!(m.output_size(&wide, &rs), (30_000, 15_000));
+        // A mid-size comp renders at the largest scale that still fits.
+        let mid = Comp::new(20_000, 10_000, FrameRate::new(30, 1), Tick::from_seconds_f64(1.0));
+        assert_eq!(mid.width as f64 * rs.effective_scale(&mid), 30_000.0);
+        assert_eq!(rs.output_size(&mid), (30_000, 15_000));
     }
 
     #[test]
