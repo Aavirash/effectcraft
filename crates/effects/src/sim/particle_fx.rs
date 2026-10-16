@@ -1,5 +1,5 @@
 use super::engine::{MERCURY, PS2, PState, PW_EFFECT_CAMERA, Phys, norm3, particle_look, pw_state, type_sprite};
-use super::sprites::{Acc, Post, Sprite, SpritePlan, raster, splat};
+use super::sprites::{Acc, Post, Sprite, SpritePlan, aa, raster, splat, sprite_bbox};
 use super::{Buf, EffectCtx, Image, IntoParallelRefIterator, ParallelIterator, SimCache, Value, unpremul};
 
 // ------------------------------------------------------------------ CC Particle World
@@ -35,7 +35,18 @@ pub(super) fn pw_phys(ctx: &EffectCtx) -> Phys {
     }
 }
 
-pub(super) fn particle_world(ctx: &EffectCtx, b: Buf) -> Buf {
+/// CC Particle World's Particle Type ▸ Textured Square.
+const PW_TEXTURED_SQUARE: u32 = 8;
+/// CC Particle World's Particle ▸ Texture ▸ Texture Layer.
+pub(super) const PW_TEXTURE_LAYER: &str = "particle/texture/textureLayer";
+
+/// Whether CC Particle World draws its Texture Layer on the particles (Textured Square with a
+/// layer chosen). Only the CPU does: the Texture Layer is a CPU-only control in `catalog`.
+fn particle_world_textured(ctx: &EffectCtx) -> bool {
+    ctx.params.e("particle/particleType") == PW_TEXTURED_SQUARE && ctx.params.get(PW_TEXTURE_LAYER).and_then(Value::as_layer).is_some()
+}
+
+pub(super) fn particle_world(ctx: &EffectCtx, mut b: Buf) -> Buf {
     // #1195: with the comp's motion-blur shutter open, particles draw as motion trails: the
     // sprite fields of samples across the shutter are averaged, as Transform averages its
     // matrix samples. (The GPU compositor runs this case on the CPU: catalog::gpu_supported.)
@@ -59,10 +70,41 @@ pub(super) fn particle_world(ctx: &EffectCtx, b: Buf) -> Buf {
             None => b,
         };
     }
-    match particle_world_plan(ctx, &b) {
-        Some(plan) => plan.finish(b),
-        None => b,
+    let Some(plan) = particle_world_plan(ctx, &b) else { return b };
+    // The texture at the current comp time. A layer the host can't give (the effect's own
+    // layer with its effects, a reference cycle) leaves the squares in the particle colour.
+    match particle_world_textured(ctx).then(|| ctx.layer_param(PW_TEXTURE_LAYER, true)).flatten() {
+        // The particles replace the layer ([`particle_sprites`]).
+        Some(tex) => {
+            b.img = splat_textured(b.img.width, b.img.height, &plan.sprites, plan.acc, &tex);
+            b
+        }
+        None => plan.finish(b),
     }
+}
+
+/// Draw square sprites into a new transparent image of `w`×`h`, each showing the layer `tex`
+/// stretched over the square (turned with it) at the sprite's opacity.
+fn splat_textured(w: u32, hgt: u32, sprites: &[Sprite], acc: Acc, tex: &crate::LayerPixels) -> Image {
+    let mut img = Image::new(w, hgt);
+    let (tw, th) = (tex.size[0], tex.size[1]);
+    let shade = |s: &Sprite, x: f32, y: f32| {
+        // As [`sprite_shade`]'s Square, sub-pixel sprites included.
+        let (r, fade) = if s.r < 0.5 { (0.5, s.r / 0.5) } else { (s.r, 1.0) };
+        let (sn, cs) = s.rot.sin_cos();
+        let (dx, dy) = (x - s.x, y - s.y);
+        let (ux, uy) = (dx * cs + dy * sn, -dx * sn + dy * cs);
+        let e = r * 0.75;
+        let a = aa(e - ux.abs()) * aa(e - uy.abs()) * s.c[3] * fade;
+        if a <= 1e-6 {
+            return None;
+        }
+        let (u, v) = (((ux / e + 1.0) * 0.5).clamp(0.0, 1.0) as f64, ((uy / e + 1.0) * 0.5).clamp(0.0, 1.0) as f64);
+        let (px, py) = tex.buf.to_px([u * tw, v * th]);
+        Some(tex.buf.img.sample_bilinear_clamped(px, py).map(|c| c * a))
+    };
+    raster(&mut img, sprites, sprite_bbox, shade, acc);
+    img
 }
 
 /// Effect Camera ▸ FOV's default (degrees).

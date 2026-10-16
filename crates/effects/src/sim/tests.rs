@@ -329,6 +329,53 @@ fn particle_world_effect_camera() {
     assert_ne!(key(&params), key(&moved));
 }
 
+/// A host whose every layer is `img`.
+struct TexHost(Image);
+impl crate::EffectHost for TexHost {
+    fn layer(&self, _: u64, _: bool) -> Option<crate::LayerPixels> {
+        let s = [self.0.width as f64, self.0.height as f64];
+        Some(crate::LayerPixels { buf: Buf { img: self.0.clone(), offset: [0.0; 2], scale: 1.0 }, size: s })
+    }
+    fn audio(&self, _: u64, _: f64, _: usize, _: u32) -> Option<Vec<f32>> {
+        None
+    }
+}
+
+/// #1465: Textured Square draws the Texture Layer on each particle, not the particle colour.
+#[test]
+fn particle_world_textured_square_draws_the_texture_layer() {
+    // Left half green, right half blue; the particles themselves are red.
+    let mut tex = Image::new(8, 8);
+    for y in 0..8 {
+        for x in 0..8 {
+            tex.set(x, y, if x < 4 { [0.0, 1.0, 0.0, 1.0] } else { [0.0, 0.0, 1.0, 1.0] });
+        }
+    }
+    let host = TexHost(tex);
+    let vals = |layer: Option<u64>| {
+        vec![
+            ("birthRate", num(1.0)),
+            ("extras/randomSeed", num(4.0)),
+            ("particle/particleType", Value::Enum(8)),
+            ("particle/texture/textureLayer", Value::Layer(layer)),
+            ("particle/birthSize", num(1.0)),
+            ("particle/deathSize", num(1.0)),
+            ("particle/birthColor", col(1.0, 0.0, 0.0)),
+            ("particle/deathColor", col(1.0, 0.0, 0.0)),
+        ]
+    };
+    let env = EffectEnv { host: Some(&host), ..Default::default() };
+    let out = run_fx("ec.sim.ccparticleworld", &vals(Some(1)), Image::new(48, 48), 1.0, env).img;
+    let seen: Vec<_> = out.data.iter().filter(|p| p[3] > 0.05).collect();
+    assert!(!seen.is_empty(), "particles drawn");
+    assert!(seen.iter().all(|p| p[0] < 0.02 * p[3]), "no particle colour: {:?}", seen.iter().find(|p| p[0] >= 0.02 * p[3]));
+    // Both halves of the texture show: it is mapped across the square, not sampled once.
+    assert!(seen.iter().any(|p| p[1] > 2.0 * p[2]) && seen.iter().any(|p| p[2] > 2.0 * p[1]), "both texture halves");
+    // Without a texture layer the squares keep the particle colour.
+    let plain = run_fx("ec.sim.ccparticleworld", &vals(None), Image::new(48, 48), 1.0, env).img;
+    assert!(plain.data.iter().any(|p| p[3] > 0.05 && p[0] > 0.9 * p[3]));
+}
+
 #[test]
 fn particle_systems2_seek_and_direction() {
     let v = vec![
