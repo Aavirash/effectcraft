@@ -49,6 +49,10 @@ pub trait MaskModel: Send + Sync {
     fn tracker(&self) -> Option<&dyn ObjectTracker> {
         None
     }
+    /// The most memory (bytes) the last tracking run held for its memory banks and cached frames (`None`: not tracked).
+    fn peak_state_bytes(&self) -> Option<u64> {
+        None
+    }
     /// What runs the model: the GPU's name or "CPU" (`None`: it does not say).
     fn device_name(&self) -> Option<String> {
         None

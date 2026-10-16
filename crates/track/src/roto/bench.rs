@@ -20,10 +20,13 @@ const R: f64 = 32.0;
 /// A clip with the true matte of the visible object on every frame.
 #[derive(Clone)]
 pub struct Scenario {
-    pub name: &'static str,
-    pub what: &'static str,
+    pub name: String,
+    pub what: String,
+    /// Frame size in pixels (the synthetic clips are `W × H`; a real clip has its own).
+    pub w: usize,
+    pub h: usize,
     pub frames: Vec<Image>,
-    /// Visible-object matte per frame (`W×H`, 0/1); empty when the object is out of view.
+    /// Visible-object matte per frame (`w × h`, 0/1); empty when the object is out of view.
     pub truth: Vec<Vec<u8>>,
     /// Frame the strokes are painted on.
     pub base: usize,
@@ -33,7 +36,7 @@ pub struct Scenario {
 /// One tracker's result on one scenario.
 #[derive(Clone, Debug, Serialize)]
 pub struct Run {
-    pub scenario: &'static str,
+    pub scenario: String,
     pub tracker: String,
     pub mean_iou: f64,
     pub min_iou: f64,
@@ -46,6 +49,8 @@ pub struct Run {
     /// Correction strokes needed before every frame reaches the target IoU (`>N`: not within N); set by
     /// [`with_fixes`], `None` when not measured.
     pub fixes: Option<String>,
+    /// The most memory (MB) the tracker held for its memory banks and cached frames (trackers that have none: `None`).
+    pub peak_mb: Option<f64>,
     /// The matte of every frame (not serialised).
     #[serde(skip)]
     pub mattes: Vec<Vec<u8>>,
@@ -136,7 +141,46 @@ fn scenario(name: &'static str, what: &'static str, n: usize, look: impl Fn(usiz
         frames.push(img);
         truth.push(gt);
     }
-    Scenario { name, what, frames, truth, base: 0, strokes: strokes_for(look(0).c) }
+    Scenario { name: name.to_string(), what: what.to_string(), w: W as usize, h: H as usize, frames, truth, base: 0, strokes: strokes_for(look(0).c) }
+}
+
+/// A scenario from the user's own clip: frames and their true mattes (0/1, same size as the frames). The strokes
+/// are made from the first frame with an object: a short foreground stroke through its centre and background
+/// strokes along the top and bottom edges where the truth is empty. Nothing is bundled: the clip stays with the
+/// user (a licensed dataset, say), and so does its licence.
+pub fn scenario_from(name: &str, frames: Vec<Image>, truth: Vec<Vec<u8>>) -> std::result::Result<Scenario, String> {
+    let first = frames.first().ok_or("a clip needs at least one frame")?;
+    let (w, h) = (first.width as usize, first.height as usize);
+    if w == 0
+        || h == 0
+        || frames.len() != truth.len()
+        || frames.iter().any(|f| (f.width as usize, f.height as usize) != (w, h))
+        || truth.iter().any(|t| t.len() != w * h)
+    {
+        return Err("frames and truth masks must be the same size and count".into());
+    }
+    let base = truth.iter().position(|t| t.iter().any(|v| *v != 0)).ok_or("no frame has the object in its truth mask")?;
+    let t = truth.get(base).map(Vec::as_slice).unwrap_or(&[]);
+    let (mut x0, mut x1, mut sx, mut sy, mut n) = (usize::MAX, 0usize, 0.0f64, 0.0f64, 0.0f64);
+    for i in t.iter().enumerate().filter(|(_, v)| **v != 0).map(|(i, _)| i) {
+        let (x, y) = (i % w, i / w);
+        (x0, x1) = (x0.min(x), x1.max(x));
+        sx += x as f64 + 0.5;
+        sy += y as f64 + 0.5;
+        n += 1.0;
+    }
+    let (cx, cy) = (sx / n, sy / n);
+    let reach = (((x1 - x0) as f64) * 0.15).max(2.0);
+    let radius = ((w.min(h) as f64) * 0.03).max(3.0);
+    let mut strokes = vec![line(StrokeKind::Fg, base as i64, [cx - reach, cy], [cx + reach, cy], radius)];
+    for y in [h as f64 * 0.04, h as f64 * 0.96] {
+        let row = y as usize;
+        let free = t.get(row * w..(row + 1) * w).is_some_and(|r| r.iter().all(|v| *v == 0));
+        if free {
+            strokes.push(line(StrokeKind::Bg, base as i64, [w as f64 * 0.05, y], [w as f64 * 0.95, y], radius));
+        }
+    }
+    Ok(Scenario { name: name.to_string(), what: "a clip supplied by the user".to_string(), w, h, frames, truth, base, strokes })
 }
 
 /// The benchmark clips, `n` frames each (at least 12, so every event happens).
@@ -181,7 +225,7 @@ fn metrics(sc: &Scenario, tracker: &str, mattes: &[Vec<u8>], secs: f64) -> Run {
         (!tail.is_empty()).then(|| tail.iter().sum::<f64>() / tail.len() as f64)
     });
     Run {
-        scenario: sc.name,
+        scenario: sc.name.clone(),
         tracker: tracker.to_string(),
         mean_iou: per_frame.iter().sum::<f64>() / n,
         min_iou: per_frame.iter().copied().fold(1.0, f64::min),
@@ -190,6 +234,7 @@ fn metrics(sc: &Scenario, tracker: &str, mattes: &[Vec<u8>], secs: f64) -> Run {
         after_return,
         per_frame,
         fixes: None,
+        peak_mb: None,
         mattes: mattes.to_vec(),
     }
 }
@@ -217,7 +262,7 @@ pub fn run_flow(sc: &Scenario, tracker: &str, model: Option<&dyn MaskModel>) -> 
         }
     }
     let secs = start.elapsed().as_secs_f64();
-    let empty = vec![0u8; (W * H) as usize];
+    let empty = vec![0u8; sc.w * sc.h];
     let mattes: Vec<Vec<u8>> = segs.into_iter().map(|s| s.map_or_else(|| empty.clone(), |s| s.matte)).collect();
     metrics(sc, tracker, &mattes, secs)
 }
@@ -239,10 +284,10 @@ pub fn run_tracker(sc: &Scenario, tracker: &str, model: &dyn MaskModel) -> Optio
     }
     let req = TrackRequest::single(0, sc.frames.len(), prompts);
     let start = Instant::now();
-    let mut mattes: Vec<Vec<u8>> = vec![vec![0u8; (W * H) as usize]; sc.frames.len()];
+    let mut mattes: Vec<Vec<u8>> = vec![vec![0u8; sc.w * sc.h]; sc.frames.len()];
     let mut get = |f: i64| usize::try_from(f).ok().and_then(|i| clip.get(i).cloned());
     let r = t.track(&req, &mut get, &|| false, &mut |_, f, tf| {
-        let (Ok(i), true) = (usize::try_from(f), tf.prob.len() == (W * H) as usize) else { return };
+        let (Ok(i), true) = (usize::try_from(f), tf.prob.len() == sc.w * sc.h) else { return };
         let Some(img) = sc.frames.get(i) else { return };
         let strokes = at(i);
         if let Some(slot) = mattes.get_mut(i) {
@@ -250,7 +295,9 @@ pub fn run_tracker(sc: &Scenario, tracker: &str, model: &dyn MaskModel) -> Optio
         }
     });
     r.ok()?;
-    Some(metrics(sc, tracker, &mattes, start.elapsed().as_secs_f64()))
+    let mut run = metrics(sc, tracker, &mattes, start.elapsed().as_secs_f64());
+    run.peak_mb = model.peak_state_bytes().map(|b| b as f64 / (1 << 20) as f64);
+    Some(run)
 }
 
 /// The correction a user would paint on frame `f` where `pred` is wrong: a short foreground stroke through
@@ -260,8 +307,8 @@ fn correction(sc: &Scenario, f: usize, pred: &[u8]) -> Vec<Stroke> {
     let centre = |keep: &dyn Fn(usize) -> bool| -> Option<[f64; 2]> {
         let (mut sx, mut sy, mut n) = (0.0, 0.0, 0.0);
         for i in (0..truth.len().min(pred.len())).filter(|i| keep(*i)) {
-            sx += (i % W as usize) as f64 + 0.5;
-            sy += (i / W as usize) as f64 + 0.5;
+            sx += (i % sc.w.max(1)) as f64 + 0.5;
+            sy += (i / sc.w.max(1)) as f64 + 0.5;
             n += 1.0;
         }
         (n > 0.0).then(|| [sx / n, sy / n])
@@ -307,12 +354,14 @@ pub fn with_fixes(sc: &Scenario, target: f64, max: usize, run: &dyn Fn(&Scenario
 
 /// A fixed-width table of the runs, grouped by scenario.
 pub fn table(runs: &[Run]) -> String {
-    let mut out =
-        format!("{:<10} {:<12} {:>8} {:>8} {:>8} {:>10} {:>9} {:>6}\n", "clip", "tracker", "meanIoU", "minIoU", "flicker", "after ret.", "s/frame", "fixes");
+    let mut out = format!(
+        "{:<10} {:<12} {:>8} {:>8} {:>8} {:>10} {:>9} {:>6} {:>7}\n",
+        "clip", "tracker", "meanIoU", "minIoU", "flicker", "after ret.", "s/frame", "fixes", "peakMB"
+    );
     for r in runs {
         let back = r.after_return.map_or_else(|| "-".to_string(), |v| format!("{v:.3}"));
         out.push_str(&format!(
-            "{:<10} {:<12} {:>8.3} {:>8.3} {:>8.3} {:>10} {:>9.3} {:>6}\n",
+            "{:<10} {:<12} {:>8.3} {:>8.3} {:>8.3} {:>10} {:>9.3} {:>6} {:>7}\n",
             r.scenario,
             r.tracker,
             r.mean_iou,
@@ -320,7 +369,8 @@ pub fn table(runs: &[Run]) -> String {
             r.flicker,
             back,
             r.secs_per_frame,
-            r.fixes.as_deref().unwrap_or("-")
+            r.fixes.as_deref().unwrap_or("-"),
+            r.peak_mb.map_or_else(|| "-".to_string(), |v| format!("{v:.0}"))
         ));
     }
     out
@@ -371,6 +421,23 @@ mod tests {
         let hard = all.iter().find(|s| s.name == "reenter").and_then(|s| with_fixes(s, 0.9, 6, &classical)).unwrap();
         assert_ne!(hard.fixes.as_deref(), Some("0"), "{:?}", hard.fixes);
         assert!(table(&[easy, hard]).contains("fixes"));
+    }
+
+    #[test]
+    fn a_users_clip_becomes_a_scenario_and_bad_ones_are_refused() {
+        let all = scenarios(24);
+        let src = all.iter().find(|s| s.name == "move").unwrap();
+        let sc = scenario_from("mine", src.frames.clone(), src.truth.clone()).unwrap();
+        assert_eq!((sc.w, sc.h, sc.base), (W as usize, H as usize, 0));
+        assert!(sc.strokes.iter().any(|s| s.kind == StrokeKind::Fg) && sc.strokes.iter().any(|s| s.kind == StrokeKind::Bg));
+        let run = run_flow(&sc, "classical", None);
+        assert!(run.mean_iou > 0.9, "{}", run.mean_iou);
+        assert!(scenario_from("x", vec![], vec![]).is_err());
+        assert!(scenario_from("x", src.frames.clone(), src.truth[..3].to_vec()).is_err());
+        assert!(scenario_from("x", src.frames.clone(), vec![vec![0; sc.w * sc.h]; src.frames.len()]).is_err(), "no object anywhere");
+        let mut short = src.truth.clone();
+        short[0].pop();
+        assert!(scenario_from("x", src.frames.clone(), short).is_err());
     }
 
     #[test]

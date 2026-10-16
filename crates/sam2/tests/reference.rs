@@ -752,3 +752,25 @@ fn gpu_memory_encoder_matches_the_cpu_one() {
     // wrong shapes are errors
     assert!(enc.encode(&features.narrow(1, 0, 8).unwrap(), mask).is_err());
 }
+
+/// The tracker reports the most memory it held (memory banks, kept results, cached frames), and the model
+/// reports it for the last tracking run.
+#[test]
+fn the_tracker_reports_its_peak_memory() {
+    use effectcraft_segment::{ClipFrame, MaskModel, Prompt, TrackRequest};
+    let Some((w, _)) = load() else { return };
+    let model = effectcraft_sam2::mask::Sam2Mask::new(std::sync::Arc::new(effectcraft_sam2::session::VideoModel::load(&w).unwrap()));
+    assert_eq!(model.peak_state_bytes(), Some(0));
+    let (fw, fh) = (64usize, 48usize);
+    let frame = std::sync::Arc::new(ClipFrame {
+        rgb: (0..fw * fh).map(|i| if (i % fw).abs_diff(32) < 12 && (i / fw).abs_diff(24) < 12 { [0.9, 0.2, 0.1] } else { [0.2, 0.3, 0.5] }).collect(),
+        w: fw,
+        h: fh,
+    });
+    let mut get = |_f: i64| Some(frame.clone());
+    let req = TrackRequest::single(0, 3, vec![(0, Prompt { points: vec![([32.0, 24.0], true)], bbox: None, mask: None })]);
+    model.tracker().unwrap().track(&req, &mut get, &|| false, &mut |_, _, _| {}).unwrap();
+    let peak = model.peak_state_bytes().unwrap();
+    // three stored frames (about 2 MB each) and the cached frame features
+    assert!(peak > 6 << 20 && peak < 400 << 20, "peak {peak}");
+}

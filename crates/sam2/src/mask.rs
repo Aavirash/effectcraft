@@ -55,11 +55,12 @@ pub struct Sam2Mask {
     model: Arc<VideoModel>,
     last: Mutex<Option<(u64, Arc<Encoded>)>>,
     used: Mutex<std::time::Instant>,
+    pub(crate) peak: std::sync::atomic::AtomicU64,
 }
 
 impl Sam2Mask {
     pub fn new(model: Arc<VideoModel>) -> Sam2Mask {
-        Sam2Mask { model, last: Mutex::new(None), used: Mutex::new(std::time::Instant::now()) }
+        Sam2Mask { model, last: Mutex::new(None), used: Mutex::new(std::time::Instant::now()), peak: std::sync::atomic::AtomicU64::new(0) }
     }
 
     /// Note that the model is being used (for [`MaskModel::idle_secs`]).
@@ -119,6 +120,10 @@ impl MaskModel for Sam2Mask {
 
     fn device_name(&self) -> Option<String> {
         Some(self.model.device_name())
+    }
+
+    fn peak_state_bytes(&self) -> Option<u64> {
+        Some(self.peak.load(std::sync::atomic::Ordering::Relaxed))
     }
 
     fn idle_secs(&self) -> Option<f64> {

@@ -290,6 +290,7 @@ pub struct VideoTracker<'a> {
     objects: BTreeMap<ObjectId, ObjectState>,
     cache: VecDeque<(usize, Arc<FrameFeatures>)>,
     budget: Budget,
+    peak: usize,
 }
 
 fn sine_embedding_1d(positions: &[f32], dim: usize) -> Result<Tensor> {
@@ -313,7 +314,7 @@ impl<'a> VideoTracker<'a> {
         if n == 0 || n > MAX_FRAMES {
             return Err(Error::Input(format!("a clip needs between 1 and {MAX_FRAMES} frames, got {n}")));
         }
-        Ok(VideoTracker { model, frames, objects: BTreeMap::new(), cache: VecDeque::new(), budget: Budget::default() })
+        Ok(VideoTracker { model, frames, objects: BTreeMap::new(), cache: VecDeque::new(), budget: Budget::default(), peak: 0 })
     }
 
     pub fn num_frames(&self) -> usize {
@@ -331,8 +332,14 @@ impl<'a> VideoTracker<'a> {
         frames + self.cache.len() * FEATURE_BYTES
     }
 
-    fn check_budget(&self) -> Result<()> {
+    /// The most [`VideoTracker::state_bytes`] reached so far.
+    pub fn peak_state_bytes(&self) -> usize {
+        self.peak
+    }
+
+    fn check_budget(&mut self) -> Result<()> {
         let used = self.state_bytes();
+        self.peak = self.peak.max(used);
         if used > self.budget.max_state_bytes {
             return Err(Error::Budget(format!("the tracker holds {} MB, over its {} MB limit", used >> 20, self.budget.max_state_bytes >> 20)));
         }

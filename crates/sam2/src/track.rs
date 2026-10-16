@@ -139,6 +139,7 @@ impl Sam2Mask {
                 })?;
             }
         }
+        self.peak.store(tracker.peak_state_bytes() as u64, std::sync::atomic::Ordering::Relaxed);
         failure.map_or(Ok(()), Err)
     }
 }
