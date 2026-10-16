@@ -346,14 +346,14 @@ fn preset_row(
     name: &str,
     auto_id: &str,
     query: &str,
-    on_apply: impl FnOnce() -> Apply,
+    on_apply: impl Fn() -> Apply,
     apply: &mut Option<Apply>,
 ) {
     let t = app.tokens;
     let r = Rect::from_min_size(pos2(list.min.x, *y), vec2(list.width(), ROW_H));
     let id = egui::Id::new(("fxpreset", auto_id));
     let tab = nav.tab_stop(id);
-    let selected = nav.push(id, *y, 3, None, Some(on_apply.clone()));
+    let selected = nav.push(id, *y, 3, None, Some(on_apply()));
     *y += ROW_H;
     if r.max.y < list.min.y || r.min.y > list.max.y {
         return;
