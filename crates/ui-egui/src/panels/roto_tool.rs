@@ -8,7 +8,7 @@ use effectcraft_engine::render::{EvalCtx, RenderOpts, Renderer};
 use egui::{Align2, Color32, Pos2, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 use serde_json::json;
 
-use crate::i18n::tr;
+use crate::i18n::{tr, tr_args};
 use crate::theme::Tokens;
 use crate::{EffectcraftApp, widgets};
 
@@ -373,6 +373,31 @@ pub fn bar_buttons(app: &mut EffectcraftApp, ui: &mut egui::Ui, p: &egui::Painte
     }
     app.auto.add("layerPanel.roto.freeze", r, label);
     x += 80.0;
+    // Objects: strokes belong to the current object; with a tracker each is followed on its own and the mattes are united.
+    let objects = fx::data(&params).objects();
+    let current = app.session.state.roto.object;
+    let known = objects.contains(&current);
+    let r = Rect::from_min_size(pos2(x, bar.center().y - 10.0), vec2(86.0, 20.0));
+    let label = tr_args("Object {}", &[&(current + 1)]);
+    if widgets::text_button(ui, r, &label, false, &t, egui::Id::new(("roto-object", uid))).clicked() {
+        // cycle through the objects that have strokes (and the empty one being drawn)
+        let mut all = objects.clone();
+        if !known {
+            all.push(current);
+            all.sort_unstable();
+        }
+        let next = all.iter().copied().find(|o| *o > current).or_else(|| all.first().copied()).unwrap_or(0);
+        let _ = app.session.execute("roto.options", json!({"object": next}));
+    }
+    app.auto.add("layerPanel.roto.object", r, &label);
+    x += 90.0;
+    let r = Rect::from_min_size(pos2(x, bar.center().y - 10.0), vec2(26.0, 20.0));
+    if widgets::text_button(ui, r, "+", false, &t, egui::Id::new(("roto-object-new", uid))).clicked() {
+        let next = objects.iter().copied().chain([current]).max().map_or(0, |m| m + 1);
+        let _ = app.session.execute("roto.options", json!({"object": next}));
+    }
+    app.auto.add("layerPanel.roto.newObject", r, "New object");
+    x += 34.0;
     if running {
         let r = Rect::from_min_size(pos2(x, bar.center().y - 10.0), vec2(60.0, 20.0));
         if widgets::text_button(ui, r, tr("Stop"), false, &t, egui::Id::unique("roto-stop")).clicked() {

@@ -82,6 +82,15 @@ fn the_span_bar_shows_the_trackers_confidence() {
     h.run_steps(4);
     assert_eq!(h.state().ui.focused, PanelKind::Layer);
 
+    // the object picker is in the bar; "+" starts a new object, which the next stroke would belong to
+    assert!(h.state().auto.find("layerPanel.roto.object").is_some(), "the object picker is on screen");
+    assert!(h.state().auto.find("layerPanel.roto.newObject").is_some());
+    assert_eq!(h.state().session.state.roto.object, 0);
+    h.state_mut().session.execute("roto.options", json!({"object": 1})).unwrap();
+    h.run_steps(2);
+    assert_eq!(h.state().session.state.roto.object, 1);
+    h.state_mut().session.execute("roto.options", json!({"object": 0})).unwrap();
+    h.run_steps(2);
     let track = h.state().auto.find("layerPanel.rotoSpan").expect("the span bar is on screen").rect;
     let (comp, layer) = {
         let comp = h.state().session.active_comp().unwrap().clone();

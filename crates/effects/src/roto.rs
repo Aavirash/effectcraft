@@ -564,32 +564,72 @@ impl Chain {
         let (Some(&need_lo), Some(&need_hi)) = (needed.first(), needed.last()) else {
             return Ok(Some(TrackSummary::default()));
         };
-        // A prompt is a few clicks from the strokes and a box around what the classic engine makes of
-        // them on that frame (clicks alone pick a part of the object, not all of it).
-        let mut all_prompts: Vec<(i64, effectcraft_segment::Prompt)> = vec![];
-        for f in self.data.stroke_frames().into_iter().filter(|f| self.data.in_span(*f)) {
-            let strokes = self.data.strokes_at(f);
-            let p = match frame(f) {
-                Some(img) => rb::tracker_prompt_boxed(&strokes, self.opts.scale, &rb::segment(&img, &strokes, None, &self.opts, self.refine_radius)),
-                None => rb::tracker_prompt(&strokes, self.opts.scale),
-            };
-            if p.points.iter().any(|(_, fg)| *fg) {
-                all_prompts.push((f, p));
+        // Each object has its own prompts: a few clicks from its strokes and a box around what the classic engine
+        // makes of them on that frame (clicks alone pick a part of the object, not all of it).
+        let objects = self.data.objects();
+        let mut by_object: Vec<Vec<(i64, effectcraft_segment::Prompt)>> = vec![];
+        for &obj in &objects {
+            let mut prompts = vec![];
+            for f in self.data.stroke_frames().into_iter().filter(|f| self.data.in_span(*f)) {
+                let strokes = self.data.strokes_of(f, obj);
+                let p = match frame(f) {
+                    Some(img) => rb::tracker_prompt_boxed(&strokes, self.opts.scale, &rb::segment(&img, &strokes, None, &self.opts, self.refine_radius)),
+                    None => rb::tracker_prompt(&strokes, self.opts.scale),
+                };
+                if p.points.iter().any(|(_, fg)| *fg) {
+                    prompts.push((f, p));
+                }
             }
+            by_object.push(prompts);
         }
-        if all_prompts.is_empty() {
+        // objects without a foreground prompt cannot be followed
+        let followed: Vec<(u32, Vec<(i64, effectcraft_segment::Prompt)>)> = objects.into_iter().zip(by_object).filter(|(_, p)| !p.is_empty()).collect();
+        if followed.is_empty() {
             return Err("no foreground strokes to follow".into());
         }
-        // The window to track: from the nearest prompted frame at or before the first frame needed
-        // (a correction restarts the object there) to the last frame needed, reaching the first
-        // prompted frame when everything needed lies before it.
-        let first_prompt = all_prompts.first().map_or(need_lo, |p| p.0);
-        let lo = all_prompts.iter().map(|p| p.0).filter(|f| *f <= need_lo).max().unwrap_or(need_lo);
-        let hi = if need_hi < first_prompt { first_prompt } else { need_hi };
-        let prompts: Vec<(i64, effectcraft_segment::Prompt)> = all_prompts.into_iter().filter(|p| p.0 >= lo && p.0 <= hi).collect();
-        let req = TrackRequest::single(lo, (hi - lo + 1) as usize, prompts);
+        // The window to track: every object restarts at the nearest of its prompted frames at or before the first
+        // frame needed (a correction restarts the object there), so the window starts at the earliest restart; it
+        // ends at the last frame needed, reaching the farthest first prompt when an object's needed frames lie
+        // before its prompt.
+        let lo = followed.iter().map(|(_, p)| p.iter().map(|q| q.0).filter(|f| *f <= need_lo).max().unwrap_or(need_lo)).min().unwrap_or(need_lo);
+        let first_prompt = followed.iter().filter_map(|(_, p)| p.first().map(|q| q.0)).max().unwrap_or(need_hi);
+        let hi = need_hi.max(first_prompt);
+        let objects: Vec<u32> = followed.iter().map(|(o, _)| *o).collect();
+        let prompts: Vec<Vec<(i64, effectcraft_segment::Prompt)>> =
+            followed.into_iter().map(|(_, p)| p.into_iter().filter(|q| q.0 >= lo && q.0 <= hi).collect()).collect();
+        let req = TrackRequest { first: lo, count: (hi - lo + 1) as usize, objects: prompts };
         let frame = std::cell::RefCell::new(frame);
         let mut summary = TrackSummary::default();
+        // A frame is finished when every object has reported it (the objects' mattes are united).
+        let mut pending: BTreeMap<i64, Vec<Option<effectcraft_segment::TrackedFrame>>> = BTreeMap::new();
+        let finish = |g: i64, parts: Vec<Option<effectcraft_segment::TrackedFrame>>, summary: &mut TrackSummary, progress: &mut dyn FnMut(usize)| {
+            let (Some(key), Some(img)) = (self.keys.get(&g).copied(), (frame.borrow_mut())(g)) else { return };
+            let mut segs = vec![];
+            let (mut confidence, mut present) = (f32::INFINITY, false);
+            let mut worst = f32::INFINITY;
+            for (obj, t) in objects.iter().zip(parts) {
+                let Some(t) = t else { continue };
+                let strokes = self.data.strokes_of(g, *obj);
+                segs.push(rb::segment_tracked(&img, &strokes, t.prob, t.occluded, &self.opts, self.refine_radius));
+                worst = worst.min(t.confidence);
+                if !t.occluded {
+                    present = true;
+                    confidence = confidence.min(t.confidence);
+                }
+            }
+            if segs.is_empty() {
+                return;
+            }
+            // a frame is occluded when every object is absent; otherwise the doubtful object sets the confidence
+            let (occluded, confidence) = (!present, if present { confidence } else { worst });
+            store(tracked_key(key), self.opts.scale, Arc::new(effectcraft_track::roto::FrameSeg::union(segs)));
+            trust_cache().lock().unwrap_or_else(|e| e.into_inner()).insert(tracked_key(key), FrameTrust { confidence, occluded });
+            summary.frames += 1;
+            summary.occluded += usize::from(occluded);
+            summary.min_confidence = if summary.frames == 1 { confidence } else { summary.min_confidence.min(confidence) };
+            progress(summary.frames);
+        };
+        let n_objects = objects.len();
         tracker.track(
             &req,
             &mut |g| {
@@ -597,18 +637,21 @@ impl Chain {
                 Some(Arc::new(ClipFrame { rgb: rb::rgb_of(&img), w: img.width as usize, h: img.height as usize }))
             },
             cancel,
-            &mut |_, g, t| {
-                let (Some(key), Some(img)) = (self.keys.get(&g).copied(), (frame.borrow_mut())(g)) else { return };
-                let strokes = self.data.strokes_at(g);
-                let seg = rb::segment_tracked(&img, &strokes, t.prob, t.occluded, &self.opts, self.refine_radius);
-                store(tracked_key(key), self.opts.scale, Arc::new(seg));
-                trust_cache().lock().unwrap_or_else(|e| e.into_inner()).insert(tracked_key(key), FrameTrust { confidence: t.confidence, occluded: t.occluded });
-                summary.frames += 1;
-                summary.occluded += usize::from(t.occluded);
-                summary.min_confidence = if summary.frames == 1 { t.confidence } else { summary.min_confidence.min(t.confidence) };
-                progress(summary.frames);
+            &mut |o, g, t| {
+                let parts = pending.entry(g).or_insert_with(|| vec![None; n_objects]);
+                if let Some(slot) = parts.get_mut(o) {
+                    *slot = Some(t);
+                }
+                if parts.iter().all(Option::is_some) {
+                    let parts = pending.remove(&g).unwrap_or_default();
+                    finish(g, parts, &mut summary, progress);
+                }
             },
         )?;
+        // frames some object never reported (it was not followed there): united from the rest
+        for (g, parts) in std::mem::take(&mut pending) {
+            finish(g, parts, &mut summary, progress);
+        }
         Ok(Some(summary))
     }
 }
@@ -1038,8 +1081,8 @@ mod tests {
     #[test]
     fn renders_the_segmented_disk_on_demand() {
         let mut d = RotoData::default();
-        d.add(Stroke { kind: StrokeKind::Fg, frame: 0, radius: 3.0, points: vec![[35.0, 40.0], [45.0, 40.0]] }, 20, [0, 24]);
-        d.add(Stroke { kind: StrokeKind::Bg, frame: 0, radius: 3.0, points: vec![[5.0, 5.0], [95.0, 5.0], [95.0, 75.0]] }, 20, [0, 24]);
+        d.add(Stroke { kind: StrokeKind::Fg, frame: 0, radius: 3.0, points: vec![[35.0, 40.0], [45.0, 40.0]], object: 0 }, 20, [0, 24]);
+        d.add(Stroke { kind: StrokeKind::Bg, frame: 0, radius: 3.0, points: vec![[5.0, 5.0], [95.0, 5.0], [95.0, 75.0]], object: 0 }, 20, [0, 24]);
         let params = params_with(&d);
         let host = Seq;
         let run = |t: f64| {
@@ -1081,6 +1124,91 @@ mod tests {
         };
         let o = crate::apply(&specs()[0], &ctx, Buf { img: frame(0.3), offset: [0.0; 2], scale: 1.0 }).img;
         assert!(o.data.iter().all(|p| p[3] == 0.0));
+    }
+
+    /// A stand-in tracker for two objects: object 0 is the moving disk, object 1 a fixed square. It records how many
+    /// objects (and prompts per object) it was asked for.
+    struct TwoObjects(std::sync::Mutex<Vec<Vec<usize>>>);
+    impl effectcraft_segment::MaskModel for TwoObjects {
+        fn info(&self) -> &'static effectcraft_segment::ModelInfo {
+            &effectcraft_segment::SAM2_TINY
+        }
+        fn segment(&self, _: &[[f32; 3]], _: usize, _: usize, _: &effectcraft_segment::Prompt) -> effectcraft_segment::Result<Vec<f32>> {
+            Err("no weights".into())
+        }
+        fn tracker(&self) -> Option<&dyn effectcraft_segment::ObjectTracker> {
+            Some(self)
+        }
+    }
+    impl effectcraft_segment::ObjectTracker for TwoObjects {
+        fn track(
+            &self,
+            req: &effectcraft_segment::TrackRequest,
+            frame: &mut dyn FnMut(i64) -> Option<Arc<ClipFrame>>,
+            _: &dyn Fn() -> bool,
+            out: &mut dyn FnMut(usize, i64, effectcraft_segment::TrackedFrame),
+        ) -> effectcraft_segment::Result<()> {
+            self.0.lock().unwrap().push(req.objects.iter().map(Vec::len).collect());
+            for g in req.first..req.first + req.count as i64 {
+                let img = frame(g).ok_or("no frame")?;
+                let c = [40.0 + 2.0 * g as f64, 40.0];
+                // the objects report in reverse order on odd frames: the union must not depend on it
+                let order: Vec<usize> = if g % 2 == 1 { (0..req.objects.len()).rev().collect() } else { (0..req.objects.len()).collect() };
+                for o in order {
+                    let prob = (0..img.w * img.h)
+                        .map(|i| {
+                            let (x, y) = ((i % img.w) as f64 + 0.5, (i / img.w) as f64 + 0.5);
+                            let inside = if o == 0 { (x - c[0]).hypot(y - c[1]) <= 15.0 } else { (8.0..22.0).contains(&x) && (8.0..22.0).contains(&y) };
+                            f32::from(inside)
+                        })
+                        .collect();
+                    out(o, g, effectcraft_segment::TrackedFrame { prob, w: img.w, h: img.h, confidence: if o == 0 { 0.9 } else { 0.4 }, occluded: false });
+                }
+            }
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn objects_are_followed_in_one_pass_and_their_mattes_united() {
+        let mut d = RotoData::default();
+        let stroke = |kind, points: Vec<[f64; 2]>, object| Stroke { kind, frame: 0, radius: 3.0, points, object };
+        d.add(stroke(StrokeKind::Fg, vec![[35.0, 40.0], [45.0, 40.0]], 0), 8, [0, 24]);
+        d.add(stroke(StrokeKind::Fg, vec![[12.0, 15.0], [18.0, 15.0]], 1), 8, [0, 24]);
+        d.add(stroke(StrokeKind::Bg, vec![[85.0, 70.0], [95.0, 70.0]], 0), 8, [0, 24]);
+        assert_eq!(d.objects(), vec![0, 1]);
+        // the Refine Edge strokes belong to every object; the others only to their own
+        assert_eq!(d.strokes_of(0, 1).len(), 1);
+        assert_eq!(d.strokes_of(0, 0).len(), 2);
+        let params = params_with(&d);
+        let mut chain = Chain::new(&params, [100.0, 80.0], 25.0, 1.0);
+        let fake = Arc::new(TwoObjects(Default::default()));
+        chain.model = Some(fake.clone());
+        // the clip: the moving disk and a fixed yellow square
+        let mut get = |f: i64| {
+            let mut img = frame(f as f64 / 25.0 + 0.001);
+            for y in 8..22 {
+                for x in 8..22 {
+                    img.set(x, y, [0.95, 0.9, 0.1 + ((x * 3 + y * 5) % 7) as f32 / 70.0, 1.0]);
+                }
+            }
+            Some(Arc::new(img))
+        };
+        let mut seen = 0;
+        let summary = chain.track(&mut get, &|| false, &mut |n| seen = n).unwrap().unwrap();
+        // one request for both objects; object 0 has its foreground and background prompt on the frame, object 1 its own
+        assert_eq!(fake.0.lock().unwrap().len(), 1);
+        assert_eq!(fake.0.lock().unwrap()[0], vec![1, 1]);
+        assert_eq!(summary.frames, 9);
+        assert_eq!(seen, 9);
+        // the least sure object sets the frame's confidence
+        assert!((summary.min_confidence - 0.4).abs() < 1e-6, "{}", summary.min_confidence);
+        assert_eq!(summary.occluded, 0);
+        let seg = cached(tracked_key(chain.keys[&3]), 1.0).expect("frame 3 is tracked");
+        let at = |x: usize, y: usize| seg.matte[y * 100 + x];
+        assert!(at(46, 40) != 0, "the moving disk (frame 3 centre x = 46)");
+        assert!(at(15, 15) != 0, "the fixed square");
+        assert_eq!(at(60, 70), 0, "nothing elsewhere");
     }
 
     /// Instances saved before the propagation controls got their own twirl-down (and motion

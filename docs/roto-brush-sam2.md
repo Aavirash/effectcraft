@@ -29,6 +29,23 @@ strokes and span they came from are unchanged. Changing a stroke or the span mak
 Choosing another model, or the classic engine, leaves them in place and `roto.status` says so; a classic Propagate
 replaces them with classic mattes. Object Matte saves nothing.
 
+## Several objects in one instance
+A Roto Brush instance can hold several objects. The **Object N** button in the Layer panel's bar picks the object new
+strokes belong to (it cycles through the objects that have strokes), and **+** starts a new one. Agents: `roto.options
+{object}` sets the current object, `roto.stroke` takes `object` (0–31; default the current one), `roto.clearStrokes`
+takes `object` to remove one object's strokes, and `roto.status` lists `objects` (`{id, strokes}`) and `currentObject`.
+
+With SAM 2, Propagate follows every object in **one pass** (the frame is encoded once, whatever the number of objects), each
+from its own foreground and background strokes, and the mattes are united into the instance's one matte. Each object keeps
+its own occlusion: the frame counts as absent only when every object is, and otherwise the least sure object sets the
+frame's confidence on the span bar. A background stroke belongs to its object, so it separates that object from what
+lies under it without cutting a hole in the others. Refine Edge strokes belong to the whole matte. The classic engine has
+no objects: all foreground strokes make one object, and background strokes apply to it as before. Saved projects are
+unchanged (strokes without an object are object 0, and nothing is written for object 0).
+
+This is not several Roto Brush instances sharing a pass: each instance reads the layer after the effects above it, so
+instances can see different pixels. Objects inside one instance always see the same ones.
+
 ## Sizes
 Four checkpoints are in the registry (Settings ▸ Roto Brush); the size is detected from the file, and each is
 pinned to a Hugging Face commit with its SHA-256. All run the same tracker; a bigger backbone costs time and memory.

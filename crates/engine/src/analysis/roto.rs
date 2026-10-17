@@ -51,6 +51,9 @@ pub struct RotoOptions {
     pub boundary_color: [f64; 3],
     /// Start propagating in the background after each stroke.
     pub auto_propagate: bool,
+    /// The object new strokes belong to (0 is the first). With a tracker every object is followed on its own
+    /// and their mattes are united; the classic engine treats all foreground strokes as one object.
+    pub object: u32,
 }
 
 impl Default for RotoOptions {
@@ -63,9 +66,13 @@ impl Default for RotoOptions {
             overlay_opacity: 50.0,
             boundary_color: [1.0, 0.25, 0.75],
             auto_propagate: true,
+            object: 0,
         }
     }
 }
+
+/// The highest object id (SAM 2 follows up to 32 objects in one pass).
+pub const MAX_OBJECT_ID: u32 = 31;
 
 pub const VIEWS: [&str; 4] = ["alphaBoundary", "alpha", "alphaOverlay", "none"];
 

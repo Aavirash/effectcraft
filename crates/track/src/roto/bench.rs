@@ -122,7 +122,7 @@ fn line(kind: StrokeKind, frame: i64, a: [f64; 2], b: [f64; 2], radius: f64) -> 
         let t = f64::from(k) / 10.0;
         [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]
     };
-    Stroke { kind, frame, radius, points: (0..=10).map(pt).collect() }
+    Stroke { kind, frame, radius, points: (0..=10).map(pt).collect(), object: 0 }
 }
 
 /// The strokes an artist would paint on the base frame: one through the disk, two around it.

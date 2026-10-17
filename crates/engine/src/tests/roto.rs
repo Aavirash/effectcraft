@@ -1007,3 +1007,28 @@ fn a_correction_re_tracks_only_the_frames_it_changes() {
     assert_eq!(trust.len(), 21);
     assert!(trust.values().all(|t| t.confidence > 0.9 && !t.occluded));
 }
+
+#[test]
+fn strokes_belong_to_the_current_object() {
+    let mut s = Session::default();
+    s.execute("comp.new", json!({"width": 64, "height": 64, "frameRate": 25, "duration": 1})).unwrap();
+    let layer = s.execute("layer.newSolid", json!({"width": 64, "height": 64})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("roto.stroke", json!({"layer": layer, "points": [[10, 10]], "radius": 4})).unwrap();
+    // the current object is an option shared by the tool and the commands
+    s.execute("roto.options", json!({"object": 1})).unwrap();
+    s.execute("roto.stroke", json!({"layer": layer, "points": [[50, 50]], "radius": 4})).unwrap();
+    s.execute("roto.stroke", json!({"layer": layer, "kind": "bg", "points": [[30, 30]], "radius": 4})).unwrap();
+    // an explicit object wins over the option, and is clamped to the supported range
+    s.execute("roto.stroke", json!({"layer": layer, "points": [[20, 50]], "radius": 4, "object": 99})).unwrap();
+    let st = s.execute("roto.status", json!({"layer": layer})).unwrap();
+    assert_eq!(st["currentObject"], 1);
+    assert_eq!(st["objects"], json!([{"id": 0, "strokes": 1}, {"id": 1, "strokes": 2}, {"id": 31, "strokes": 1}]));
+    // removing one object's strokes leaves the others
+    let r = s.execute("roto.clearStrokes", json!({"layer": layer, "object": 1})).unwrap();
+    assert_eq!(r["removed"], 2);
+    let st = s.execute("roto.status", json!({"layer": layer})).unwrap();
+    assert_eq!(st["objects"], json!([{"id": 0, "strokes": 1}, {"id": 31, "strokes": 1}]));
+    // the object survives a save and a load
+    let json = s.project.to_json();
+    assert!(json.contains("\\\"object\\\":31"), "the project file carries the object");
+}

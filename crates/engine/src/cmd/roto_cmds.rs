@@ -27,7 +27,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Roto Brush Stroke",
             [],
             None,
-            "{layer?, kind?: fg|bg|refine|refineErase, points: [[x, y], …] (layer pixels), frame? (layer frame; default current), radius? (layer px; default the tool's diameter / 2), effect?}",
+            "{layer?, kind?: fg|bg|refine|refineErase, points: [[x, y], …] (layer pixels), frame? (layer frame; default current), radius? (layer px; default the tool's diameter / 2), effect?, object? (0–31; default the current object: with a tracker each object is followed on its own and the mattes are united)}",
             has_comp,
             stroke
         ),
@@ -43,14 +43,22 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!("roto.span", "Set Segmentation Span", [], None, "{layer?, effect?, start?, end? (layer frames)}", has_comp, span),
         cmd!("roto.freeze", "Freeze", [], None, "{layer?, effect?, wait?}", has_comp, freeze),
         cmd!("roto.unfreeze", "Unfreeze", [], None, "{layer?, effect?}", has_comp, unfreeze),
-        cmd!("roto.clearStrokes", "Remove Roto Brush Strokes", [], None, "{layer?, effect?, frame? (only this layer frame), kind?}", has_comp, clear_strokes),
+        cmd!(
+            "roto.clearStrokes",
+            "Remove Roto Brush Strokes",
+            [],
+            None,
+            "{layer?, effect?, frame? (only this layer frame), kind?, object? (only this object's strokes)}",
+            has_comp,
+            clear_strokes
+        ),
         cmd!("roto.cancel", "Stop Roto Brush", [], None, "{}", is_running, |s, _| Ok(json!({"stopped": s.stop_roto()}))),
         cmd!(
             "roto.options",
             "Roto Brush Options",
             [],
             None,
-            "{diameter?, refineDiameter?, view?: alphaBoundary|alpha|alphaOverlay|none, overlayColor?: [r,g,b], overlayOpacity?, boundaryColor?: [r,g,b], autoPropagate?}",
+            "{diameter?, refineDiameter?, view?: alphaBoundary|alpha|alphaOverlay|none, overlayColor?: [r,g,b], overlayOpacity?, boundaryColor?: [r,g,b], autoPropagate?, object? (the object new strokes belong to, 0–31)}",
             always,
             options
         ),
@@ -232,7 +240,8 @@ fn stroke(s: &mut Session, p: &Value) -> Result<Value> {
     if existing.is_none() && !kind.is_segmentation() {
         return Err(bad(cmd, "draw a foreground stroke with the Roto Brush tool first"));
     }
-    let st = Stroke { kind, frame, radius, points };
+    let object = f_p(p, "object").map_or(s.state.roto.object, |v| v.clamp(0.0, rt::MAX_OBJECT_ID as f64).round() as u32);
+    let st = Stroke { kind, frame, radius, points, object };
     let label = if kind.is_segmentation() { "Roto Brush Stroke" } else { "Refine Edge Stroke" };
     let (uid, d) = s.edit(label, None, |proj, _| {
         let mut next = proj.next_id;
@@ -263,7 +272,7 @@ fn stroke(s: &mut Session, p: &Value) -> Result<Value> {
         s.state.selected_layers = vec![lid];
     }
     Ok(json!({
-        "layer": lid.0, "effect": uid, "frame": frame, "kind": kind, "radius": radius,
+        "layer": lid.0, "effect": uid, "frame": frame, "kind": kind, "radius": radius, "object": object,
         "base": d.base, "span": d.span, "strokes": d.strokes.len(),
     }))
 }
@@ -369,8 +378,9 @@ fn clear_strokes(s: &mut Session, p: &Value) -> Result<Value> {
         Some(k) => Some(StrokeKind::from_name(k).ok_or_else(|| bad(cmd, format!("unknown kind `{k}`")))?),
         None => None,
     };
+    let object = f_p(p, "object").map(|v| v.round() as u32);
     let n0 = d.strokes.len();
-    d.strokes.retain(|st| !(frame.is_none_or(|f| st.frame == f) && kind.is_none_or(|k| st.kind == k)));
+    d.strokes.retain(|st| !(frame.is_none_or(|f| st.frame == f) && kind.is_none_or(|k| st.kind == k) && object.is_none_or(|o| st.object == o)));
     if d.strokes.iter().all(|s| !s.kind.is_segmentation()) {
         d.base = None;
     } else if d.base.is_some_and(|b| !d.strokes.iter().any(|s| s.frame == b && s.kind.is_segmentation())) {
@@ -412,6 +422,9 @@ fn options(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(b) = b_p(p, "autoPropagate") {
         o.auto_propagate = b;
     }
+    if let Some(v) = f_p(p, "object") {
+        o.object = v.clamp(0.0, rt::MAX_OBJECT_ID as f64).round() as u32;
+    }
     s.state.roto = o.clone();
     Ok(serde_json::to_value(o).unwrap_or(Value::Null))
 }
@@ -430,6 +443,8 @@ fn status(s: &mut Session, p: &Value) -> Result<Value> {
     out["base"] = json!(d.base);
     out["span"] = json!(d.span);
     out["strokes"] = json!(d.strokes.len());
+    out["objects"] = json!(d.objects().iter().map(|o| json!({"id": o, "strokes": d.strokes.iter().filter(|s| s.object == *o).count()})).collect::<Vec<_>>());
+    out["currentObject"] = json!(s.state.roto.object);
     out["strokeFrames"] = json!(d.stroke_frames());
     out["frozen"] = json!(frozen_of(&g));
     out["pending"] = json!(s.roto_pending.contains(&(cid, lid, uid)));

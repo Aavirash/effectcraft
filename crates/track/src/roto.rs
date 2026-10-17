@@ -88,6 +88,15 @@ pub struct Stroke {
     pub frame: i64,
     pub radius: f64,
     pub points: Vec<[f64; 2]>,
+    /// Which object of the instance the stroke belongs to (0 for the first, and for every older project).
+    /// With a tracker each object is followed on its own and the mattes are combined; the classic engine
+    /// treats all foreground strokes as one object.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub object: u32,
+}
+
+fn is_zero(v: &u32) -> bool {
+    *v == 0
 }
 
 /// A Roto Brush instance's user data: strokes, the base frame and the segmentation span
@@ -129,6 +138,18 @@ impl RotoData {
         v.sort_unstable();
         v.dedup();
         v
+    }
+    /// The objects that have a foreground stroke, in order.
+    pub fn objects(&self) -> Vec<u32> {
+        let mut v: Vec<u32> = self.strokes.iter().filter(|s| s.kind == StrokeKind::Fg).map(|s| s.object).collect();
+        v.sort_unstable();
+        v.dedup();
+        v
+    }
+    /// The strokes of `object` on `frame`: its own foreground, background and box strokes, and the Refine Edge
+    /// strokes (which belong to the whole matte).
+    pub fn strokes_of(&self, frame: i64, object: u32) -> Vec<&Stroke> {
+        self.strokes.iter().filter(|s| s.frame == frame && (s.object == object || matches!(s.kind, StrokeKind::Refine | StrokeKind::RefineErase))).collect()
     }
     pub fn in_span(&self, f: i64) -> bool {
         self.base.is_some() && f >= self.span[0] && f <= self.span[1]
@@ -224,6 +245,26 @@ pub struct FrameSeg {
 }
 
 impl FrameSeg {
+    /// The union of several objects' segmentations of one frame (the largest keeps its colour models). The
+    /// parts must share one size; any that does not is ignored.
+    pub fn union(parts: Vec<FrameSeg>) -> FrameSeg {
+        let Some(first) = parts.first() else { return FrameSeg::default() };
+        let (w, h) = (first.w, first.h);
+        let mut parts: Vec<FrameSeg> = parts.into_iter().filter(|p| p.w == w && p.h == h && p.matte.len() == w * h).collect();
+        parts.sort_by_key(|p| std::cmp::Reverse(p.area()));
+        let mut it = parts.into_iter();
+        let Some(mut out) = it.next() else { return FrameSeg::default() };
+        for p in it {
+            for (a, b) in out.matte.iter_mut().zip(&p.matte) {
+                *a = (*a).max(*b);
+            }
+            for (a, b) in out.refine.iter_mut().zip(&p.refine) {
+                *a = (*a).max(*b);
+            }
+        }
+        out
+    }
+
     pub fn empty(w: usize, h: usize) -> FrameSeg {
         let Some(n) = w.checked_mul(h).filter(|n| *n <= rle::MAX_PLANE_BYTES) else {
             return FrameSeg::default();

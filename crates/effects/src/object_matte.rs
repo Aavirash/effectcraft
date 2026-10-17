@@ -144,7 +144,7 @@ pub fn prompt_strokes(params: &Params, layer_size: [f64; 2], frame: i64, with_mo
     if !inside(pt) {
         return None;
     }
-    let mut out = vec![Stroke { kind: StrokeKind::Fg, frame, radius: POINT_RADIUS, points: vec![pt] }];
+    let mut out = vec![Stroke { kind: StrokeKind::Fg, frame, radius: POINT_RADIUS, points: vec![pt], object: 0 }];
     let rect = |x0: f64, y0: f64, x1: f64, y1: f64| vec![[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]];
     let boxed = b(params, "useBox").then(|| Some((v2(params, "boxTopLeft")?, v2(params, "boxBottomRight")?))).flatten();
     match boxed {
@@ -158,9 +158,9 @@ pub fn prompt_strokes(params: &Params, layer_size: [f64; 2], frame: i64, with_mo
             }
             out.push(if with_model {
                 // The model takes the box itself as its box prompt.
-                Stroke { kind: StrokeKind::Box, frame, radius: 0.0, points: vec![[x0, y0], [x1, y1]] }
+                Stroke { kind: StrokeKind::Box, frame, radius: 0.0, points: vec![[x0, y0], [x1, y1]], object: 0 }
             } else {
-                Stroke { kind: StrokeKind::Bg, frame, radius: EDGE_RADIUS, points: rect(x0, y0, x1, y1) }
+                Stroke { kind: StrokeKind::Bg, frame, radius: EDGE_RADIUS, points: rect(x0, y0, x1, y1), object: 0 }
             });
         }
         None if !with_model => {
@@ -168,7 +168,7 @@ pub fn prompt_strokes(params: &Params, layer_size: [f64; 2], frame: i64, with_mo
             if w <= 4.0 * i || h <= 4.0 * i {
                 return None;
             }
-            out.push(Stroke { kind: StrokeKind::Bg, frame, radius: EDGE_RADIUS, points: rect(i, i, w - i, h - i) });
+            out.push(Stroke { kind: StrokeKind::Bg, frame, radius: EDGE_RADIUS, points: rect(i, i, w - i, h - i), object: 0 });
         }
         None => {}
     }
