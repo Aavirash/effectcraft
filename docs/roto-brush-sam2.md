@@ -106,7 +106,7 @@ encoder's 64 × 64 level matches PyTorch to 7e-6, the memory attention to 1.8e-5
 times the pieces on both devices (`EFFECTCRAFT_SAM2_PROFILE=1` prints a frame's breakdown).
 
 ## Benchmark
-`effectcraft-cli bench --roto [--frames N] [--sam2 model.safetensors] [--mobilesam mobile_sam.pt]` runs synthetic clips with
+`effectcraft-cli bench --roto [--frames N] [--sam2 model.safetensors (any size; default: the first installed)] [--mobilesam mobile_sam.pt]` runs synthetic clips with
 known mattes through all three. 24 frames, debug build, SAM 2 on the GPU; mean IoU (mean IoU after the object returns), seconds
 per frame:
 

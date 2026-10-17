@@ -108,6 +108,36 @@ mod tests {
     }
 
     #[test]
+    fn configs_match_the_released_sizes() {
+        let blocks = |s| hiera::HieraConfig::for_size(s).blocks.iter().sum::<usize>();
+        assert_eq!([Size::Tiny, Size::Small, Size::BasePlus, Size::Large].map(blocks), [12, 16, 24, 48]);
+        for s in [Size::Tiny, Size::Small, Size::BasePlus, Size::Large] {
+            let c = hiera::HieraConfig::for_size(s);
+            assert_eq!((c.embed_dims.len(), c.heads.len(), c.windows.len()), (4, 4, 4));
+            assert!(c.global_blocks.iter().all(|g| *g < blocks(s)));
+        }
+    }
+
+    #[test]
+    fn size_comes_from_the_patch_embedding_and_depth() {
+        use candle_core::{DType, Device, Tensor};
+        let make = |width: usize, deep: bool| {
+            let mut m = std::collections::HashMap::new();
+            m.insert("vision_encoder.backbone.patch_embed.projection.weight".to_string(), Tensor::zeros((width, 3, 7, 7), DType::F32, &Device::Cpu).unwrap());
+            if deep {
+                m.insert("vision_encoder.backbone.blocks.15.layer_norm1.weight".to_string(), Tensor::zeros(4, DType::F32, &Device::Cpu).unwrap());
+            }
+            weights::Weights::from_map(m).unwrap()
+        };
+        assert_eq!(Size::detect(&make(96, false)).unwrap(), Size::Tiny);
+        assert_eq!(Size::detect(&make(96, true)).unwrap(), Size::Small);
+        assert_eq!(Size::detect(&make(112, false)).unwrap(), Size::BasePlus);
+        assert_eq!(Size::detect(&make(144, false)).unwrap(), Size::Large);
+        assert!(Size::detect(&make(64, false)).is_err());
+        assert!(Size::detect(&weights::Weights::from_map(Default::default()).unwrap()).is_err());
+    }
+
+    #[test]
     fn errors_say_what_failed() {
         assert!(Error::Input("empty frame".into()).to_string().contains("empty frame"));
         assert_eq!(Error::Cancelled.to_string(), "SAM 2: cancelled");

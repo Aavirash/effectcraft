@@ -544,7 +544,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Use Roto Brush Model",
             [],
             None,
-            "{id: classical|mobilesam|sam2.1-hiera-tiny, wait?} (Roto Brush 2.0 / 3.0 use it; wait: loaded before returning)",
+            "{id: classical|mobilesam|sam2.1-hiera-tiny|sam2.1-hiera-small|sam2.1-hiera-base-plus|sam2.1-hiera-large, wait?} (Roto Brush 2.0 / 3.0 use it; wait: loaded before returning)",
             always,
             |s, p| select(s, p, Task::Mask)
         ),
