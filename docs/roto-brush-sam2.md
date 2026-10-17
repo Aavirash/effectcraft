@@ -120,6 +120,11 @@ stored frame, pruned to the frames later ones can still look at) and refuses to 
 one is set, with a clear error instead of running out of memory. Two runs of the same prompts give bit-identical masks on
 the CPU.
 
+Pending per-object probability maps have a separate 256 MiB budget, including their allocated capacity and frame
+slots. This bounds the full-resolution results waiting to be united when objects first prompted on different frames
+report in separate passes. Reaching the budget cancels tracking and reports the reason through the existing
+`trackerNote`; propagation falls back to the classic engine. A single object's results need no pending buffer.
+
 ## How it works
 `crates/sam2` is a Rust port (on [candle](https://github.com/huggingface/candle), native only) of the Hugging Face
 `transformers` SAM 2 implementation, Apache-2.0 (see its `NOTICE`). Every stage is checked against PyTorch by

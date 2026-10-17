@@ -40,6 +40,8 @@ use crate::{Buf, EffectCtx, EffectSpec, Params, num, p, popup, slider};
 
 pub use effectcraft_track::roto::{FrameSeg, Stroke, StrokeKind};
 
+mod pending;
+
 /// The effect's id.
 pub const ID: &str = "ec.matte.rotobrush";
 /// Hidden parameters.
@@ -608,6 +610,16 @@ impl Chain {
         cancel: &dyn Fn() -> bool,
         progress: &mut dyn FnMut(usize),
     ) -> Result<Option<TrackSummary>, String> {
+        self.track_with_pending_limit(frame, cancel, progress, pending::MAX_PENDING_BYTES)
+    }
+
+    fn track_with_pending_limit(
+        &self,
+        frame: &mut dyn FnMut(i64) -> Option<Arc<Image>>,
+        cancel: &dyn Fn() -> bool,
+        progress: &mut dyn FnMut(usize),
+        max_pending_bytes: usize,
+    ) -> Result<Option<TrackSummary>, String> {
         let Some(tracker) = self.model.as_ref().and_then(|m| m.tracker()) else { return Ok(None) };
         let (Some(_), true) = (self.data.base, self.data.span[1] >= self.data.span[0]) else { return Err("no base frame".into()) };
         // Frames of the span that already have a tracked result (this session's, or the saved
@@ -657,7 +669,7 @@ impl Chain {
         let frame = std::cell::RefCell::new(frame);
         let mut summary = TrackSummary::default();
         // A frame is finished when every object has reported it (the objects' mattes are united).
-        let mut pending: BTreeMap<i64, Vec<Option<effectcraft_segment::TrackedFrame>>> = BTreeMap::new();
+        let mut pending = pending::PendingMasks::new(objects.len(), max_pending_bytes);
         let finish = |g: i64, parts: Vec<Option<effectcraft_segment::TrackedFrame>>, summary: &mut TrackSummary, progress: &mut dyn FnMut(usize)| {
             let (Some(key), Some(img)) = (self.keys.get(&g).copied(), (frame.borrow_mut())(g)) else { return };
             let mut segs: Vec<(u32, effectcraft_track::roto::FrameSeg)> = vec![];
@@ -694,27 +706,37 @@ impl Chain {
             summary.min_confidence = if summary.frames == 1 { confidence } else { summary.min_confidence.min(confidence) };
             progress(summary.frames);
         };
-        let n_objects = objects.len();
-        tracker.track(
+        let pending_failed = std::cell::Cell::new(false);
+        let mut pending_error = None;
+        let result = tracker.track(
             &req,
             &mut |g| {
                 let img = (frame.borrow_mut())(g)?;
                 Some(Arc::new(ClipFrame { rgb: rb::rgb_of(&img), w: img.width as usize, h: img.height as usize }))
             },
-            cancel,
+            &|| cancel() || pending_failed.get(),
             &mut |o, g, t| {
-                let parts = pending.entry(g).or_insert_with(|| vec![None; n_objects]);
-                if let Some(slot) = parts.get_mut(o) {
-                    *slot = Some(t);
+                // A tracker that reports object-by-object can otherwise retain a full clip of
+                // probability maps. Stop buffering immediately, even if it ignores cancellation.
+                if pending_failed.get() {
+                    return;
                 }
-                if parts.iter().all(Option::is_some) {
-                    let parts = pending.remove(&g).unwrap_or_default();
-                    finish(g, parts, &mut summary, progress);
+                match pending.insert(o, g, t) {
+                    Ok(Some(parts)) => finish(g, parts, &mut summary, progress),
+                    Ok(None) => {}
+                    Err(e) => {
+                        pending_error = Some(e);
+                        pending_failed.set(true);
+                    }
                 }
             },
-        )?;
+        );
+        if let Some(e) = pending_error {
+            return Err(e);
+        }
+        result?;
         // frames some object never reported (it was not followed there): united from the rest
-        for (g, parts) in std::mem::take(&mut pending) {
+        for (g, parts) in pending.into_incomplete() {
             finish(g, parts, &mut summary, progress);
         }
         Ok(Some(summary))
@@ -1283,6 +1305,73 @@ mod tests {
             }
             Ok(())
         }
+    }
+
+    /// The ordering SAM 2 uses when objects are first prompted on different frames: each object
+    /// reports its entire span before the next. No weights or large allocations are needed.
+    #[derive(Default)]
+    struct SeparatePasses {
+        emitted: std::sync::atomic::AtomicUsize,
+        cancelled: std::sync::atomic::AtomicBool,
+    }
+
+    impl effectcraft_segment::MaskModel for SeparatePasses {
+        fn info(&self) -> &'static effectcraft_segment::ModelInfo {
+            &effectcraft_segment::SAM2_TINY
+        }
+        fn segment(&self, _: &[[f32; 3]], _: usize, _: usize, _: &effectcraft_segment::Prompt) -> effectcraft_segment::Result<Vec<f32>> {
+            Err("no weights".into())
+        }
+        fn tracker(&self) -> Option<&dyn effectcraft_segment::ObjectTracker> {
+            Some(self)
+        }
+    }
+
+    impl effectcraft_segment::ObjectTracker for SeparatePasses {
+        fn track(
+            &self,
+            req: &effectcraft_segment::TrackRequest,
+            frames: &mut dyn FnMut(i64) -> Option<Arc<ClipFrame>>,
+            cancel: &dyn Fn() -> bool,
+            out: &mut dyn FnMut(usize, i64, effectcraft_segment::TrackedFrame),
+        ) -> effectcraft_segment::Result<()> {
+            use std::sync::atomic::Ordering::Relaxed;
+            assert_ne!(req.objects[0][0].0, req.objects[1][0].0);
+            for o in 0..req.objects.len() {
+                for g in req.first..req.first + req.count as i64 {
+                    if cancel() {
+                        self.cancelled.store(true, Relaxed);
+                        return Err("tracking cancelled".into());
+                    }
+                    let img = frames(g).ok_or("no frame")?;
+                    self.emitted.fetch_add(1, Relaxed);
+                    out(o, g, effectcraft_segment::TrackedFrame { prob: vec![0.5; img.w * img.h], w: img.w, h: img.h, confidence: 0.9, occluded: false });
+                }
+            }
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn separate_object_passes_cancel_at_the_pending_mask_budget() {
+        use std::sync::atomic::Ordering::Relaxed;
+        let mut d = RotoData::default();
+        for object in 0..2 {
+            d.add(Stroke { kind: StrokeKind::Fg, frame: i64::from(object), radius: 3.0, points: vec![[35.0, 40.0]], object }, 8, [0, 24]);
+        }
+        let mut params = params_with(&d);
+        params.values.insert(INPUT_KEY.into(), Value::Str("pending-budget-regression".into()));
+        let mut chain = Chain::new(&params, [100.0, 80.0], 25.0, 1.0);
+        let fake = Arc::new(SeparatePasses::default());
+        chain.model = Some(fake.clone());
+        let mut get = |f: i64| Some(Arc::new(frame(f as f64 / 25.0)));
+        let mut completed = 0;
+        // Each map takes 32,000 bytes; two incomplete frames exceed this small test budget.
+        let error = chain.track_with_pending_limit(&mut get, &|| false, &mut |n| completed = n, 64_000).unwrap_err();
+        assert!(error.contains("pending object masks") && error.contains("memory budget"), "{error}");
+        assert!(fake.cancelled.load(Relaxed), "the model must see cancellation before allocating the rest of the clip");
+        assert_eq!(fake.emitted.load(Relaxed), 2);
+        assert_eq!(completed, 0, "partial objects are not complete tracked frames");
     }
 
     #[test]
