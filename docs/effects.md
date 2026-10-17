@@ -259,7 +259,7 @@ Effects are addressed by id (`ec.<category>.<name>`) or display name in commands
 | Object Matte | `ec.matte.objectmatte` | 13 |  | 32 | Implemented |
 | Refine Hard Matte | `ec.matte.refinehard` | 16 | GPU | 32 | Implemented |
 | Refine Soft Matte | `ec.matte.refinesoft` | 18 | GPU | 32 | Implemented |
-| Roto Brush & Refine Edge | `ec.matte.rotobrush` | 24 |  | 32 | Implemented |
+| Roto Brush & Refine Edge | `ec.matte.rotobrush` | 25 |  | 32 | Implemented |
 | Simple Choker | `ec.matte.simplechoker` | 2 | GPU | 32 | Implemented |
 
 ## Noise & Grain

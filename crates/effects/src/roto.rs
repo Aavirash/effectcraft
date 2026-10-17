@@ -80,6 +80,7 @@ pub fn specs() -> Vec<EffectSpec> {
             p("rotoBrushMatte/contrast", "Contrast", num(0.0), slider(0.0, 100.0, 0.0, 100.0, 0)),
             p("rotoBrushMatte/shiftEdge", "Shift Edge", num(0.0), slider(-100.0, 100.0, -100.0, 100.0, 0)),
             p("rotoBrushMatte/reduceChatter", "Reduce Chatter", num(0.0), slider(0.0, 100.0, 0.0, 100.0, 0)),
+            p("rotoBrushMatte/object", "Show Object", num(0.0), slider(0.0, 32.0, 0.0, 32.0, 0)),
             p("refineEdgeMatte/smooth", "Smooth", num(1.0), slider(0.0, 100.0, 0.0, 10.0, 1)),
             p("refineEdgeMatte/feather", "Feather", num(0.0), slider(0.0, 100.0, 0.0, 20.0, 1)),
             p("refineEdgeMatte/contrast", "Contrast", num(0.0), slider(0.0, 100.0, 0.0, 100.0, 0)),
@@ -320,6 +321,11 @@ fn tracked_key(key: u64) -> u64 {
     key.rotate_left(17) ^ TRACK_SALT
 }
 
+/// Where one object's matte of a tracked frame lives (kept only when the instance has several objects).
+fn object_key(key: u64, object: u32) -> u64 {
+    tracked_key(key).wrapping_add(0x9e37_79b9_7f4a_7c15u64.wrapping_mul(u64::from(object) + 1))
+}
+
 /// How far to trust a frame the tracker followed.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FrameTrust {
@@ -398,6 +404,8 @@ pub struct Chain {
     pub model: Option<Arc<dyn MaskModel>>,
     /// The saved tracking, while it applies (see [`TrackCache`]).
     pub(crate) saved: Option<SavedTracking>,
+    /// Show Object: the matte of this object only (its id plus one; 0 shows all of them together).
+    pub show_object: u32,
 }
 
 impl Chain {
@@ -405,12 +413,56 @@ impl Chain {
         let data = data(params);
         let keys = data.chain_keys(seed(params, layer_size, fps));
         let saved = saved_for(params, &data, layer_size, fps);
-        Chain { refine_radius: data.refine_radius(), data, keys, opts: seg_opts(params, scale), model: model_for(params), saved }
+        let show_object = f(params, "rotoBrushMatte/object").round().clamp(0.0, 32.0) as u32;
+        Chain { refine_radius: data.refine_radius(), data, keys, opts: seg_opts(params, scale), model: model_for(params), saved, show_object }
     }
 
     /// Frame `f`'s segmentation at `scale` from the saved tracking or the caches; computes nothing.
     pub fn cached_seg(&self, f: i64, scale: f64) -> Option<Arc<FrameSeg>> {
         self.saved_seg(f, scale).or_else(|| self.keys.get(&f).and_then(|k| cached(*k, scale)))
+    }
+
+    /// Object `o`'s matte of frame `f` at this chain's scale (saved tracking, else this session's), when the instance
+    /// has several objects and the tracker followed them there; computes nothing.
+    pub fn object_seg(&self, f: i64, o: u32) -> Option<Arc<FrameSeg>> {
+        let sc = self.opts.scale;
+        let k = *self.keys.get(&f)?;
+        let ok = object_key(k, o);
+        if let Some(s) = cached(ok, sc) {
+            return Some(s);
+        }
+        let full = match cached(ok, 1.0) {
+            Some(s) => s,
+            None => {
+                let t = self.saved.as_ref()?;
+                let s = Arc::new(decode_object(&t.cache, f, o)?);
+                store(ok, 1.0, s.clone());
+                s
+            }
+        };
+        if sc == 1.0 {
+            return Some(full);
+        }
+        let s = Arc::new(downscale(&full, sc));
+        store(ok, sc, s.clone());
+        Some(s)
+    }
+
+    /// What Show Object asks for at frame `f`: `None` shows the whole matte (all objects, a single object, or a frame
+    /// the tracker did not follow); an object the instance does not have shows nothing.
+    fn shown_object(&self, f: i64) -> Option<Arc<FrameSeg>> {
+        let o = self.show_object.checked_sub(1)?;
+        let objects = self.data.objects();
+        if objects.len() < 2 {
+            return None;
+        }
+        if !objects.contains(&o) {
+            let sc = self.opts.scale;
+            let [w, h] =
+                self.saved.as_ref().map(|t| t.cache.size).or_else(|| self.keys.get(&f).and_then(|k| cached(tracked_key(*k), sc)).map(|s| [s.w, s.h]))?;
+            return Some(Arc::new(FrameSeg::empty(w, h)));
+        }
+        self.object_seg(f, o)
     }
 
     /// The tracker's trust in frame `f`: from the saved tracking, else from this session's tracking.
@@ -455,6 +507,10 @@ impl Chain {
     pub fn ensure(&self, f: i64, frame: &mut dyn FnMut(i64) -> Option<Arc<Image>>, cancel: &dyn Fn() -> bool) -> Option<Arc<FrameSeg>> {
         let sc = self.opts.scale;
         let lookup = |g: i64| -> Option<Arc<FrameSeg>> {
+            // Show Object: one object's matte, where the tracker followed the objects.
+            if let Some(s) = self.shown_object(g) {
+                return Some(s);
+            }
             // A frame the tracker followed wins over the classic engine's: the saved tracking, else
             // this session's.
             if let Some(s) = self.saved_seg(g, sc) {
@@ -604,13 +660,13 @@ impl Chain {
         let mut pending: BTreeMap<i64, Vec<Option<effectcraft_segment::TrackedFrame>>> = BTreeMap::new();
         let finish = |g: i64, parts: Vec<Option<effectcraft_segment::TrackedFrame>>, summary: &mut TrackSummary, progress: &mut dyn FnMut(usize)| {
             let (Some(key), Some(img)) = (self.keys.get(&g).copied(), (frame.borrow_mut())(g)) else { return };
-            let mut segs = vec![];
+            let mut segs: Vec<(u32, effectcraft_track::roto::FrameSeg)> = vec![];
             let (mut confidence, mut present) = (f32::INFINITY, false);
             let mut worst = f32::INFINITY;
             for (obj, t) in objects.iter().zip(parts) {
                 let Some(t) = t else { continue };
                 let strokes = self.data.strokes_of(g, *obj);
-                segs.push(rb::segment_tracked(&img, &strokes, t.prob, t.occluded, &self.opts, self.refine_radius));
+                segs.push((*obj, rb::segment_tracked(&img, &strokes, t.prob, t.occluded, &self.opts, self.refine_radius)));
                 worst = worst.min(t.confidence);
                 if !t.occluded {
                     present = true;
@@ -622,7 +678,16 @@ impl Chain {
             }
             // a frame is occluded when every object is absent; otherwise the doubtful object sets the confidence
             let (occluded, confidence) = (!present, if present { confidence } else { worst });
-            store(tracked_key(key), self.opts.scale, Arc::new(effectcraft_track::roto::FrameSeg::union(segs)));
+            // with several objects each keeps its own matte too (Show Object, the per-object overlay)
+            let several = objects.len() > 1;
+            let mut parts = Vec::with_capacity(segs.len());
+            for (obj, seg) in segs {
+                if several {
+                    store(object_key(key, obj), self.opts.scale, Arc::new(seg.clone()));
+                }
+                parts.push(seg);
+            }
+            store(tracked_key(key), self.opts.scale, Arc::new(effectcraft_track::roto::FrameSeg::union(parts)));
             trust_cache().lock().unwrap_or_else(|e| e.into_inner()).insert(tracked_key(key), FrameTrust { confidence, occluded });
             summary.frames += 1;
             summary.occluded += usize::from(occluded);
@@ -656,13 +721,26 @@ impl Chain {
     }
 }
 
+/// Each object's matte of layer frame `f` where the tracker followed several objects (full resolution; computes
+/// nothing). Show Object limits it to the one chosen. Empty with fewer than two objects.
+pub fn object_mattes(params: &Params, layer_size: [f64; 2], fps: f64, f: i64) -> Vec<(u32, Arc<FrameSeg>)> {
+    let mut chain = Chain::new(params, layer_size, fps, 1.0);
+    let objects = chain.data.objects();
+    if objects.len() < 2 || !chain.data.in_span(f) {
+        return vec![];
+    }
+    let shown = chain.show_object.checked_sub(1);
+    chain.show_object = 0;
+    objects.into_iter().filter(|o| shown.is_none_or(|s| s == *o)).filter_map(|o| chain.object_seg(f, o).map(|s| (o, s))).collect()
+}
+
 /// Nearest-neighbour resampling of a segmentation to another scale.
 pub fn downscale(s: &FrameSeg, scale: f64) -> FrameSeg {
     let (w, h) = (((s.w as f64) * scale).round().max(1.0) as usize, ((s.h as f64) * scale).round().max(1.0) as usize);
     resample(s, w, h)
 }
 
-pub(crate) fn resample(s: &FrameSeg, w: usize, h: usize) -> FrameSeg {
+pub fn resample(s: &FrameSeg, w: usize, h: usize) -> FrameSeg {
     if s.w == w && s.h == h {
         return s.clone();
     }
@@ -741,6 +819,9 @@ pub fn frozen_key(params: &Params, layer_size: [f64; 2], fps: f64) -> String {
         fnv(&mut h, &k.to_le_bytes());
     }
     fnv(&mut h, format!("{:?}", matte_params(params)).as_bytes());
+    if ch.show_object != 0 {
+        fnv(&mut h, &ch.show_object.to_le_bytes());
+    }
     format!("{h:016x}")
 }
 
@@ -788,6 +869,17 @@ pub struct TrackCache {
     /// The mattes' width and height (the layer's size).
     pub size: [usize; 2],
     pub frames: BTreeMap<i64, TrackFrame>,
+    /// With several objects: each one's matte of every tracked frame (object id, then frame).
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub objects: BTreeMap<u32, BTreeMap<i64, ObjectFrame>>,
+}
+
+/// One object's matte and Refine Edge band of a tracked frame (RLE, base64).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ObjectFrame {
+    pub m: String,
+    pub r: String,
 }
 
 /// One tracked frame: its matte and Refine Edge band (RLE, base64), its colour models and the
@@ -876,6 +968,16 @@ fn decode_tracked(cache: &TrackCache, f: i64) -> Option<FrameSeg> {
     (matte.len() == n && refine.len() == n).then(|| FrameSeg { w, h, matte, refine, fg: fr.fg.clone(), bg: fr.bg.clone() })
 }
 
+/// Object `o`'s matte of a tracked frame of saved tracking (full resolution).
+fn decode_object(cache: &TrackCache, f: i64, o: u32) -> Option<FrameSeg> {
+    let fr = cache.objects.get(&o)?.get(&f)?;
+    let [w, h] = cache.size;
+    let n = w.checked_mul(h)?;
+    let matte = rle::decode(&fr.m)?;
+    let refine = rle::decode(&fr.r)?;
+    (matte.len() == n && refine.len() == n).then(|| FrameSeg { w, h, matte, refine, ..Default::default() })
+}
+
 /// The tracking a chain has just made, to save with its instance: every frame of its span that the
 /// tracker followed, at full resolution, with its trust. `None` when it followed none.
 pub fn tracks_of(ch: &Chain) -> Option<TrackCache> {
@@ -890,7 +992,21 @@ pub fn tracks_of(ch: &Chain) -> Option<TrackCache> {
             TrackFrame { m: rle::encode(&seg.matte), r: rle::encode(&seg.refine), fg: seg.fg.clone(), bg: seg.bg.clone(), c: t.confidence, o: t.occluded },
         );
     }
-    let cache = TrackCache { key: tracks_key(&ch.keys), model: model.to_string(), size: size?, frames };
+    let mut objects: BTreeMap<u32, BTreeMap<i64, ObjectFrame>> = BTreeMap::new();
+    let ids = ch.data.objects();
+    if ids.len() > 1 {
+        for (f, k) in &ch.keys {
+            if !frames.contains_key(f) {
+                continue;
+            }
+            for o in &ids {
+                if let Some(seg) = cached(object_key(*k, *o), 1.0) {
+                    objects.entry(*o).or_default().insert(*f, ObjectFrame { m: rle::encode(&seg.matte), r: rle::encode(&seg.refine) });
+                }
+            }
+        }
+    }
+    let cache = TrackCache { key: tracks_key(&ch.keys), model: model.to_string(), size: size?, frames, objects };
     (!cache.frames.is_empty()).then_some(cache)
 }
 
@@ -1209,6 +1325,34 @@ mod tests {
         assert!(at(46, 40) != 0, "the moving disk (frame 3 centre x = 46)");
         assert!(at(15, 15) != 0, "the fixed square");
         assert_eq!(at(60, 70), 0, "nothing elsewhere");
+
+        // each object keeps its own matte
+        let (disk, square) = (chain.object_seg(3, 0).expect("object 0"), chain.object_seg(3, 1).expect("object 1"));
+        assert!(disk.matte[40 * 100 + 46] != 0 && disk.matte[15 * 100 + 15] == 0);
+        assert!(square.matte[15 * 100 + 15] != 0 && square.matte[40 * 100 + 46] == 0);
+        // Show Object picks one (its id plus one); an object the instance does not have shows nothing; 0 shows all
+        let mut shown = |c: &Chain| c.ensure(3, &mut get, &|| false).expect("frame 3");
+        chain.show_object = 2;
+        let one = shown(&chain);
+        assert!(one.matte[15 * 100 + 15] != 0 && one.matte[40 * 100 + 46] == 0, "only the square");
+        chain.show_object = 1;
+        let zero = shown(&chain);
+        assert!(zero.matte[40 * 100 + 46] != 0 && zero.matte[15 * 100 + 15] == 0, "only the disk");
+        chain.show_object = 7;
+        assert_eq!(shown(&chain).area(), 0, "no such object");
+        chain.show_object = 0;
+        assert!(shown(&chain).matte[15 * 100 + 15] != 0, "all together");
+
+        // the objects are saved with the tracking and come back from the project file
+        let saved = tracks_of(&chain).expect("tracking to save");
+        assert_eq!(saved.objects.keys().copied().collect::<Vec<_>>(), vec![0, 1]);
+        assert_eq!(saved.objects.get(&1).map(|f| f.len()), Some(9));
+        assert_eq!(TrackCache::from_json(&saved.to_json()), Some(saved.clone()));
+        // a tracking saved before objects existed has none
+        let old = TrackCache { objects: Default::default(), ..saved.clone() };
+        assert!(!old.to_json().contains("objects"));
+        let rt = decode_object(&saved, 3, 1).expect("decoded");
+        assert!(rt.matte[15 * 100 + 15] != 0 && rt.matte[40 * 100 + 46] == 0);
     }
 
     /// Instances saved before the propagation controls got their own twirl-down (and motion
