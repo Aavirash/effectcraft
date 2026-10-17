@@ -33,12 +33,37 @@ fn load() -> Option<(Weights, HashMap<String, Tensor>)> {
     }
     let w = Weights::open(&wf).unwrap();
     let r = candle_core::safetensors::load(&rf, &Device::Cpu).unwrap();
+    note_size(&w);
     Some((w, r))
 }
 
 fn max_abs(a: &Tensor, b: &Tensor) -> f32 {
     assert_eq!(a.dims(), b.dims(), "shape mismatch");
     (a - b).unwrap().abs().unwrap().flatten_all().unwrap().max(0).unwrap().to_scalar::<f32>().unwrap()
+}
+
+/// The largest magnitude in a tensor.
+fn peak(t: &Tensor) -> f32 {
+    t.abs().unwrap().flatten_all().unwrap().max(0).unwrap().to_scalar::<f32>().unwrap()
+}
+
+/// Set when the checkpoint is Base+ or Large (24 and 48 blocks): f32 rounding error is relative and accumulates with
+/// depth, and these backbones carry much larger activations (Large peaks at 140). Tiny and Small keep the strict bounds.
+static DEEP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn note_size(w: &Weights) {
+    let size = effectcraft_sam2::Size::detect(w).unwrap();
+    DEEP.store(matches!(size, effectcraft_sam2::Size::BasePlus | effectcraft_sam2::Size::Large), std::sync::atomic::Ordering::Relaxed);
+}
+
+/// `base`, or for the deep backbones the larger of `base` and 5e-4 of the activations' peak.
+fn tol(base: f32, want: &Tensor) -> f32 {
+    if DEEP.load(std::sync::atomic::Ordering::Relaxed) { base.max(5e-4 * peak(want)) } else { base }
+}
+
+/// `base`, ×4 for the deep backbones.
+fn loose(base: f32) -> f32 {
+    if DEEP.load(std::sync::atomic::Ordering::Relaxed) { base * 4.0 } else { base }
 }
 
 /// f32 activations differ from PyTorch by accumulation order only; the Hiera blocks stay well
@@ -48,25 +73,26 @@ const HIERA_TOL: f32 = 1e-4;
 #[test]
 fn hiera_matches_pytorch_block_by_block() {
     let Some((w, r)) = load() else { return };
-    let hiera = Hiera::load(&w, &HieraConfig::tiny()).unwrap();
+    let hiera = Hiera::load(&w, &HieraConfig::for_size(effectcraft_sam2::Size::detect(&w).unwrap())).unwrap();
     let pixels = r.get("input.pixel_values").unwrap();
     let (emb, blocks) = hiera.forward_all(pixels).unwrap();
     let e = max_abs(&emb, r.get("vision_encoder.backbone.patch_embed.0").unwrap());
     eprintln!("patch_embed max abs error {e:e}");
     assert!(e < 1e-4, "patch embed error {e}");
-    assert_eq!(blocks.len(), 12);
+    assert_eq!(blocks.len(), HieraConfig::for_size(effectcraft_sam2::Size::detect(&w).unwrap()).blocks.iter().sum::<usize>());
     for (i, b) in blocks.iter().enumerate() {
         let want = r.get(&format!("vision_encoder.backbone.blocks.{i}.0")).unwrap();
         let e = max_abs(b, want);
         eprintln!("block {i}: max abs error {e:e}");
-        assert!(e < HIERA_TOL, "block {i} error {e} (tolerance {HIERA_TOL})");
+        let t = tol(HIERA_TOL, want);
+        assert!(e < t, "block {i} error {e} (tolerance {t}, peak {})", peak(want));
     }
 }
 
 #[test]
 fn hiera_is_deterministic_and_rejects_bad_sizes() {
     let Some((w, r)) = load() else { return };
-    let hiera = Hiera::load(&w, &HieraConfig::tiny()).unwrap();
+    let hiera = Hiera::load(&w, &HieraConfig::for_size(effectcraft_sam2::Size::detect(&w).unwrap())).unwrap();
     let pixels = r.get("input.pixel_values").unwrap();
     let a = hiera.forward(pixels).unwrap();
     let b = hiera.forward(pixels).unwrap();
@@ -85,7 +111,7 @@ const NECK_TOL: f32 = 1e-4;
 #[test]
 fn neck_and_vision_encoder_match_pytorch() {
     let Some((w, r)) = load() else { return };
-    let enc = effectcraft_sam2::neck::VisionEncoder::load_tiny(&w).unwrap();
+    let enc = effectcraft_sam2::neck::VisionEncoder::load(&w).unwrap();
     let pixels = r.get("input.pixel_values").unwrap();
     let stages = enc.hiera.forward(pixels).unwrap();
     let out = enc.neck.forward(&stages).unwrap();
@@ -93,7 +119,8 @@ fn neck_and_vision_encoder_match_pytorch() {
     for (i, f) in out.features.iter().enumerate() {
         let e = max_abs(f, r.get(&format!("vision_encoder.neck.{i}")).unwrap());
         eprintln!("neck feature {i}: max abs error {e:e}");
-        assert!(e < NECK_TOL, "neck feature {i} error {e}");
+        let want = r.get(&format!("vision_encoder.neck.{i}")).unwrap();
+        assert!(e < tol(NECK_TOL, want), "neck feature {i} error {e} (peak {})", peak(want));
     }
     for (i, p) in out.positions.iter().enumerate() {
         let e = max_abs(p, r.get(&format!("vision_encoder.neck.{}", i + 4)).unwrap());
@@ -105,7 +132,7 @@ fn neck_and_vision_encoder_match_pytorch() {
     let dims: Vec<usize> = feats.features.iter().map(|f| f.dim(2).unwrap()).collect();
     assert_eq!(dims, vec![256, 128, 64]);
     let e = max_abs(feats.features.first().unwrap(), r.get("vision_encoder.neck.3").unwrap());
-    assert!(e < NECK_TOL);
+    assert!(e < tol(NECK_TOL, r.get("vision_encoder.neck.3").unwrap()));
 }
 
 /// Click-prompted single image: prompt embeddings and decoder outputs against `Sam2Model`.
@@ -133,7 +160,7 @@ fn prompt_encoder_and_decoder_match_pytorch() {
     let want_masks = r.get("mask_decoder.0").unwrap().squeeze(0).unwrap();
     let e = max_abs(&out.masks, &want_masks);
     eprintln!("masks: max abs error {e:e} (logit range {:?})", want_masks.flatten_all().unwrap().max(0).unwrap().to_scalar::<f32>());
-    assert!(e < DECODER_TOL, "mask logits error {e}");
+    assert!(e < loose(DECODER_TOL), "mask logits error {e}");
     let e = max_abs(&out.iou, &r.get("mask_decoder.1").unwrap().squeeze(0).unwrap());
     eprintln!("iou: max abs error {e:e}");
     assert!(e < 1e-4, "iou error {e}");
@@ -141,7 +168,7 @@ fn prompt_encoder_and_decoder_match_pytorch() {
     eprintln!("object score: max abs error {e:e}");
     assert!(e < 1e-4, "object score error {e}");
     let e = max_abs(&out.sam_tokens, &r.get("mask_decoder.2").unwrap().squeeze(0).unwrap());
-    assert!(e < 1e-4, "sam token error {e}");
+    assert!(e < loose(1e-4), "sam token error {e}");
 }
 
 fn video_fixture_file() -> PathBuf {
@@ -155,7 +182,9 @@ fn load_video() -> Option<(Weights, HashMap<String, Tensor>)> {
         eprintln!("skipped: SAM 2 weights or video reference tensors not found ({} / {})", wf.display(), rf.display());
         return None;
     }
-    Some((Weights::open(&wf).unwrap(), candle_core::safetensors::load(&rf, &Device::Cpu).unwrap()))
+    let w = Weights::open(&wf).unwrap();
+    note_size(&w);
+    Some((w, candle_core::safetensors::load(&rf, &Device::Cpu).unwrap()))
 }
 
 /// Measured max 3.5e-6 (memory features), 2.6e-5 (memory attention), 2026-10-15.
@@ -642,13 +671,13 @@ fn gpu_encoder_matches_the_cpu_path_and_pytorch() {
     let low_cpu = cpu.features.features.get(2).unwrap();
     let e = max_abs(&got.low, low_cpu);
     eprintln!("low level vs CPU: max abs error {e:e}");
-    assert!(e < GPU_TOL, "low level error {e}");
+    assert!(e < tol(GPU_TOL, low_cpu), "low level error {e} (peak {})", peak(low_cpu));
     let e = max_abs(&got.low, r.get("vision_encoder.neck.1").unwrap());
     eprintln!("low level vs PyTorch: max abs error {e:e}");
-    assert!(e < GPU_TOL, "low level vs PyTorch error {e}");
+    assert!(e < tol(GPU_TOL, low_cpu), "low level vs PyTorch error {e}");
     let (e0, e1) = (max_abs(&got.high.0, &cpu.high.0), max_abs(&got.high.1, &cpu.high.1));
     eprintln!("skip features vs CPU: {e0:e} / {e1:e}");
-    assert!(e0 < GPU_TOL && e1 < GPU_TOL, "skip feature errors {e0} / {e1}");
+    assert!(e0 < tol(GPU_TOL, &cpu.high.0) && e1 < tol(GPU_TOL, &cpu.high.1), "skip feature errors {e0} / {e1}");
 }
 
 /// The GPU memory attention against PyTorch (the fixture's frame: one memory frame and four pointer tokens).

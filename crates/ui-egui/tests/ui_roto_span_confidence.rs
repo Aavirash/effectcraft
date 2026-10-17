@@ -49,7 +49,9 @@ impl ObjectTracker for Scripted {
         for g in req.first..req.first + req.count as i64 {
             let img = frame(g).ok_or("no frame")?;
             let (confidence, occluded) = script(g);
-            let prob = (0..img.w * img.h).map(|i| if !occluded && (i % img.w).abs_diff(img.w / 2) < img.w / 4 && (i / img.w).abs_diff(img.h / 2) < img.h / 4 { 1.0 } else { 0.0 }).collect();
+            let prob = (0..img.w * img.h)
+                .map(|i| if !occluded && (i % img.w).abs_diff(img.w / 2) < img.w / 4 && (i / img.w).abs_diff(img.h / 2) < img.h / 4 { 1.0 } else { 0.0 })
+                .collect();
             out(0, g, TrackedFrame { prob, w: img.w, h: img.h, confidence, occluded });
         }
         Ok(())

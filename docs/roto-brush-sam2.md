@@ -29,6 +29,24 @@ strokes and span they came from are unchanged. Changing a stroke or the span mak
 Choosing another model, or the classic engine, leaves them in place and `roto.status` says so; a classic Propagate
 replaces them with classic mattes. Object Matte saves nothing.
 
+## Sizes
+Four checkpoints are in the registry (Settings ▸ Roto Brush); the size is detected from the file, and each is
+pinned to a Hugging Face commit with its SHA-256. All run the same tracker; a bigger backbone costs time and memory.
+
+| Model | Download | GPU encode (RX 7900 GRE) | Agreement with PyTorch |
+|---|---|---|---|
+| SAM 2.1 Tiny (`sam2.1-hiera-tiny`) | 155.9 MB | 0.24 s | encoder 6.8e-6 |
+| SAM 2.1 Small (`sam2.1-hiera-small`) | 184.3 MB | 0.20 s | encoder 1.0e-5 |
+| SAM 2.1 Base+ (`sam2.1-hiera-base-plus`) | 323.5 MB | 0.37 s | encoder 2.3e-5 |
+| SAM 2.1 Large (`sam2.1-hiera-large`) | 897.9 MB | 0.72 s | encoder 5.2e-4 |
+
+Every size was checked stage by stage against PyTorch (patch embedding, each Hiera block, neck, prompt encoder,
+decoder, memory encoder, memory attention) and on a whole clip forward and backward, on the CPU and the GPU: the video
+logit error is at most 0.005 with the same masks. Large carries much larger activations (peaks near 300 in the third
+stage), so its f32 rounding error is larger in absolute terms; its tests use a bound relative to the peak. Large needs
+the GPU to run per block (the encode submits once per block so intermediates are freed); a GPU error of any kind falls
+back to the CPU.
+
 ## Corrections re-track only what they change
 A correction stroke changes the keys of the frames from it on (in both directions from the base), so Propagate tracks
 only those again: the window starts at the nearest prompted frame at or before the first frame it needs (the corrected

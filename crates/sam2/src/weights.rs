@@ -46,6 +46,15 @@ impl Weights {
         Ok(Weights { map: out })
     }
 
+    pub fn contains(&self, name: &str) -> bool {
+        self.map.contains_key(name)
+    }
+
+    /// The shape of a tensor, if the checkpoint has it.
+    pub fn shape(&self, name: &str) -> Option<Vec<usize>> {
+        self.map.get(name).map(|t| t.dims().to_vec())
+    }
+
     pub fn len(&self) -> usize {
         self.map.len()
     }

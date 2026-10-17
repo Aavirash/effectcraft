@@ -53,6 +53,7 @@ fn fingerprint(rgb: &[[f32; 3]], w: usize, h: usize) -> u64 {
 /// SAM 2 for single frames.
 pub struct Sam2Mask {
     model: Arc<VideoModel>,
+    info: &'static ModelInfo,
     last: Mutex<Option<(u64, Arc<Encoded>)>>,
     used: Mutex<std::time::Instant>,
     pub(crate) peak: std::sync::atomic::AtomicU64,
@@ -60,7 +61,12 @@ pub struct Sam2Mask {
 
 impl Sam2Mask {
     pub fn new(model: Arc<VideoModel>) -> Sam2Mask {
-        Sam2Mask { model, last: Mutex::new(None), used: Mutex::new(std::time::Instant::now()), peak: std::sync::atomic::AtomicU64::new(0) }
+        Sam2Mask::with_info(model, &SAM2_TINY)
+    }
+
+    /// A model of a given registry entry (its size).
+    pub fn with_info(model: Arc<VideoModel>, info: &'static ModelInfo) -> Sam2Mask {
+        Sam2Mask { model, info, last: Mutex::new(None), used: Mutex::new(std::time::Instant::now()), peak: std::sync::atomic::AtomicU64::new(0) }
     }
 
     /// Note that the model is being used (for [`MaskModel::idle_secs`]).
@@ -106,7 +112,7 @@ impl Sam2Mask {
 
 impl MaskModel for Sam2Mask {
     fn info(&self) -> &'static ModelInfo {
-        &SAM2_TINY
+        self.info
     }
 
     fn segment(&self, rgb: &[[f32; 3]], w: usize, h: usize, prompt: &effectcraft_segment::Prompt) -> effectcraft_segment::Result<Vec<f32>> {
@@ -134,13 +140,16 @@ impl MaskModel for Sam2Mask {
 /// Verify the installed file against the registry and build the model.
 pub fn load(bytes: &[u8]) -> std::result::Result<Arc<Sam2Mask>, String> {
     let got = effectcraft_segment::sha256::hex(bytes);
-    if got != SAM2_TINY.sha256 {
-        return Err(format!("{}: the file does not match (SHA-256 {got}, expected {})", SAM2_TINY.name, SAM2_TINY.sha256));
-    }
+    let Some(info) = SIZES.iter().find(|m| m.sha256 == got) else {
+        return Err(format!("SAM 2.1: the file does not match any published size (SHA-256 {got})"));
+    };
     let w = crate::weights::Weights::from_bytes(bytes).map_err(|e| e.to_string())?;
     let model = VideoModel::load_auto(&w).map_err(|e| e.to_string())?;
-    Ok(Arc::new(Sam2Mask::new(Arc::new(model))))
+    Ok(Arc::new(Sam2Mask::with_info(Arc::new(model), info)))
 }
+
+/// The registry entries this crate loads.
+pub const SIZES: [&ModelInfo; 4] = [&SAM2_TINY, &effectcraft_segment::SAM2_SMALL, &effectcraft_segment::SAM2_BASE_PLUS, &effectcraft_segment::SAM2_LARGE];
 
 #[cfg(test)]
 mod tests {

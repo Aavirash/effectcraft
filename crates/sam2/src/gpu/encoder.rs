@@ -244,6 +244,8 @@ impl GpuEncoder {
         for (i, b) in self.blocks.iter().enumerate() {
             let (nx, nh, nw) = self.block(b, &x, h, w)?;
             (x, h, w) = (nx, nh, nw);
+            // submit per block so the GPU can free the previous block's intermediates (Large would otherwise run out of memory)
+            g.flush()?;
             if self.stage_ends.contains(&i) {
                 stages.push((x.clone(), h, w, b.plan.dim_out));
             }

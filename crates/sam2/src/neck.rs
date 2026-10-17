@@ -142,9 +142,11 @@ pub struct ImageFeatures {
 }
 
 impl VisionEncoder {
-    pub fn load_tiny(w: &Weights) -> Result<VisionEncoder> {
-        let cfg = HieraConfig::tiny();
-        Ok(VisionEncoder { hiera: std::sync::Arc::new(Hiera::load(w, &cfg)?), neck: Neck::load(w, &[768, 384, 192, 96], 256, &[2, 3])?, levels: 3 })
+    /// The encoder of whichever size the checkpoint is.
+    pub fn load(w: &Weights) -> Result<VisionEncoder> {
+        let cfg = HieraConfig::for_size(crate::Size::detect(w)?);
+        let channels: Vec<usize> = cfg.embed_dims.iter().rev().copied().collect();
+        Ok(VisionEncoder { hiera: std::sync::Arc::new(Hiera::load(w, &cfg)?), neck: Neck::load(w, &channels, 256, &[2, 3])?, levels: 3 })
     }
 
     pub fn forward(&self, pixels: &Tensor) -> Result<ImageFeatures> {

@@ -185,6 +185,54 @@ pub const SAM2_TINY: ModelInfo = ModelInfo {
     sha256: "48c14467e5cf9e51870511feb72c89688e82dd74523142c0538b663e193ac2a7",
 };
 
+/// SAM 2.1 Small: the Small checkpoint, pinned to a commit like [`SAM2_TINY`].
+pub const SAM2_SMALL: ModelInfo = ModelInfo {
+    id: "sam2.1-hiera-small",
+    task: Task::Mask,
+    name: "SAM 2.1 Small",
+    description: "Meta's Segment Anything Model 2 (Hiera-Small, 46M parameters). The same streaming-memory tracker as SAM 2.1 Tiny with a larger backbone: a little more accurate on thin parts and busy backgrounds, a little slower.",
+    authors: "Meta AI (Nikhila Ravi et al., SAM 2), Hugging Face transformers checkpoint",
+    licence: "Apache-2.0",
+    licence_url: "https://github.com/facebookresearch/sam2/blob/main/LICENSE",
+    homepage: "https://github.com/facebookresearch/sam2",
+    url: "https://huggingface.co/facebook/sam2.1-hiera-small/resolve/ee5bba1d82bb8749febdf90f45e84b687142ba03/model.safetensors",
+    file_name: "sam2.1-hiera-small.safetensors",
+    size: 184_305_280,
+    sha256: "0a4067b11ce1e23d5229203f11c718a823060d15a4b23fa2372a7d4b77cbbc60",
+};
+
+/// SAM 2.1 Base+: the Base+ checkpoint, pinned to a commit like [`SAM2_TINY`].
+pub const SAM2_BASE_PLUS: ModelInfo = ModelInfo {
+    id: "sam2.1-hiera-base-plus",
+    task: Task::Mask,
+    name: "SAM 2.1 Base+",
+    description: "Meta's Segment Anything Model 2 (Hiera-Base+, 81M parameters). The same streaming-memory tracker as SAM 2.1 Tiny with a larger backbone: better on difficult footage; wants a GPU for comfortable speed.",
+    authors: "Meta AI (Nikhila Ravi et al., SAM 2), Hugging Face transformers checkpoint",
+    licence: "Apache-2.0",
+    licence_url: "https://github.com/facebookresearch/sam2/blob/main/LICENSE",
+    homepage: "https://github.com/facebookresearch/sam2",
+    url: "https://huggingface.co/facebook/sam2.1-hiera-base-plus/resolve/b7320756a13354e7530a63935656d35b2f91a290/model.safetensors",
+    file_name: "sam2.1-hiera-base-plus.safetensors",
+    size: 323_476_296,
+    sha256: "2012733a0de5d03efd1bba550a2847c4551be9ef2e0d497c83074df66189f780",
+};
+
+/// SAM 2.1 Large: the Large checkpoint, pinned to a commit like [`SAM2_TINY`].
+pub const SAM2_LARGE: ModelInfo = ModelInfo {
+    id: "sam2.1-hiera-large",
+    task: Task::Mask,
+    name: "SAM 2.1 Large",
+    description: "Meta's Segment Anything Model 2 (Hiera-Large, 224M parameters). The same streaming-memory tracker as SAM 2.1 Tiny with a larger backbone: the most accurate; about 900 MB and meant for a GPU.",
+    authors: "Meta AI (Nikhila Ravi et al., SAM 2), Hugging Face transformers checkpoint",
+    licence: "Apache-2.0",
+    licence_url: "https://github.com/facebookresearch/sam2/blob/main/LICENSE",
+    homepage: "https://github.com/facebookresearch/sam2",
+    url: "https://huggingface.co/facebook/sam2.1-hiera-large/resolve/665f8e2ad61cf5f53d65644ff27c8ee525124610/model.safetensors",
+    file_name: "sam2.1-hiera-large.safetensors",
+    size: 897_897_416,
+    sha256: "dc407dce21301fd94abb395c5099b4f2c455fdc8a8f261ac3d0ea6d4cd197230",
+};
+
 pub const FACE_LANDMARKER: ModelInfo = ModelInfo {
     id: "mediapipe-face",
     task: Task::Face,
@@ -201,7 +249,7 @@ pub const FACE_LANDMARKER: ModelInfo = ModelInfo {
 };
 
 /// The trained models, besides the built-in classical engines.
-pub const MODELS: &[ModelInfo] = &[MOBILE_SAM, SAM2_TINY, FACE_LANDMARKER];
+pub const MODELS: &[ModelInfo] = &[MOBILE_SAM, SAM2_TINY, SAM2_SMALL, SAM2_BASE_PLUS, SAM2_LARGE, FACE_LANDMARKER];
 
 /// The id of the built-in classical engines (graph cut segmenter, shape-model face tracker): no
 /// weights, always available.
@@ -353,7 +401,10 @@ mod tests {
             assert!(m.url.starts_with("https://") && m.licence_url.starts_with("https://") && m.homepage.starts_with("https://"));
             assert!(!m.authors.is_empty() && notice(m).contains(m.authors));
         }
-        assert_eq!(models(Task::Mask).map(|m| m.id).collect::<Vec<_>>(), ["mobilesam", "sam2.1-hiera-tiny"]);
+        assert_eq!(
+            models(Task::Mask).map(|m| m.id).collect::<Vec<_>>(),
+            ["mobilesam", "sam2.1-hiera-tiny", "sam2.1-hiera-small", "sam2.1-hiera-base-plus", "sam2.1-hiera-large"]
+        );
         assert!(SAM2_TINY.url.contains("/resolve/") && SAM2_TINY.file_name.ends_with(".safetensors"), "pinned to a commit, not a branch");
         assert_eq!(models(Task::Face).map(|m| m.id).collect::<Vec<_>>(), ["mediapipe-face"]);
         assert!(load("mediapipe-face", b"nope").err().is_some_and(|e| e.contains("does not match")));

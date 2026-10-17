@@ -42,6 +42,45 @@ impl HieraConfig {
             pos_background: 7,
         }
     }
+
+    /// `facebook/sam2.1-hiera-small`: the same widths as Tiny with deeper third and fourth stages.
+    pub fn small() -> HieraConfig {
+        HieraConfig { blocks: vec![1, 2, 11, 2], global_blocks: vec![7, 10, 13], ..HieraConfig::tiny() }
+    }
+
+    /// `facebook/sam2.1-hiera-base-plus`.
+    pub fn base_plus() -> HieraConfig {
+        HieraConfig {
+            embed_dims: vec![112, 224, 448, 896],
+            blocks: vec![2, 3, 16, 3],
+            heads: vec![2, 4, 8, 16],
+            global_blocks: vec![12, 16, 20],
+            pos_background: 14,
+            ..HieraConfig::tiny()
+        }
+    }
+
+    /// `facebook/sam2.1-hiera-large`.
+    pub fn large() -> HieraConfig {
+        HieraConfig {
+            embed_dims: vec![144, 288, 576, 1152],
+            blocks: vec![2, 6, 36, 4],
+            heads: vec![2, 4, 8, 16],
+            windows: vec![8, 4, 16, 8],
+            global_blocks: vec![23, 33, 43],
+            ..HieraConfig::tiny()
+        }
+    }
+
+    /// The configuration of a released size.
+    pub fn for_size(size: crate::Size) -> HieraConfig {
+        match size {
+            crate::Size::Tiny => HieraConfig::tiny(),
+            crate::Size::Small => HieraConfig::small(),
+            crate::Size::BasePlus => HieraConfig::base_plus(),
+            crate::Size::Large => HieraConfig::large(),
+        }
+    }
 }
 
 fn at<T: Copy>(v: &[T], i: usize, what: &str) -> Result<T> {

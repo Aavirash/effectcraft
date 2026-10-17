@@ -32,7 +32,7 @@ impl ImageModel {
     pub fn load(w: &Weights) -> Result<ImageModel> {
         let prompt = PromptEncoder::load(w)?;
         Ok(ImageModel {
-            vision: VisionEncoder::load_tiny(w)?,
+            vision: VisionEncoder::load(w)?,
             decoder: MaskDecoder::load(w)?,
             no_memory: w.get("no_memory_embedding", &[1, 1, 256])?.reshape((1, 256, 1, 1))?,
             image_pos: prompt.image_positions()?,

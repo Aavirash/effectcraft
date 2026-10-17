@@ -147,11 +147,17 @@ impl Gpu {
     }
 
     pub fn upload(&self, data: &[f32]) -> Buf {
-        let buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        // `write_buffer` instead of a mapped-at-creation buffer: on a lost or out-of-memory device the latter panics inside wgpu,
+        // while this records the error for `take_error`.
+        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
-            contents: bytemuck::cast_slice(data),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            size: (data.len().max(1) as u64) * 4,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
+        if !data.is_empty() {
+            self.queue.write_buffer(&buffer, 0, bytemuck::cast_slice(data));
+        }
         Buf { buffer, len: data.len() }
     }
 

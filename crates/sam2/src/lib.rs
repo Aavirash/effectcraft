@@ -82,6 +82,19 @@ impl Size {
             Size::Large => "facebook/sam2.1-hiera-large",
         }
     }
+
+    /// The size a checkpoint is, from its tensors: the width of the patch embedding (96 for Tiny and Small, 112 for
+    /// Base+, 144 for Large) and the number of blocks (12 for Tiny, 16 for Small).
+    pub fn detect(w: &weights::Weights) -> Result<Size> {
+        let width = w.shape("vision_encoder.backbone.patch_embed.projection.weight").and_then(|s| s.first().copied());
+        Ok(match width {
+            Some(112) => Size::BasePlus,
+            Some(144) => Size::Large,
+            Some(96) if w.contains("vision_encoder.backbone.blocks.15.layer_norm1.weight") => Size::Small,
+            Some(96) => Size::Tiny,
+            _ => return Err(Error::Weights("this checkpoint is not a SAM 2.1 Hiera size (patch embedding width)".into())),
+        })
+    }
 }
 
 #[cfg(test)]
