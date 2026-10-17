@@ -40,6 +40,20 @@ pinned to a Hugging Face commit with its SHA-256. All run the same tracker; a bi
 | SAM 2.1 Base+ (`sam2.1-hiera-base-plus`) | 323.5 MB | 0.37 s | encoder 2.3e-5 |
 | SAM 2.1 Large (`sam2.1-hiera-large`) | 897.9 MB | 0.72 s | encoder 5.2e-4 |
 
+Settings marks the size that suits the computer: **Small** when a usable GPU is found (it encodes no slower than
+Tiny there and is more accurate), **Tiny** otherwise; Base+ and Large say so when they would be slow on a CPU. The list
+carries `recommended` and `hint` per model (`roto.models`).
+
+### Half-precision weights (optional)
+`EFFECTCRAFT_SAM2_F16=1` keeps the weight matrices on the GPU as half precision, halving their memory (Large: about
+900 MB to 450 MB). It is off by default: the video logit error against PyTorch grows from about 0.003 to 0.06 (Tiny)
+and 0.12 (Large) with the same masks, and the speed gain is under 10% (Large encode 0.72 s to 0.66 s).
+
+### What stays on the CPU
+The mask decoder takes about 110 ms of a tracked frame (attention layers 42 ms, the two upscaling convolutions 50 ms).
+Rewriting the upscaling convolutions as a matrix product and a pixel shuffle did not make them faster, and a GPU port
+would save under 0.1 s of a 0.7 s frame, so it stays on the CPU.
+
 Every size was checked stage by stage against PyTorch (patch embedding, each Hiera block, neck, prompt encoder,
 decoder, memory encoder, memory attention) and on a whole clip forward and backward, on the CPU and the GPU: the video
 logit error is at most 0.005 with the same masks. Large carries much larger activations (peaks near 300 in the third
