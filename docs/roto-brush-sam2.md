@@ -43,6 +43,14 @@ lies under it without cutting a hole in the others. Refine Edge strokes belong t
 no objects: all foreground strokes make one object, and background strokes apply to it as before. Saved projects are
 unchanged (strokes without an object are object 0, and nothing is written for object 0).
 
+**Seeing and choosing objects.** The Layer panel's boundary view outlines each object in its own colour (object 1 in the
+chosen boundary colour, the others from a palette), and the picker button carries the current object's colour. **Show
+Object** (Roto Brush Matte, a slider: 0 shows all objects together, N shows object N alone) limits the instance's matte to
+one object, so an effect after it can treat the pieces separately; an object the instance does not have shows nothing, and
+with one object, or on frames the classic engine made, the setting changes nothing. Each object's matte is kept next to
+the united one, in the session and in the saved tracking (`tracked` stores them only when there are several objects), so
+Show Object renders the same after the project is reopened. Freeze records the Show Object that was set.
+
 This is not several Roto Brush instances sharing a pass: each instance reads the layer after the effects above it, so
 instances can see different pixels. Objects inside one instance always see the same ones.
 

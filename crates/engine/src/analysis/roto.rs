@@ -293,7 +293,7 @@ pub(crate) fn params_at(p: &Project, cid: ItemId, layer: &Layer, g: &PropGroup, 
 }
 
 /// The layer's source size (layer pixels).
-pub(crate) fn layer_size(p: &Project, comp: &effectcraft_project::Comp, layer: &Layer) -> [f64; 2] {
+pub fn layer_size(p: &Project, comp: &effectcraft_project::Comp, layer: &Layer) -> [f64; 2] {
     effectcraft_render::effect_bounds(p, comp, layer).0
 }
 

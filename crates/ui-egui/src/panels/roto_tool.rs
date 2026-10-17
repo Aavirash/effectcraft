@@ -21,6 +21,17 @@ fn roto_group(layer: &Layer) -> Option<&effectcraft_engine::project::PropGroup> 
     layer.effects()?.groups().nth(roto_index(layer)?)
 }
 
+/// The colour of object `o`'s outline: object 0 keeps the chosen boundary colour, the others cycle through a palette.
+pub fn object_color(o: u32, base: [f64; 3]) -> Color32 {
+    const PALETTE: [[u8; 3]; 8] =
+        [[60, 200, 255], [255, 170, 40], [150, 230, 60], [180, 110, 255], [255, 225, 60], [40, 210, 170], [255, 90, 80], [90, 130, 255]];
+    if o == 0 {
+        return c32(base, 255);
+    }
+    let [r, g, b] = PALETTE[(o as usize - 1) % PALETTE.len()];
+    Color32::from_rgb(r, g, b)
+}
+
 /// A stroke being drawn.
 #[derive(Clone, Debug)]
 struct Drag {
@@ -94,6 +105,22 @@ pub fn draw_overlay(
             let alpha: Vec<f32> = (0..w * h).map(|i| a_at((i % w) as i64, (i / w) as i64)).collect();
             let inside = |x: i64, y: i64| x >= 0 && y >= 0 && x < w as i64 && y < h as i64 && alpha[y as usize * w + x as usize] >= 0.5;
             let mut px = vec![Color32::TRANSPARENT; w * h];
+            // With several objects the boundary view outlines each in its own colour.
+            let per_object: Vec<(Color32, Vec<bool>)> = match (o.view.as_str(), roto_group(layer)) {
+                ("alphaBoundary", Some(g)) => {
+                    let params = effectcraft_engine::effects::flatten_params(g, &mut |p| p.value.clone());
+                    let size = effectcraft_engine::roto::layer_size(&app.session.project, comp, layer);
+                    let f = fx::frame_of(layer.layer_time(time).seconds(), comp.frame_rate.as_f64());
+                    fx::object_mattes(&params, size, comp.frame_rate.as_f64(), f)
+                        .into_iter()
+                        .map(|(obj, seg)| {
+                            let seg = fx::resample(&seg, w, h);
+                            (object_color(obj, o.boundary_color), seg.matte.iter().map(|m| *m != 0).collect())
+                        })
+                        .collect()
+                }
+                _ => vec![],
+            };
             let bc = c32(o.boundary_color, 255);
             let oc = c32(o.overlay_color, (o.overlay_opacity / 100.0 * 255.0).clamp(0.0, 255.0) as u8);
             // View Search Region: the band around the boundary (yellow).
@@ -117,7 +144,20 @@ pub fn draw_overlay(
                         _ => {
                             let me = a >= 0.5;
                             let edge = me && [(-1, 0), (1, 0), (0, -1), (0, 1)].iter().any(|(dx, dy)| !inside(x + dx, y + dy));
-                            if edge { bc } else { Color32::TRANSPARENT }
+                            if per_object.is_empty() {
+                                if edge { bc } else { Color32::TRANSPARENT }
+                            } else {
+                                // the outline of every object whose own matte has an edge here
+                                let inside_of =
+                                    |m: &Vec<bool>, x: i64, y: i64| x >= 0 && y >= 0 && x < w as i64 && y < h as i64 && m[y as usize * w + x as usize];
+                                per_object
+                                    .iter()
+                                    .rev()
+                                    .find(|(_, m)| {
+                                        inside_of(m, x, y) && [(-1, 0), (1, 0), (0, -1), (0, 1)].iter().any(|(dx, dy)| !inside_of(m, x + dx, y + dy))
+                                    })
+                                    .map_or(Color32::TRANSPARENT, |(c, _)| *c)
+                            }
                         }
                     };
                     if let Some((sd, r)) = &search {
@@ -389,6 +429,7 @@ pub fn bar_buttons(app: &mut EffectcraftApp, ui: &mut egui::Ui, p: &egui::Painte
         let next = all.iter().copied().find(|o| *o > current).or_else(|| all.first().copied()).unwrap_or(0);
         let _ = app.session.execute("roto.options", json!({"object": next}));
     }
+    p.circle_filled(pos2(r.min.x + 9.0, r.center().y), 4.0, object_color(current, app.session.state.roto.boundary_color));
     app.auto.add("layerPanel.roto.object", r, &label);
     x += 90.0;
     let r = Rect::from_min_size(pos2(x, bar.center().y - 10.0), vec2(26.0, 20.0));
