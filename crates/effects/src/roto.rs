@@ -598,6 +598,14 @@ impl Chain {
         self.model.as_ref().is_some_and(|m| m.tracker().is_some())
     }
 
+    /// Explicit propagation replaces tracking made by another model. Rendering and Freeze keep
+    /// using saved mattes even when that model is unavailable, so this is only called for Propagate.
+    pub fn prepare_propagation(&mut self) {
+        if self.saved_model().is_some_and(|saved| self.model.as_ref().is_none_or(|model| model.info().id != saved)) {
+            self.saved = None;
+        }
+    }
+
     /// Follow the object through the span with the model's tracker, from the strokes on their
     /// frames (only the frames without a tracked result yet: after a correction stroke, the frames it
     /// changes, tracked on from the nearest prompted frame), and cache every frame's segmentation (under the tracker's keys, with its
@@ -1372,6 +1380,56 @@ mod tests {
         assert!(fake.cancelled.load(Relaxed), "the model must see cancellation before allocating the rest of the clip");
         assert_eq!(fake.emitted.load(Relaxed), 2);
         assert_eq!(completed, 0, "partial objects are not complete tracked frames");
+    }
+
+    #[test]
+    fn propagation_replaces_saved_tracking_from_a_different_model() {
+        let mut d = RotoData::default();
+        d.add(Stroke { kind: StrokeKind::Fg, frame: 0, radius: 3.0, points: vec![[35.0, 40.0]], object: 0 }, 2, [0, 24]);
+        let mut params = params_with(&d);
+        params.values.insert(INPUT_KEY.into(), Value::Str("replace-saved-tracking-model".into()));
+        let size = [100.0, 80.0];
+        let old_model = effectcraft_segment::SAM2_SMALL.id;
+        let old_keys = d.chain_keys(seed_with(&params, size, 25.0, old_model));
+        let empty = vec![0; 100 * 80];
+        let old_frame = TrackFrame { m: rle::encode(&empty), r: rle::encode(&empty), c: 0.2, ..Default::default() };
+        let saved = TrackCache {
+            key: tracks_key(&old_keys),
+            model: old_model.into(),
+            size: [100, 80],
+            frames: old_keys.keys().map(|f| (*f, old_frame.clone())).collect(),
+            ..Default::default()
+        };
+        params.values.insert(TRACKED.into(), Value::Str(saved.to_json()));
+        let mut chain = Chain::new(&params, size, 25.0, 1.0);
+        let fake = Arc::new(TwoObjects(Default::default()));
+        chain.model = Some(fake.clone());
+        chain.keys = d.chain_keys(seed_with(&params, size, 25.0, fake.info().id));
+        let mut get = |f: i64| Some(Arc::new(frame(f as f64 / 25.0)));
+        assert_eq!(chain.saved_model(), Some(old_model));
+        assert_eq!(chain.ensure(0, &mut get, &|| false).unwrap().area(), 0, "rendering keeps the saved matte until propagation");
+        chain.prepare_propagation();
+        assert_eq!(chain.saved_model(), None);
+        assert_eq!(chain.track(&mut get, &|| false, &mut |_| {}).unwrap().unwrap().frames, 3);
+        assert_eq!(fake.0.lock().unwrap().len(), 1, "the newly selected tracker must actually run");
+        assert!(chain.ensure(0, &mut get, &|| false).unwrap().area() > 0);
+        let replacement = tracks_of(&chain).expect("new tracking is saved");
+        assert_eq!(replacement.model, effectcraft_segment::SAM2_TINY.id);
+        assert_eq!(replacement.frames.len(), 3);
+        params.values.insert(TRACKED.into(), Value::Str(replacement.to_json()));
+        let mut reopened = Chain::new(&params, size, 25.0, 1.0);
+        assert_eq!(reopened.saved_model(), Some(effectcraft_segment::SAM2_TINY.id));
+        assert!(reopened.ensure(0, &mut get, &|| false).unwrap().area() > 0, "reopening uses the replacement without loading its model");
+        reopened.model = Some(fake.clone());
+        reopened.keys = chain.keys.clone();
+        reopened.prepare_propagation();
+        assert_eq!(reopened.saved_model(), Some(effectcraft_segment::SAM2_TINY.id));
+        assert_eq!(reopened.track(&mut get, &|| false, &mut |_| {}).unwrap().unwrap().frames, 0, "matching saved tracking is reused");
+        assert_eq!(fake.0.lock().unwrap().len(), 1);
+        let mut classic = Chain::new(&params, size, 25.0, 1.0);
+        classic.model = None;
+        classic.prepare_propagation();
+        assert_eq!(classic.saved_model(), None, "Classic propagation also replaces saved model tracking");
     }
 
     #[test]

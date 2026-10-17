@@ -827,10 +827,39 @@ fn saved_tracking_is_kept_in_the_project_and_applies_when_it_reopens() {
     assert_eq!(st["source"], "tracker", "{st}");
     assert!(st["notice"].as_str().unwrap().contains("Propagate again"), "{st}");
     // A classic Propagate replaces the saved tracking with nothing.
+    // The synthetic source is not a file on disk; give the reopened session its provider before
+    // asking it to recompute frames. The checks above intentionally rendered without that provider.
+    s2.footage = s.footage.clone();
     s2.execute_checked("roto.propagate", json!({"layer": clip.0, "direction": "both", "wait": true})).unwrap();
     let st = s2.execute("roto.status", json!({"layer": clip.0, "frame": 12})).unwrap();
     assert_eq!(st["source"], "classical", "{st}");
     assert!(st["tracker"]["saved"].is_null() && st["notice"].is_null(), "{st}");
+    let _ = std::fs::remove_dir_all(std::path::Path::new(&path).parent().unwrap());
+}
+
+/// Propagate replaces a fully saved span when a different tracking model is active.
+#[test]
+fn propagating_saved_tracking_uses_the_new_model() {
+    struct OtherModel;
+    impl effectcraft_segment::MaskModel for OtherModel {
+        fn info(&self) -> &'static effectcraft_segment::ModelInfo {
+            &effectcraft_segment::SAM2_SMALL
+        }
+        fn segment(&self, _: &[[f32; 3]], _: usize, _: usize, _: &effectcraft_segment::Prompt) -> effectcraft_segment::Result<Vec<f32>> {
+            Err("no weights".into())
+        }
+        fn tracker(&self) -> Option<&dyn effectcraft_segment::ObjectTracker> {
+            Some(&Exact)
+        }
+    }
+    let (mut s, clip, _uid, path) = saved_project("model-switch");
+    effectcraft_effects::roto::set_model(Some(std::sync::Arc::new(OtherModel)));
+    let result = s.execute_checked("roto.propagate", json!({"layer": clip.0, "direction": "both", "wait": true}));
+    effectcraft_effects::roto::set_model(None);
+    result.unwrap();
+    let status = s.execute("roto.status", json!({"layer": clip.0, "frame": 12})).unwrap();
+    assert_eq!(status["tracker"]["saved"], "sam2.1-hiera-small", "{status}");
+    assert_eq!(status["tracker"]["frames"].as_object().unwrap().len(), 21, "{status}");
     let _ = std::fs::remove_dir_all(std::path::Path::new(&path).parent().unwrap());
 }
 

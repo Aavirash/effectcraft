@@ -446,7 +446,10 @@ async fn run_work(w: Work, shared: &RotoShared) {
         s.object_matte = w.object_matte;
     }
     let cancel = || shared.cancel.load(Ordering::Relaxed);
-    let chain = fx::Chain::new(&w.params, w.size, w.fps, 1.0);
+    let mut chain = fx::Chain::new(&w.params, w.size, w.fps, 1.0);
+    if w.task == RotoTask::Propagate && !w.object_matte {
+        chain.prepare_propagation();
+    }
     let model = fx::installed_model();
     let key = if w.object_matte { om::frozen_key(&w.params, w.size, w.fps, model.as_deref()) } else { fx::frozen_key(&w.params, w.size, w.fps) };
     let mut frozen = FrozenCache { key, ..Default::default() };
