@@ -818,7 +818,15 @@ fn bake_between(
     let tm = Tick(ta.0 + (tb.0 - ta.0) / 2);
     let blend = [(ea[0] + eb[0]) / 2.0, (ea[1] + eb[1]) / 2.0, (ea[2] + eb[2]) / 2.0];
     let exact = correction * Mat4::orientation(Vec3::from(authored.value_at(tm).as_vec3()));
-    if rotation_angle(Mat4::orientation(Vec3::from(blend)), exact) <= BAKE_TOLERANCE_DEGREES {
+    // Symmetric easing crosses the straight blend at its midpoint. Check both sides too before
+    // accepting a segment whose original easing will be replaced with a linear blend.
+    let quarter = (tb.0 - ta.0) / 4;
+    if [Tick(ta.0 + quarter), tm, Tick(tb.0 - quarter)].into_iter().all(|t| {
+        let u = (t.0 - ta.0) as f64 / (tb.0 - ta.0) as f64;
+        let linear = std::array::from_fn(|i| ea[i] + (eb[i] - ea[i]) * u);
+        let target = correction * Mat4::orientation(Vec3::from(authored.value_at(t).as_vec3()));
+        rotation_angle(Mat4::orientation(Vec3::from(linear)), target) <= BAKE_TOLERANCE_DEGREES
+    }) {
         return;
     }
     let em = nearest_euler(euler_zyx(exact.0), blend);

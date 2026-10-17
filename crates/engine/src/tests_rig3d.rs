@@ -325,6 +325,27 @@ fn keyed_orientation_under_a_tilted_null_follows_between_the_keys() {
 
 // ---------------------------------------------------------------- from 3D model
 
+/// Easy Ease agrees with a straight blend at the midpoint, but not at the quarter points.
+#[test]
+fn eased_orientation_under_x_parent_keeps_motion_between_keys() {
+    let mut s = session();
+    let light = s.execute("layer.newLight", json!({"kind": "Point", "position": [320, 180, -500]})).unwrap()["layer"].as_u64().unwrap();
+    for (time, value) in [(0.0, json!([0.0, 0.0, 0.0])), (1.0, json!([90.0, 0.0, 0.0]))] {
+        s.execute("prop.addKey", json!({"layer": light, "path": "transform/orientation", "time": time, "value": value})).unwrap();
+    }
+    let uid = layer_in(&s, cid(&s), light).props.prop("transform/orientation").unwrap().uid;
+    s.execute("keys.select", json!({"keys": [{"layer": light, "prop": uid, "time": 0.0}, {"layer": light, "prop": uid, "time": 1.0}]})).unwrap();
+    s.execute("keys.easyEase", json!({})).unwrap();
+    let times: Vec<_> = (0..=100).map(|i| Tick::from_seconds_f64(i as f64 / 100.0)).collect();
+    let before: Vec<_> = times.iter().map(|t| frame_at(&s, light, *t)).collect();
+    let parent = rotated_null(&mut s, [30.0, 0.0, 0.0], 0.0);
+    s.execute("layer.setParent", json!({"layers": [light], "parent": parent})).unwrap();
+    for (t, b) in times.into_iter().zip(before) {
+        let a = frame_at(&s, light, t);
+        assert!((a.0 - b.0).length() < 1e-6 && (a.1 - b.1).length() < 1e-3, "at {t:?}: {:?} vs {:?}", a.1, b.1);
+    }
+}
+
 struct DiskModels;
 
 impl FootageSource for DiskModels {
