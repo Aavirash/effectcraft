@@ -344,3 +344,36 @@ fn convolutions_and_the_layernorm_gelu_epilogue_match_candle() {
         .collect();
     assert_close(&run_and_read(&g, &gy), &want, 1e-3, "layernorm + gelu");
 }
+
+#[test]
+fn half_precision_weights_give_the_same_product_to_half_precision() {
+    let Some(g) = gpu() else { return };
+    // odd sizes: the last word holds one value; the weight is a linear layer's [n, k]
+    let (m, n, k) = (70, 91, 41);
+    let (av, wv) = (noise(m * k, 3), noise(n * k, 4));
+    let (a, w16, w32) = (g.upload(&av), g.upload_f16(&wv), g.upload(&wv));
+    assert!(w16.f16 && w16.len == n * k);
+    let (c16, c32) = (g.zeros(m * n).unwrap(), g.zeros(m * n).unwrap());
+    let sb = Strides { offset: 0, batch: 0, row: 1, col: k };
+    for (w, c) in [(&w16, &c16), (&w32, &c32)] {
+        g.matmul(&Matmul {
+            m,
+            n,
+            k,
+            batch: 1,
+            a: (&a, Strides::row_major(k)),
+            b: (w, sb),
+            bias: None,
+            c: (c, Strides::row_major(n)),
+            residual: None,
+            alpha: 1.0,
+            act: Act::None,
+        })
+        .unwrap();
+    }
+    g.flush().unwrap();
+    let (got, want) = (g.download(&c16).unwrap(), g.download(&c32).unwrap());
+    // f16 keeps 11 bits: each weight is off by at most 2^-11 relative
+    assert_close(&got, &want, 2e-3 * (k as f32).sqrt(), "f16 vs f32 weights");
+    assert!(got != want, "the weights really were rounded to half precision");
+}

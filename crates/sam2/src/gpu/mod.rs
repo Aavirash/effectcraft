@@ -23,6 +23,8 @@ pub struct Buf {
     pub(crate) buffer: wgpu::Buffer,
     /// Elements (f32).
     pub len: usize,
+    /// Two half-precision values per 32-bit word (a weight matrix only; `len` still counts values).
+    pub(crate) f16: bool,
 }
 
 /// One strided matrix operand: `(offset, batch stride, row stride, column stride)` in elements.
@@ -87,6 +89,11 @@ fn words(v: &[u32]) -> [u32; PARAM_WORDS] {
 
 fn u32_of(v: usize, what: &str) -> Result<u32> {
     u32::try_from(v).map_err(|_| Error::Compute(format!("{what} {v} does not fit a GPU index")))
+}
+
+/// Whether weight matrices are kept on the GPU in half precision (`EFFECTCRAFT_SAM2_F16=1`).
+pub fn half_weights() -> bool {
+    std::env::var("EFFECTCRAFT_SAM2_F16").is_ok_and(|v| matches!(v.trim(), "1" | "on" | "true"))
 }
 
 impl Gpu {
@@ -158,7 +165,36 @@ impl Gpu {
         if !data.is_empty() {
             self.queue.write_buffer(&buffer, 0, bytemuck::cast_slice(data));
         }
-        Buf { buffer, len: data.len() }
+        Buf { buffer, len: data.len(), f16: false }
+    }
+
+    /// A weight matrix: stored as half precision (half the memory) when `EFFECTCRAFT_SAM2_F16` asks for it and every
+    /// value fits, as f32 otherwise.
+    pub fn upload_weights(&self, data: &[f32]) -> Buf {
+        if !half_weights() || data.is_empty() || data.iter().any(|v| v.abs() > 60_000.0) {
+            return self.upload(data);
+        }
+        self.upload_f16(data)
+    }
+
+    /// `data` as half precision, two values per word.
+    pub(crate) fn upload_f16(&self, data: &[f32]) -> Buf {
+        let words: Vec<u32> = data
+            .chunks(2)
+            .map(|p| {
+                let lo = half::f16::from_f32(p.first().copied().unwrap_or(0.0)).to_bits();
+                let hi = half::f16::from_f32(p.get(1).copied().unwrap_or(0.0)).to_bits();
+                u32::from(lo) | (u32::from(hi) << 16)
+            })
+            .collect();
+        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: (words.len() as u64) * 4,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        self.queue.write_buffer(&buffer, 0, bytemuck::cast_slice(&words));
+        Buf { buffer, len: data.len(), f16: true }
     }
 
     /// A zeroed buffer of `len` elements.
@@ -173,7 +209,7 @@ impl Gpu {
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        Ok(Buf { buffer, len })
+        Ok(Buf { buffer, len, f16: false })
     }
 
     fn pipeline(&self, entry: &'static str) -> Arc<wgpu::ComputePipeline> {
@@ -315,7 +351,7 @@ impl Gpu {
             }
         };
         self.run(
-            "matmul",
+            if b.f16 { "matmul_w16" } else { "matmul" },
             &[(0, a), (1, b), (2, bias), (3, c), (4, res)],
             &params,
             (u32_of(op.n.div_ceil(64), "groups")?, u32_of(op.m.div_ceil(64), "groups")?, u32_of(op.batch, "batch")?),
@@ -351,7 +387,7 @@ impl GLinear {
     /// From `{name}.weight` (`[out, in]`) and `{name}.bias`.
     pub fn load(g: &Gpu, w: &crate::weights::Weights, name: &str, inp: usize, out: usize) -> Result<GLinear> {
         Ok(GLinear {
-            w: g.upload(&flat(w.get(&format!("{name}.weight"), &[out, inp])?)?),
+            w: g.upload_weights(&flat(w.get(&format!("{name}.weight"), &[out, inp])?)?),
             b: g.upload(&flat(w.get(&format!("{name}.bias"), &[out])?)?),
             inp,
             out,
@@ -373,13 +409,13 @@ impl GLinear {
                 *b *= s;
             }
         }
-        Ok(GLinear { w: g.upload(&wt), b: g.upload(&bias), inp, out })
+        Ok(GLinear { w: g.upload_weights(&wt), b: g.upload(&bias), inp, out })
     }
 
     /// A 1 x 1 convolution (`[out, in, 1, 1]`) as a linear layer over channels-last tokens.
     pub fn load_conv1x1(g: &Gpu, w: &crate::weights::Weights, name: &str, inp: usize, out: usize) -> Result<GLinear> {
         Ok(GLinear {
-            w: g.upload(&flat(w.get(&format!("{name}.weight"), &[out, inp, 1, 1])?)?),
+            w: g.upload_weights(&flat(w.get(&format!("{name}.weight"), &[out, inp, 1, 1])?)?),
             b: g.upload(&flat(w.get(&format!("{name}.bias"), &[out])?)?),
             inp,
             out,
