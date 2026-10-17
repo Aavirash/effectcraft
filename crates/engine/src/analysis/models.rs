@@ -420,7 +420,13 @@ fn list(s: &mut Session, task: Task) -> Result<Value> {
         "active": st.active.is_none(),
     })];
     for m in seg::models(task) {
+        #[cfg(not(target_arch = "wasm32"))]
+        let (recommended, hint) = (effectcraft_sam2::mask::recommended().id == m.id, effectcraft_sam2::mask::hint(m.id));
+        #[cfg(target_arch = "wasm32")]
+        let (recommended, hint) = (false, None::<String>);
         v.push(json!({
+            "recommended": recommended,
+            "hint": hint,
             "id": m.id,
             "name": m.name,
             "description": m.description,

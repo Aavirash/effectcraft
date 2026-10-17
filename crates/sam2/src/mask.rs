@@ -148,6 +148,27 @@ pub fn load(bytes: &[u8]) -> std::result::Result<Arc<Sam2Mask>, String> {
     Ok(Arc::new(Sam2Mask::with_info(Arc::new(model), info)))
 }
 
+/// The size to suggest on this computer: Small when a GPU is usable (no slower to run than Tiny there, and more accurate),
+/// Tiny otherwise (the bigger backbones take several seconds a frame on a CPU).
+pub fn recommended() -> &'static ModelInfo {
+    if crate::gpu::Gpu::shared().is_ok() { &effectcraft_segment::SAM2_SMALL } else { &SAM2_TINY }
+}
+
+/// A one-line note for the Settings list: what suits this computer, and what the bigger sizes cost without a GPU.
+pub fn hint(id: &str) -> Option<String> {
+    if !SIZES.iter().any(|m| m.id == id) {
+        return None;
+    }
+    let gpu = crate::gpu::Gpu::shared().is_ok();
+    Some(match (id == recommended().id, gpu, id) {
+        (true, true, _) => "Recommended: a GPU was found, and this size is no slower than Tiny on it.".to_string(),
+        (true, false, _) => "Recommended: no GPU was found, and this is the quickest on a CPU.".to_string(),
+        (false, false, "sam2.1-hiera-base-plus" | "sam2.1-hiera-large") => "Slow without a GPU (several seconds a frame); none was found.".to_string(),
+        (false, true, "sam2.1-hiera-large") => "For difficult footage; about 0.7 s of GPU time to look at each frame.".to_string(),
+        _ => return None,
+    })
+}
+
 /// The registry entries this crate loads.
 pub const SIZES: [&ModelInfo; 4] = [&SAM2_TINY, &effectcraft_segment::SAM2_SMALL, &effectcraft_segment::SAM2_BASE_PLUS, &effectcraft_segment::SAM2_LARGE];
 
