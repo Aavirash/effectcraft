@@ -160,3 +160,26 @@ fn an_idle_roto_model_is_unloaded() {
     crate::effects::roto::set_model(None);
     let _ = std::fs::remove_dir_all(d);
 }
+
+/// With `EFFECTCRAFT_DOWNLOAD_SIZE=sam2.1-hiera-small` (or another registry id): the in-app download (Settings ▸ Roto
+/// Brush ▸ Download) fetches the pinned file over the network, verifies it, installs it with its notice and loads it.
+/// Skipped without the variable: it needs the network and hundreds of megabytes.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn downloading_a_size_installs_and_loads_it() {
+    let Ok(id) = std::env::var("EFFECTCRAFT_DOWNLOAD_SIZE") else { return };
+    crate::tests_roto::hold_roto_cache_test_lock();
+    let (mut s, d) = session("download");
+    let r = s.execute_checked("roto.model.download", json!({"id": id, "wait": true})).unwrap();
+    assert_eq!(r["id"], id.as_str(), "{r}");
+    let dir = s.models_dir().unwrap();
+    let info = effectcraft_segment::info(&id).unwrap();
+    let file = dir.join(info.file_name);
+    assert_eq!(std::fs::metadata(&file).unwrap().len(), info.size, "the whole file arrived");
+    assert!(dir.join(format!("{}.NOTICE.txt", info.file_name)).exists());
+    assert!(!dir.join(format!("{}.part", info.file_name)).exists(), "no partial file is left");
+    s.execute_checked("roto.model.select", json!({"id": id})).unwrap();
+    wait_loaded(&mut s, Task::Mask);
+    assert_eq!(s.models.status(Task::Mask).active.as_deref(), Some(id.as_str()));
+    let _ = std::fs::remove_dir_all(d);
+}

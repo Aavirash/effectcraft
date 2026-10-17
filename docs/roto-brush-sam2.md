@@ -65,9 +65,27 @@ pinned to a Hugging Face commit with its SHA-256. All run the same tracker; a bi
 | SAM 2.1 Base+ (`sam2.1-hiera-base-plus`) | 323.5 MB | 0.37 s | encoder 2.3e-5 |
 | SAM 2.1 Large (`sam2.1-hiera-large`) | 897.9 MB | 0.72 s | encoder 5.2e-4 |
 
-Settings marks the size that suits the computer: **Small** when a usable GPU is found (it encodes no slower than
-Tiny there and is more accurate), **Tiny** otherwise; Base+ and Large say so when they would be slow on a CPU. The list
-carries `recommended` and `hint` per model (`roto.models`).
+### How the sizes compare on the benchmark clips
+`effectcraft-cli bench --roto --frames 24 --fixes --sam2 FILE`, release build, SAM 2 on the GPU (RX 7900 GRE), one run each.
+Mean IoU (after the object returns, in brackets) and seconds per tracked frame:
+
+| Clip | Tiny | Small | Base+ | Large |
+|---|---|---|---|---|
+| move | 0.992 | 0.988 | 0.986 | 0.994 |
+| light | 0.990 | 0.985 | 0.987 | 0.993 |
+| occlusion | 0.989 (0.987) | 0.988 (0.984) | 0.987 (0.984) | 0.989 (0.987) |
+| reenter | 0.982 (0.975) | 0.981 (0.970) | 0.978 (0.966) | **0.694 (0.110)** |
+| s / tracked frame | 0.69 | 0.70 | 0.79 | 1.17 |
+
+The classic engine scores 0.98 / 0.98 / 0.49 / 0.62 on the same clips. Peak tracker state is 88 MB for every size (the
+weights are not counted). The clips are synthetic and easy, so they cannot tell the sizes apart on accuracy: **no larger
+size tracked better here, and Large lost the object after it left and came back** (IoU 0.11 after the return, where
+Tiny, Small and Base+ found it again). That is the model's behaviour on this clip, not the port:
+Large matches PyTorch stage by stage. Whether a larger size helps on real footage is not measured.
+
+Settings therefore marks **Tiny** as recommended (the smallest download, and nothing larger did better), and says what was
+measured for the others; Base+ and Large also warn when no GPU was found (they take several seconds a frame on a CPU).
+The list carries `recommended` and `hint` per model (`roto.models`).
 
 ### Half-precision weights (optional)
 `EFFECTCRAFT_SAM2_F16=1` keeps the weight matrices on the GPU as half precision, halving their memory (Large: about

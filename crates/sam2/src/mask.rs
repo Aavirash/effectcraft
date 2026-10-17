@@ -148,25 +148,29 @@ pub fn load(bytes: &[u8]) -> std::result::Result<Arc<Sam2Mask>, String> {
     Ok(Arc::new(Sam2Mask::with_info(Arc::new(model), info)))
 }
 
-/// The size to suggest on this computer: Small when a GPU is usable (no slower to run than Tiny there, and more accurate),
-/// Tiny otherwise (the bigger backbones take several seconds a frame on a CPU).
+/// The size to suggest: Tiny. On the benchmark clips (`bench --roto`, 24 frames, a GPU) no larger size tracked better, they
+/// cost 1.0x (Small), 1.15x (Base+) and 1.7x (Large) the time, and Large lost the object after it re-entered the frame.
 pub fn recommended() -> &'static ModelInfo {
-    if crate::gpu::Gpu::shared().is_ok() { &effectcraft_segment::SAM2_SMALL } else { &SAM2_TINY }
+    &SAM2_TINY
 }
 
-/// A one-line note for the Settings list: what suits this computer, and what the bigger sizes cost without a GPU.
+/// A one-line note for the Settings list: what was measured for this size, and what the bigger ones cost without a GPU.
 pub fn hint(id: &str) -> Option<String> {
-    if !SIZES.iter().any(|m| m.id == id) {
-        return None;
-    }
     let gpu = crate::gpu::Gpu::shared().is_ok();
-    Some(match (id == recommended().id, gpu, id) {
-        (true, true, _) => "Recommended: a GPU was found, and this size is no slower than Tiny on it.".to_string(),
-        (true, false, _) => "Recommended: no GPU was found, and this is the quickest on a CPU.".to_string(),
-        (false, false, "sam2.1-hiera-base-plus" | "sam2.1-hiera-large") => "Slow without a GPU (several seconds a frame); none was found.".to_string(),
-        (false, true, "sam2.1-hiera-large") => "For difficult footage; about 0.7 s of GPU time to look at each frame.".to_string(),
-        _ => return None,
-    })
+    Some(
+        match id {
+            "sam2.1-hiera-tiny" => "Recommended: the smallest download, and no larger size tracked better on the benchmark clips.",
+            "sam2.1-hiera-small" => "As fast as Tiny on a GPU and no better on the benchmark clips; worth a try on difficult footage.",
+            "sam2.1-hiera-base-plus" if !gpu => "Slow without a GPU (several seconds a frame); none was found.",
+            "sam2.1-hiera-base-plus" => "About 15% slower than Tiny on a GPU and no better on the benchmark clips.",
+            "sam2.1-hiera-large" if !gpu => "Slow without a GPU (many seconds a frame); none was found.",
+            "sam2.1-hiera-large" => {
+                "About 1.7 times Tiny's time on a GPU; it lost the object after it re-entered in one benchmark clip. Try it on difficult footage."
+            }
+            _ => return None,
+        }
+        .to_string(),
+    )
 }
 
 /// The registry entries this crate loads.

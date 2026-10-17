@@ -84,6 +84,9 @@ fn the_boundary_view_outlines_each_object_and_show_object_picks_one() {
     if let Some(path) = std::env::var_os("ROTO_OBJECTS_SNAPSHOT") {
         both.save(path).unwrap();
     }
+    // the bar offers to remove the current object's strokes, and says how many it has
+    assert!(h.state().auto.find("layerPanel.roto.clearObject").is_some(), "the remove button is on screen");
+    assert!(h.state().auto.find("layerPanel.roto.object").is_some_and(|e| e.label.contains("(1)")), "the object's stroke count is on the button");
     let (a, b) = (count(&both, pink), count(&both, cyan));
     assert!(a > 50 && b > 50, "both objects are outlined: {a} pink, {b} cyan pixels");
 
