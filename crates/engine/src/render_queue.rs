@@ -493,6 +493,11 @@ impl Session {
         let formats = exporter.formats();
         let (mut items, mut problems) = self.queued_outputs(&formats);
         let refused = self.check_outputs(&items);
+        // Two outputs of this job on one file: the render would replace its own output, so it is
+        // refused before anything is written (the items refused above take no part).
+        if let Some(refusal) = crate::output_guard::duplicate_refusal(&self.duplicate_outputs(&items, &refused)) {
+            return Err(refusal);
+        }
         items.retain(|modules| modules.first().is_none_or(|(it, _)| !refused.iter().any(|r| r.item == it.id)));
         problems.extend(refused.iter().map(|r| (r.item, RenderStatus::Failed(r.reason.clone()))));
         if !problems.is_empty() {
