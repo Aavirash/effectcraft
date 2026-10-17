@@ -447,14 +447,11 @@ fn find_child<'a>(l: &'a Layer, g: &'a PropGroup, k: &str, depth: u8) -> Option<
         matchnames::node(&ch)
     };
     let lk = loose(k);
-    // An animator's Properties group also answers to the After Effects names of its properties.
-    let animator_props = g.match_id == "properties";
     g.children
         .iter()
         .find(|n| chain_of(n) == k)
         .or_else(|| g.children.iter().find(|n| n.name() == k))
         .or_else(|| g.children.iter().find(|n| n.match_id() == k))
-        .or_else(|| g.children.iter().find(|n| animator_props && animator_property_match_name(n.match_id()) == Some(k)))
         .or_else(|| g.children.iter().find(|n| n.name().eq_ignore_ascii_case(k)))
         .or_else(|| g.children.iter().find(|n| loose(n.name()) == lk || loose(n.match_id()) == lk))
         .or_else(|| alias(&lk).and_then(|m| g.children.iter().find(|n| n.match_id() == m)))
@@ -742,50 +739,15 @@ fn resolve_add(s: &Session, a: &J) -> R {
     })
 }
 
-/// The After Effects match name and key of each text animator property.
-fn animator_property_table() -> &'static [(&'static str, &'static str)] {
-    &[
-        ("ADBE Text Anchor Point 3D", "anchor"),
-        ("ADBE Text Position 3D", "position"),
-        ("ADBE Text Scale 3D", "scale"),
-        ("ADBE Text Skew", "skew"),
-        ("ADBE Text Rotation", "rotation"),
-        ("ADBE Text Opacity", "opacity"),
-        ("ADBE Text Fill Color", "fillColor"),
-        ("ADBE Text Fill Hue", "fillHue"),
-        ("ADBE Text Fill Saturation", "fillSaturation"),
-        ("ADBE Text Fill Brightness", "fillBrightness"),
-        ("ADBE Text Fill Opacity", "fillOpacity"),
-        ("ADBE Text Stroke Color", "strokeColor"),
-        ("ADBE Text Stroke Hue", "strokeHue"),
-        ("ADBE Text Stroke Saturation", "strokeSaturation"),
-        ("ADBE Text Stroke Brightness", "strokeBrightness"),
-        ("ADBE Text Stroke Opacity", "strokeOpacity"),
-        ("ADBE Text Stroke Width", "strokeWidth"),
-        ("ADBE Text Tracking Amount", "tracking"),
-        ("ADBE Text Line Anchor", "lineAnchor"),
-        ("ADBE Text Line Spacing", "lineSpacing"),
-        ("ADBE Text Character Offset", "characterOffset"),
-        ("ADBE Text Character Replace", "characterValue"),
-        ("ADBE Text Blur", "blur"),
-    ]
-}
-
 /// A text animator property (`layer.addTextAnimatorProperty` key) from an After Effects match
 /// name or a display name.
 fn text_animator_property(name: &str) -> Option<&'static str> {
-    let table = animator_property_table();
-    if let Some((_, k)) = table.iter().find(|(m, _)| m.eq_ignore_ascii_case(name)) {
+    let table = matchnames::TEXT_ANIMATOR_PROPERTIES;
+    if let Some((k, _)) = table.iter().find(|(_, m)| m.eq_ignore_ascii_case(name)) {
         return Some(k);
     }
     let n = loose(name);
-    table.iter().map(|(_, k)| *k).find(|k| loose(k) == n || (n == "anchorpoint" && *k == "anchor") || (n == "trackingamount" && *k == "tracking"))
-}
-
-/// The After Effects match name of a text animator property key (`tracking` is
-/// `ADBE Text Tracking Amount`), for scripts that look a property up by that name (#1063).
-fn animator_property_match_name(key: &str) -> Option<&'static str> {
-    animator_property_table().iter().find(|(_, k)| *k == key).map(|(m, _)| *m)
+    table.iter().map(|(k, _)| *k).find(|k| loose(k) == n || (n == "anchorpoint" && *k == "anchor") || (n == "trackingamount" && *k == "tracking"))
 }
 
 /// `app.findMenuCommandId(name)`: 1-based index of the command whose label matches (menu items

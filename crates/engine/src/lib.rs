@@ -15,6 +15,7 @@ pub mod camera_track;
 pub mod commands;
 pub mod config;
 pub mod demo;
+pub mod doc_path;
 pub mod footage_check;
 pub mod footage_reload;
 pub mod guard;
@@ -495,6 +496,8 @@ pub struct Session {
     /// Offloaded jobs that ended, newest last (kind, error): how a caller waiting for one
     /// (`wait: true` over the control channel in the browser) learns its outcome.
     pub offload_log: Vec<(offload::JobKind, Option<String>)>,
+    /// Number of older completion entries evicted from the bounded offload log.
+    pub offload_log_start: usize,
     /// Generic background tasks (Content-Aware Fill, Scene Edit Detection), see [`jobs`].
     pub tasks: Vec<jobs::Task>,
     /// Finished tasks, newest last (Progress panel, `jobs.list`).
@@ -506,6 +509,8 @@ pub struct Session {
     /// event loop (the desktop app) turn this on; headless sessions run `footage.check` when
     /// they want it.
     pub check_footage_on_open: bool,
+    /// Footage paths that came from a document, with that document ([`doc_path`]).
+    pub stored_paths: doc_path::StoredPaths,
     /// Each footage file's size and modification time when last seen (Settings ▸ Import ▸
     /// Reload Footage Changed on Disk, [`footage_reload`]).
     pub footage_stamps: std::collections::HashMap<String, footage_reload::Stamp>,
@@ -598,6 +603,7 @@ impl Default for Session {
             offload: None,
             offloaded: vec![],
             offload_log: vec![],
+            offload_log_start: 0,
             browser: None,
             storage: None,
             tasks: vec![],
@@ -605,6 +611,7 @@ impl Default for Session {
             next_task_id: 1,
             learn: None,
             check_footage_on_open: false,
+            stored_paths: Default::default(),
             footage_stamps: Default::default(),
             footage_scan: None,
             script_calls: ScriptCalls::default(),
@@ -1125,6 +1132,7 @@ impl Session {
             job.wait();
         }
         self.render_job = None;
+        self.stored_paths = Default::default();
         self.stop_track();
         self.track_job = None;
         self.stop_mask_track();
