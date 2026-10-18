@@ -45,10 +45,14 @@ fn harness(broken: fn(&Footage) -> bool, proxy: Option<Footage>) -> (Harness<'st
         item.proxy = Some(Box::new(Proxy { footage, enabled: true }));
     }
     s.execute("layer.addItem", json!({"item": clip.0})).unwrap();
+    (open(s), clip)
+}
+
+fn open(mut s: Session) -> Harness<'static, EffectcraftApp> {
     s.execute("project.select", json!({"items": []})).unwrap();
     let mut h = Harness::builder().with_size(egui::vec2(1600.0, 1000.0)).build_eframe(|_| EffectcraftApp::new(s));
     h.run_steps(4);
-    (h, clip)
+    h
 }
 
 #[test]
@@ -77,4 +81,24 @@ fn an_undecodable_proxy_in_use_is_marked_as_the_proxy() {
     assert!(marker.label.starts_with("Proxy: ") && marker.label.contains("4:2:2"), "{marker:?}");
     let notice = h.state().auto.query("viewer.footageProblem.").first().copied().expect("a notice in the viewer").clone();
     assert!(notice.label.contains(&format!("Proxy: {WHY}")), "{notice:?}");
+}
+
+/// A precomp whose proxy can't be decoded: the layer says so while it renders through the
+/// proxy, but not with Collapse Transformations on, which draws the precomp's own layers.
+#[test]
+fn a_collapsed_precomp_has_no_notice_for_its_proxy() {
+    for collapse in [false, true] {
+        let mut s = Session { footage: Arc::new(Stub(|f| f.path.ends_with(".avi"))), ..Default::default() };
+        s.execute("comp.new", json!({"name": "Inner", "width": 64, "height": 36, "duration": 4})).unwrap();
+        s.execute("comp.new", json!({"name": "Main", "width": 320, "height": 180, "duration": 4})).unwrap();
+        let p = Arc::make_mut(&mut s.project);
+        let inner = p.items.values_mut().find(|i| i.name == "Inner").unwrap();
+        let proxy = Footage { kind: FootageKind::Video, path: "inner_proxy.avi".into(), width: 64, height: 36, has_video: true, ..Default::default() };
+        inner.proxy = Some(Box::new(Proxy { footage: proxy, enabled: true }));
+        let inner = inner.id;
+        s.execute("layer.addItem", json!({"item": inner.0})).unwrap();
+        s.execute("layer.setSwitch", json!({"layers": ["#1"], "switch": "collapse", "value": collapse})).unwrap();
+        let h = open(s);
+        assert_eq!(h.state().auto.query("viewer.footageProblem.").is_empty(), collapse, "collapse {collapse}");
+    }
 }
