@@ -39,6 +39,40 @@ pub(crate) fn gpu_inflight(var: Option<&str>) -> usize {
     }
 }
 
+/// Caps CPU frames in flight (#1615): a whole number of frames, at least 1. Unset, CPU renders
+/// keep one frame per thread in flight as before. A heavy comp can need gigabytes of working
+/// memory per frame, so 16 threads at once can get the process OOM-killed; the headless CLI
+/// reads no `memory.*` preferences, so this is how a render there is held to fewer frames.
+pub(crate) const CPU_INFLIGHT_ENV: &str = "EFFECTCRAFT_CPU_INFLIGHT";
+
+/// CPU frames in flight from the `EFFECTCRAFT_CPU_INFLIGHT` value: `None` (no cap) when unset or
+/// blank, a positive whole number, or `None` with a warning when it is 0, negative, not a
+/// number or too large.
+pub(crate) fn cpu_inflight(var: Option<&str>) -> Option<usize> {
+    let v = var?;
+    if v.trim().is_empty() {
+        return None;
+    }
+    match v.trim().parse::<usize>() {
+        Ok(n) if n >= 1 => Some(n),
+        _ => {
+            log::warn!(target: "effectcraft_export", "{CPU_INFLIGHT_ENV}={v:?} is not a whole number of frames of at least 1: CPU frames are not capped");
+            None
+        }
+    }
+}
+
+/// The frames-in-flight cap of a batch, and whether it lapses once the GPU stops for good:
+/// a GPU cap alone lapses (the CPU fallback renders in parallel, #1511), a CPU cap never does,
+/// and with both the smaller one holds for the whole batch.
+pub(crate) fn inflight_cap(gpu: Option<usize>, cpu: Option<usize>) -> (Option<usize>, bool) {
+    match (gpu, cpu) {
+        (Some(g), None) => (Some(g), true),
+        (Some(g), Some(c)) => (Some(g.min(c)), false),
+        (None, c) => (c, false),
+    }
+}
+
 /// `render` then `encode` over the frames `ks`, results in `ks` order.
 ///
 /// Without `cap` every frame renders and encodes in one parallel batch (the CPU path, as
@@ -208,10 +242,11 @@ impl<'a> Cx<'a> {
             }
             return out;
         }
-        // The cap is for the GPU's memory: once it has stopped for good, frames render on the
-        // CPU in parallel.
-        let gpu_live = || self.job.accel.is_none_or(|a| a.available());
-        map_frames_while(ks, self.gpu_cap(), gpu_live, |k| self.frame(comp, k), f)
+        // A GPU cap alone is for the GPU's memory: once it has stopped for good, frames render on
+        // the CPU in parallel. A CPU cap (#1615) holds throughout.
+        let (cap, lapses) = inflight_cap(self.gpu_cap(), cpu_inflight(std::env::var(CPU_INFLIGHT_ENV).ok().as_deref()));
+        let live = || !lapses || self.job.accel.is_none_or(|a| a.available());
+        map_frames_while(ks, cap, live, |k| self.frame(comp, k), f)
     }
 
     /// GPU frames rendered at once (#879), decided once per batch: with a GPU accelerator every
@@ -644,6 +679,31 @@ mod tests {
             options: Default::default(),
         };
         assert_eq!(Cx::new(&job).gpu_cap(), None, "no accelerator");
+    }
+
+    #[test]
+    fn cpu_inflight_is_off_unless_a_positive_number() {
+        assert_eq!(cpu_inflight(None), None);
+        assert_eq!(cpu_inflight(Some("2")), Some(2));
+        assert_eq!(cpu_inflight(Some(" 4 ")), Some(4));
+        for bad in ["0", "", "  ", "-2", "three", "2.5", "99999999999999999999999"] {
+            assert_eq!(cpu_inflight(Some(bad)), None, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn cpu_cap_holds_and_combines_with_the_gpu_cap() {
+        // #1615: CPU renders had no cap; a GPU cap alone still lapses when the GPU stops.
+        assert_eq!(inflight_cap(None, None), (None, false));
+        assert_eq!(inflight_cap(None, Some(2)), (Some(2), false));
+        assert_eq!(inflight_cap(Some(1), None), (Some(1), true));
+        assert_eq!(inflight_cap(Some(3), Some(2)), (Some(2), false));
+        assert_eq!(inflight_cap(Some(1), Some(4)), (Some(1), false));
+        // A CPU cap of 2 on 8 threads renders at most 2 frames at once.
+        let pool = rayon::ThreadPoolBuilder::new().num_threads(8).build().unwrap();
+        let (out, max) = pool.install(|| run_capped(16, inflight_cap(None, Some(2)).0));
+        assert_eq!(out.len(), 16);
+        assert!(max <= 2, "{max} frames in flight");
     }
 
     #[test]
