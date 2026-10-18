@@ -298,7 +298,12 @@ fn marker(app: &mut EffectcraftApp, ui: &mut egui::Ui, p: &egui::Painter, comp: 
     }
     p.add(egui::Shape::convex_polygon(marker_shape(x, y0, h), col, Stroke::NONE));
     if !m.comment.is_empty() {
-        p.text(pos2(x + 7.0, y0 + h / 2.0), Align2::LEFT_CENTER, m.comment.lines().next().unwrap_or_default(), Tokens::ui(10.0), t.text);
+        // The name sits in a small outlined box beside the flag, as in After Effects. It is drawn in the theme's field
+        // colours, so it follows Dark, Darker and Light.
+        let galley = p.layout_no_wrap(m.comment.lines().next().unwrap_or_default().to_string(), Tokens::ui(10.0), t.text);
+        let box_rect = Rect::from_min_size(pos2(x + 6.0, y0), vec2(galley.size().x + 8.0, h.max(galley.size().y + 2.0)));
+        p.rect(box_rect, t.radius_sm, t.field_bg, Stroke::new(1.0, t.field_border), egui::StrokeKind::Inside);
+        p.galley(pos2(box_rect.min.x + 4.0, box_rect.center().y - galley.size().y / 2.0), galley, t.text);
     }
     let hit = Rect::from_min_max(pos2(x - 5.0, y0 - 1.0), pos2(x + 5.0, y1));
     let id = egui::Id::new(("marker", r.layer, r.index));
