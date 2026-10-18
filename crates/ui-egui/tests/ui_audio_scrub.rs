@@ -372,9 +372,28 @@ fn startup_finishes_when_extended_viewer_frames_are_larger() {
     assert!((budget as f64 * 0.9 / real_bytes as f64) < ahead as f64, "real frames ({size:?}) fit fewer than {ahead}");
     h.state().frames.set_budget(budget);
     h.state().frames.clear();
-    assert!(until_started(&mut h), "the preview left its startup");
+    let now = h.ctx.input(|i| i.time);
+    h.state_mut().play(now);
+    h.step();
+    // The first frame renders before the harness clock moves on: each step is 1/30 s however long
+    // it takes, so on a busy machine the first frame could take longer than STARTUP_LIMIT of that
+    // clock, and this test is about the wait for the frames ahead.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while !h.state().frames.is_cached(&h.state().shown_series(cid)) && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    while h.state().playback.starting && std::time::Instant::now() < deadline {
+        h.step();
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert!(!h.state().playback.starting, "the preview left its startup");
     assert!(h.state().audio.is_some(), "with its sound");
     assert_eq!(audio_frame(&h, cid), Some(0), "from the first frame");
+    let (started, stopped) = {
+        let d = fake.0.lock().unwrap();
+        (d.0.is_some(), d.1)
+    };
+    assert!(started && !stopped, "the device started and kept playing");
 }
 
 /// A first frame that takes longer than STARTUP_WAIT to be cached (a heavy comp, a busy machine;
