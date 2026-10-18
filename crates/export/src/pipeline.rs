@@ -62,14 +62,31 @@ pub(crate) fn cpu_inflight(var: Option<&str>) -> Option<usize> {
     }
 }
 
-/// The frames-in-flight cap of a batch, and whether it lapses once the GPU stops for good:
-/// a GPU cap alone lapses (the CPU fallback renders in parallel, #1511), a CPU cap never does,
-/// and with both the smaller one holds for the whole batch.
-pub(crate) fn inflight_cap(gpu: Option<usize>, cpu: Option<usize>) -> (Option<usize>, bool) {
-    match (gpu, cpu) {
-        (Some(g), None) => (Some(g), true),
-        (Some(g), Some(c)) => (Some(g.min(c)), false),
-        (None, c) => (c, false),
+/// The frames-in-flight caps of a batch: `gpu` (#879) for the GPU's memory, `cpu` (#1615) for
+/// the process's.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Inflight {
+    pub gpu: Option<usize>,
+    pub cpu: Option<usize>,
+}
+
+impl Inflight {
+    /// Frames rendered at once: the smaller cap while the GPU renders, and only the CPU cap once
+    /// it has stopped for good (the CPU fallback renders in parallel, #1511). `None`: uncapped.
+    pub fn renders(&self, gpu_live: bool) -> Option<usize> {
+        let gpu = self.gpu.filter(|_| gpu_live);
+        let n = match (gpu, self.cpu) {
+            (Some(g), Some(c)) => Some(g.min(c)),
+            (g, c) => g.or(c),
+        };
+        n.map(|n| n.max(1))
+    }
+
+    /// Frames per window, rendered (`renders` at a time) and then encoded in parallel: with a CPU
+    /// cap at most that many, so finished images held before encoding count against it too;
+    /// with a GPU cap alone, one per thread (the images are in RAM, not VRAM).
+    pub fn window(&self, renders: usize) -> usize {
+        self.cpu.map_or(renders.max(rayon::current_num_threads()), |c| c.max(1))
     }
 }
 
@@ -89,38 +106,41 @@ pub(crate) fn map_frames<I: Send, T: Send>(
     render: impl Fn(u64) -> I + Sync + Send,
     encode: impl Fn(u64, I) -> T + Sync + Send,
 ) -> Vec<T> {
-    map_frames_while(ks, cap, || true, render, encode)
+    map_frames_while(ks, Inflight { gpu: cap, cpu: None }, || true, render, encode)
 }
 
-/// [`map_frames`] whose `cap` holds only while `capped()`: once it turns false (the GPU stopped
-/// for good, so every frame falls back to the CPU), the remaining frames render in parallel
-/// like the uncapped CPU path instead of one chunk of `cap` at a time.
+/// [`map_frames`] with the caps of `caps`, the GPU cap holding only while `gpu_live()`: once it
+/// turns false (the GPU stopped for good, so every frame falls back to the CPU), the remaining
+/// frames render under the CPU cap alone, in parallel when there is none, instead of one chunk
+/// of the GPU cap at a time. A CPU cap also bounds each window ([`Inflight::window`]).
 pub(crate) fn map_frames_while<I: Send, T: Send>(
     ks: Vec<u64>,
-    cap: Option<usize>,
-    capped: impl Fn() -> bool,
+    caps: Inflight,
+    gpu_live: impl Fn() -> bool,
     render: impl Fn(u64) -> I + Sync + Send,
     encode: impl Fn(u64, I) -> T + Sync + Send,
 ) -> Vec<T> {
     use rayon::prelude::*;
-    let Some(n) = cap.map(|n| n.max(1)).filter(|_| capped()) else {
+    if caps.renders(gpu_live()).is_none() {
         return ks.into_par_iter().map(|k| encode(k, render(k))).collect();
-    };
-    let window = n.max(rayon::current_num_threads());
+    }
     let mut out = Vec::with_capacity(ks.len());
-    for (w, win) in ks.chunks(window).enumerate() {
-        if !capped() {
-            out.par_extend(ks[w * window..].par_iter().map(|&k| encode(k, render(k))));
+    let mut rest = &ks[..];
+    while !rest.is_empty() {
+        let Some(n) = caps.renders(gpu_live()) else {
+            out.par_extend(rest.par_iter().map(|&k| encode(k, render(k))));
             break;
-        }
+        };
+        let (win, tail) = rest.split_at(caps.window(n).min(rest.len()));
         let mut imgs = Vec::with_capacity(win.len());
         let mut i = 0;
         while i < win.len() {
-            let end = if capped() { (i + n).min(win.len()) } else { win.len() };
+            let end = caps.renders(gpu_live()).map_or(win.len(), |n| (i + n).min(win.len()));
             imgs.par_extend(win[i..end].par_iter().map(|&k| render(k)));
             i = end;
         }
         out.par_extend(win.par_iter().copied().zip(imgs.into_par_iter()).map(|(k, img)| encode(k, img)));
+        rest = tail;
     }
     out
 }
@@ -242,11 +262,11 @@ impl<'a> Cx<'a> {
             }
             return out;
         }
-        // A GPU cap alone is for the GPU's memory: once it has stopped for good, frames render on
-        // the CPU in parallel. A CPU cap (#1615) holds throughout.
-        let (cap, lapses) = inflight_cap(self.gpu_cap(), cpu_inflight(std::env::var(CPU_INFLIGHT_ENV).ok().as_deref()));
-        let live = || !lapses || self.job.accel.is_none_or(|a| a.available());
-        map_frames_while(ks, cap, live, |k| self.frame(comp, k), f)
+        // The GPU cap is for the GPU's memory: once it has stopped for good, frames render on the
+        // CPU, in parallel or under the CPU cap (#1615), which holds throughout.
+        let caps = Inflight { gpu: self.gpu_cap(), cpu: cpu_inflight(std::env::var(CPU_INFLIGHT_ENV).ok().as_deref()) };
+        let gpu_live = || self.job.accel.is_none_or(|a| a.available());
+        map_frames_while(ks, caps, gpu_live, |k| self.frame(comp, k), f)
     }
 
     /// GPU frames rendered at once (#879), decided once per batch: with a GPU accelerator every
@@ -489,6 +509,7 @@ fn premultiplied8(img: &Image) -> Vec<u8> {
 mod tests {
     use super::*;
     use rayon::prelude::*;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     /// Frames `0..n` through [`map_frames`] with `cap`, recording the most running at once.
     fn run_capped(n: u64, cap: Option<usize>) -> (Vec<u64>, usize) {
@@ -521,7 +542,7 @@ mod tests {
         let out = pool.install(|| {
             map_frames_while(
                 (0..24).collect(),
-                Some(1),
+                Inflight { gpu: Some(1), cpu: None },
                 || live.load(Ordering::SeqCst),
                 |k| {
                     if k == 1 {
@@ -694,16 +715,88 @@ mod tests {
     #[test]
     fn cpu_cap_holds_and_combines_with_the_gpu_cap() {
         // #1615: CPU renders had no cap; a GPU cap alone still lapses when the GPU stops.
-        assert_eq!(inflight_cap(None, None), (None, false));
-        assert_eq!(inflight_cap(None, Some(2)), (Some(2), false));
-        assert_eq!(inflight_cap(Some(1), None), (Some(1), true));
-        assert_eq!(inflight_cap(Some(3), Some(2)), (Some(2), false));
-        assert_eq!(inflight_cap(Some(1), Some(4)), (Some(1), false));
+        let caps = |gpu, cpu| Inflight { gpu, cpu };
+        for live in [true, false] {
+            assert_eq!(caps(None, None).renders(live), None);
+            assert_eq!(caps(None, Some(2)).renders(live), Some(2));
+        }
+        assert_eq!(caps(Some(1), None).renders(true), Some(1));
+        assert_eq!(caps(Some(1), None).renders(false), None);
+        assert_eq!(caps(Some(3), Some(2)).renders(true), Some(2));
+        assert_eq!(caps(Some(1), Some(4)).renders(true), Some(1));
+        // Review of #1615: once the GPU stops, the CPU cap applies, not the GPU's 1.
+        assert_eq!(caps(Some(1), Some(4)).renders(false), Some(4));
         // A CPU cap of 2 on 8 threads renders at most 2 frames at once.
         let pool = rayon::ThreadPoolBuilder::new().num_threads(8).build().unwrap();
-        let (out, max) = pool.install(|| run_capped(16, inflight_cap(None, Some(2)).0));
-        assert_eq!(out.len(), 16);
-        assert!(max <= 2, "{max} frames in flight");
+        let (now, max) = (AtomicUsize::new(0), AtomicUsize::new(0));
+        let out = pool.install(|| map_frames_while((0..16).collect(), caps(None, Some(2)), || true, |k| track(&now, &max, k), |_, k| k));
+        assert_eq!(out, (0..16).collect::<Vec<_>>());
+        assert!(max.load(Ordering::SeqCst) <= 2, "{max:?} frames in flight");
+    }
+
+    /// Counts `k` in flight in `now`, records the most in `max`, and holds it for a moment.
+    fn track(now: &AtomicUsize, max: &AtomicUsize, k: u64) -> u64 {
+        let c = now.fetch_add(1, Ordering::SeqCst) + 1;
+        max.fetch_max(c, Ordering::SeqCst);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        now.fetch_sub(1, Ordering::SeqCst);
+        k
+    }
+
+    #[test]
+    fn a_cpu_cap_bounds_the_images_waiting_to_encode() {
+        // Review of #1615: a window of one image per thread was rendered before any encoded, so
+        // a cap of 2 on 8 threads still held 8 finished images.
+        let pool = rayon::ThreadPoolBuilder::new().num_threads(8).build().unwrap();
+        for gpu in [None, Some(1)] {
+            let (held, max) = (AtomicUsize::new(0), AtomicUsize::new(0));
+            let out = pool.install(|| {
+                map_frames_while(
+                    (0..20).collect(),
+                    Inflight { gpu, cpu: Some(2) },
+                    || true,
+                    |k| {
+                        let c = held.fetch_add(1, Ordering::SeqCst) + 1;
+                        max.fetch_max(c, Ordering::SeqCst);
+                        k
+                    },
+                    |k, img| {
+                        held.fetch_sub(1, Ordering::SeqCst);
+                        assert_eq!(k, img);
+                        k
+                    },
+                )
+            });
+            assert_eq!(out, (0..20).collect::<Vec<_>>());
+            assert!(max.load(Ordering::SeqCst) <= 2, "gpu {gpu:?}: {max:?} images held");
+        }
+    }
+
+    #[test]
+    fn the_cpu_cap_takes_over_once_the_gpu_stops() {
+        // Review of #1615: with both caps, frames after the GPU stopped rendered one at a time.
+        let pool = rayon::ThreadPoolBuilder::new().num_threads(8).build().unwrap();
+        let (live, now, max) = (AtomicBool::new(true), AtomicUsize::new(0), AtomicUsize::new(0));
+        let out = pool.install(|| {
+            map_frames_while(
+                (0..40).collect(),
+                Inflight { gpu: Some(1), cpu: Some(4) },
+                || live.load(Ordering::SeqCst),
+                |k| {
+                    if k == 1 {
+                        live.store(false, Ordering::SeqCst);
+                    }
+                    if k < 4 {
+                        return k;
+                    }
+                    track(&now, &max, k)
+                },
+                |_, k| k,
+            )
+        });
+        assert_eq!(out, (0..40).collect::<Vec<_>>());
+        let max = max.load(Ordering::SeqCst);
+        assert!((2..=4).contains(&max), "{max} frames in flight after the GPU stopped");
     }
 
     #[test]
