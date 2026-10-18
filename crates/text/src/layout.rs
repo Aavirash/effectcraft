@@ -565,6 +565,22 @@ fn space_item(glyphs: &mut [ShapedGlyph], style: &TextStyle, text: &str, para_st
     }
 }
 
+/// After Effects' first-baseline offset of paragraph (box) text for a face at nominal size
+/// `px`: the height of its lowercase `d`, in whole thousandths of an em. Measured in After
+/// Effects 2026 (case 818): the first baseline sits 69.50 px below the box top for Times New
+/// Roman at 100 px (its `d` is 1422/2048 em, 694.3 thousandths, rounded 695) and 71.60 px for
+/// Arial (1466/2048, 715.8, rounded 716), at 50 px half of that; superscript text keeps the
+/// line where normal text puts it and only raises its glyphs. `None` without a `d` outline.
+fn first_ascent(face: FaceId, px: f32) -> Option<f32> {
+    let f = fonts::face(face);
+    let gid = f.glyph('d')?;
+    let units = crate::outline_units(face, gid)?;
+    let top = kurbo::Shape::bounding_box(&*units).y1 as f32;
+    let em = (top / f.units_per_em() * 1000.0).round() / 1000.0;
+    let h = em * px;
+    (h.is_finite() && h > 0.0 && em < 4.0).then_some(h)
+}
+
 struct ParaLine {
     range: Range<usize>,
     glyphs: Vec<Glyph>,
@@ -575,6 +591,9 @@ struct ParaLine {
     hang: (f32, f32),
     ascent: f32,
     descent: f32,
+    /// Where a box's first line puts its baseline below the box top ([`first_ascent`] of the
+    /// line's styles at their nominal size; the font ascent where a face has no `d`).
+    first: f32,
     /// Line advance (largest leading on the line).
     advance: f32,
     align: Align,
@@ -611,6 +630,10 @@ fn paragraph(text: &str, base: usize, runs: &[(Range<usize>, TextStyle)], primar
         let st = &runs[si].1;
         fonts::face(primaries[si].face).metrics(st.glyph_size())
     };
+    let style_first = |si: usize| {
+        let st = &runs[si].1;
+        first_ascent(primaries[si].face, st.size).unwrap_or_else(|| fonts::face(primaries[si].face).metrics(st.size).ascent)
+    };
     let eff_align = |last: bool| -> Align {
         if (last || width.is_none()) && para.align == Align::Justify {
             if width.is_none() && para.justify_last == Align::Justify { Align::Left } else { para.justify_last }
@@ -630,6 +653,7 @@ fn paragraph(text: &str, base: usize, runs: &[(Range<usize>, TextStyle)], primar
             hang: (0.0, 0.0),
             ascent: pm.ascent,
             descent: pm.descent,
+            first: style_first(si),
             advance: runs[si].1.line_advance(),
             align: eff_align(true),
             avail: avail_for(true),
@@ -899,7 +923,7 @@ fn paragraph(text: &str, base: usize, runs: &[(Range<usize>, TextStyle)], primar
         carets.sort_by_key(|c| c.0);
         carets.dedup_by_key(|c| c.0);
         // Line metrics: the tallest face and the largest leading on the line.
-        let (mut asc, mut desc, mut adv) = (0.0f32, 0.0f32, 0.0f32);
+        let (mut asc, mut desc, mut adv, mut first) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
         let mut seen: Vec<usize> = chars.iter().filter(|c| c.0 >= r.start && c.0 < r.end).map(|c| c.6).collect();
         seen.sort_unstable();
         seen.dedup();
@@ -912,6 +936,7 @@ fn paragraph(text: &str, base: usize, runs: &[(Range<usize>, TextStyle)], primar
             asc = asc.max(m.ascent + rise.max(0.0));
             desc = desc.max(m.descent - rise.min(0.0));
             adv = adv.max(runs[si].1.line_advance());
+            first = first.max(style_first(si));
         }
         for g in &glyphs {
             if g.face != primaries[g.run].face {
@@ -930,6 +955,7 @@ fn paragraph(text: &str, base: usize, runs: &[(Range<usize>, TextStyle)], primar
             hang,
             ascent: asc,
             descent: desc,
+            first,
             advance: adv,
             align,
             avail,
@@ -985,7 +1011,9 @@ pub fn layout_rich_uncached(text: &str, runs: &[(Range<usize>, TextStyle)], para
     for (i, (pi, pl)) in plines.into_iter().enumerate() {
         let para = para_at(pi);
         if i == 0 {
-            baseline = if width.is_some() { pl.ascent } else { 0.0 };
+            // Vertical type keeps its first column at the font ascent (not measured in AE).
+            let vertical = runs.iter().any(|r| r.1.vertical);
+            baseline = if width.is_some() { if vertical { pl.ascent } else { pl.first } } else { 0.0 };
         } else {
             let prev_para = lay.lines.last().map_or(pi, |l| l.para);
             let mut adv = pl.advance + para.leading;
@@ -1211,6 +1239,42 @@ mod tests {
         }
         let left = layout("the quick brown fox jumps over the lazy dog", &st(40.0), &ParagraphStyle { width: Some(300.0), ..Default::default() });
         assert!(left.lines.iter().all(|l| l.width <= 300.0 + 0.01));
+    }
+
+    /// After Effects 2026 (case 818): box text's first baseline is the `d` height (in whole
+    /// thousandths of an em) below the box top, at the nominal size also for superscript, whose
+    /// glyphs are then raised. EffectCraft used the font ascent of the drawn size (plus the
+    /// superscript rise): 89.1 px instead of 69.5 for Times New Roman at 100 px, and the
+    /// superscript glyphs 15.8 px low.
+    #[test]
+    fn box_text_first_baseline_is_the_d_height_as_after_effects() {
+        let boxed = ParagraphStyle { width: Some(600.0), ..Default::default() };
+        // The rule on a bundled face (works everywhere).
+        for (family, size) in [("Inter", 100.0f32), ("Noto Serif", 50.0)] {
+            let s = TextStyle { family: family.into(), ..st(size) };
+            let r = fonts::resolve(family, "Regular");
+            let f = fonts::face(r.face);
+            let d = crate::outline_units(r.face, f.glyph('d').unwrap()).unwrap();
+            let em = (kurbo::Shape::bounding_box(&*d).y1 as f32 / f.units_per_em() * 1000.0).round() / 1000.0;
+            let l = layout("Hxg", &s, &boxed);
+            assert!((l.lines[0].baseline - em * size).abs() < 1e-3, "{family}: {} vs {}", l.lines[0].baseline, em * size);
+            assert!(l.lines[0].baseline < l.lines[0].ascent, "{family}: below the full ascent");
+        }
+        // After Effects' numbers, where the real fonts are installed.
+        for (family, ae_normal) in [("Times New Roman", 69.5008f32), ("Arial", 71.5988)] {
+            let r = fonts::resolve(family, "Regular");
+            if fonts::face(r.face).info.family != family {
+                continue;
+            }
+            for (size, script, glyph_baseline) in
+                [(100.0, Script::Normal, ae_normal), (50.0, Script::Normal, ae_normal / 2.0), (100.0, Script::Super, ae_normal - 100.0 * SCRIPT_OFFSET)]
+            {
+                let s = TextStyle { family: family.into(), script, ..st(size) };
+                let l = layout("Hxg", &s, &boxed);
+                let drawn = l.glyphs[0].y;
+                assert!((drawn - glyph_baseline).abs() < 0.15, "{family} {size} {script:?}: {drawn} vs AE {glyph_baseline}");
+            }
+        }
     }
 
     #[test]
