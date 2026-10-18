@@ -1,8 +1,16 @@
 //! Markers a WAV file carries, through the fully wired session (media import included): the
-//! layer made from the file starts with them, and Update Markers From Source copies them again.
+//! layer made from the file starts with them, and Update Markers From Source copies them again,
+//! through its bound `layers` parameter as well as the selection, as one undo step.
 
+use effectcraft_engine::Session;
 use effectcraft_project::LayerSource;
 use serde_json::json;
+
+/// The comments of a layer's markers, in time order.
+fn names(s: &mut Session, layer: u64) -> Vec<String> {
+    let list = s.execute_checked("markers.list", json!({"layer": layer})).unwrap();
+    list.as_array().unwrap().iter().map(|m| m["comment"].as_str().unwrap().to_string()).collect()
+}
 
 /// A one-second mono 8 kHz WAV with two named cue points (a `cue ` chunk and a `LIST` `adtl`).
 fn marker_wav() -> Vec<u8> {
@@ -67,9 +75,18 @@ fn a_wav_layer_starts_with_the_markers_in_its_file() {
         list.as_array().unwrap().iter().map(|m| (m["comment"].as_str().unwrap().to_string(), m["time"].as_f64().unwrap())).collect();
     assert_eq!(marks, [("Intro".to_string(), 0.0), ("Middle".to_string(), 0.5)]);
     s.execute_checked("markers.delete", json!({"layer": layer, "index": 0})).unwrap();
+    assert_eq!(names(&mut s, layer), ["Middle"]);
     s.execute_checked("layer.select", json!({"layers": [layer]})).unwrap();
-    assert_eq!(s.execute_checked("layer.updateMarkersFromSource", json!({})).unwrap()["added"], 1);
-    let list = s.execute_checked("markers.list", json!({"layer": layer})).unwrap();
-    assert_eq!(list.as_array().unwrap().len(), 2);
+    // The bound `layers` parameter (what a script or the menu's own binding passes) brings the marker back...
+    let r = s.execute_checked("layer.updateMarkersFromSource", json!({"layers": [layer]})).unwrap();
+    assert_eq!(r["added"], 1);
+    assert_eq!(names(&mut s, layer), ["Intro", "Middle"]);
+    // ...as one undo step: undo removes it again, redo restores it.
+    assert!(s.undo());
+    assert_eq!(names(&mut s, layer), ["Middle"]);
+    assert!(s.redo());
+    assert_eq!(names(&mut s, layer), ["Intro", "Middle"]);
+    // The selection route (no parameter) finds nothing more to add.
+    assert_eq!(s.execute_checked("layer.updateMarkersFromSource", json!({})).unwrap()["added"], 0);
     let _ = std::fs::remove_dir_all(&dir);
 }
