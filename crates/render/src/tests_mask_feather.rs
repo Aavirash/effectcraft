@@ -26,18 +26,28 @@ fn add_mask(p: &mut Project, l: &mut Layer, rect: ShapePath, feather: [f64; 2], 
     l.props.sub_mut("masks").unwrap().children.push(Node::Group(m));
 }
 
-/// The standard normal distribution function (Abramowitz and Stegun 7.1.26, error < 2e-7).
-fn phi(x: f64) -> f64 {
-    let z = x.abs() / std::f64::consts::SQRT_2;
-    let t = 1.0 / (1.0 + 0.327_591_1 * z);
-    let poly = t * (0.254_829_592 + t * (-0.284_496_736 + t * (1.421_413_741 + t * (-1.453_152_027 + t * 1.061_405_429))));
-    let erf = 1.0 - poly * (-z * z).exp();
-    if x >= 0.0 { 0.5 * (1.0 + erf) } else { 0.5 * (1.0 - erf) }
+/// Coverage at signed distance `d` inside an edge blurred by three box passes `w` pixels wide
+/// (the Smooth falloff: an Irwin-Hall n = 3 distribution function, support +-1.5 w).
+fn edge(d: f64, w: f64) -> f64 {
+    let t = (d / w + 1.5).clamp(0.0, 3.0);
+    if t < 1.0 {
+        t * t * t / 6.0
+    } else if t < 2.0 {
+        (-2.0 * t * t * t + 9.0 * t * t - 9.0 * t + 3.0) / 6.0
+    } else {
+        1.0 - (3.0 - t).powi(3) / 6.0
+    }
 }
 
-/// Coverage at pixel centre `x` of the span `a..b` blurred by a Gaussian of `sigma` (one axis).
-fn span(x: f64, a: f64, b: f64, sigma: f64) -> f64 {
-    phi((b - x) / sigma) - phi((a - x) / sigma)
+/// The box window of the Smooth falloff for `feather` pixels: `2 round(0.37 feather) + 1`.
+fn window(feather: f64) -> f64 {
+    2.0 * (0.37 * feather).round() + 1.0
+}
+
+/// Coverage at pixel centre `x` of the span `a..b` feathered by `feather` (one axis).
+fn span(x: f64, a: f64, b: f64, feather: f64) -> f64 {
+    let w = window(feather);
+    edge(x - a, w) + edge(b - x, w) - 1.0
 }
 
 /// A white 200×100 solid (32 bpc) with one Add mask.
@@ -54,15 +64,16 @@ fn white_with_mask(rect: ShapePath, feather: [f64; 2], linear: bool, scale: f64)
 
 #[test]
 fn a_feathered_mask_outside_a_solid_reaches_into_it() {
-    // The mask spans x 210..260, right of the layer (x 0..200); feather 40 = Gaussian sigma 20.
+    // The mask spans x 210..260, right of the layer (x 0..200); feather 40 = three 31 px boxes.
     let img = white_with_mask(ShapePath::rect([235.0, 50.0], 50.0, 200.0), [40.0, 40.0], false, 1.0);
-    for x in [150i64, 180, 199] {
-        let want = span(x as f64 + 0.5, 210.0, 260.0, 20.0) * span(50.5, -50.0, 150.0, 20.0);
+    for x in [150i64, 170, 180, 199] {
+        let want = span(x as f64 + 0.5, 210.0, 260.0, 40.0) * span(50.5, -50.0, 150.0, 40.0);
         let got = img.get(x, 50)[3] as f64;
-        assert!((got - want).abs() < 0.01, "x {x}: alpha {got}, the Gaussian gives {want}");
+        assert!((got - want).abs() < 0.01, "x {x}: alpha {got}, the box kernel gives {want}");
     }
     assert!(img.get(199, 50)[3] > 0.25, "the feather reaches the layer edge");
-    assert!(img.get(100, 50)[3] < 1e-3);
+    // Finite support: nothing beyond 1.5 windows (46.5 px) from the edge.
+    assert!(img.get(160, 50)[3] == 0.0 && img.get(100, 50)[3] == 0.0);
     // Without feather the mask hides the layer.
     let hard = white_with_mask(ShapePath::rect([235.0, 50.0], 50.0, 200.0), [0.0, 0.0], false, 1.0);
     assert!(hard.data.iter().all(|p| p[3] == 0.0));
@@ -151,23 +162,21 @@ fn case_398_a_feathered_mask_below_an_adjustment_layer_reaches_into_it() {
     let mut report = Vec::new();
     for ((x, y), want_ae) in ae {
         let got = rgb8(&img, x, y);
-        // 1. The fix: the coverage is the mask's Gaussian (sigma = feather / 2 = 500), blurred from
-        //    the mask edge outside the layer; the result is the red mixed toward the ramp by it.
-        let c = span(x as f64 + 0.5, 0.0, 1920.0, 500.0) * span(y as f64 + 0.5, 1150.0, 1350.0, 500.0);
+        // 1. The coverage is the mask's Smooth falloff (three 741 px boxes for feather 1000),
+        //    blurred from the mask edge outside the layer (on the coarse grid); the result is the
+        //    red mixed toward the ramp by it.
+        let c = span(x as f64 + 0.5, 0.0, 1920.0, 1000.0) * span(y as f64 + 0.5, 1150.0, 1350.0, 1000.0);
         let r = ramp.get(x, y);
         let want = [0, 1, 2].map(|k| {
             let red = if k == 0 { 1.0 } else { 0.0 };
             ((red + (r[k] as f64 - red) * c) * 255.0).round() as i32
         });
         for k in 0..3 {
-            assert!((got[k] - want[k]).abs() <= 3, "({x}, {y}): {got:?}, the Gaussian coverage {c:.4} gives {want:?}");
+            assert!((got[k] - want[k]).abs() <= 2, "({x}, {y}): {got:?}, the box coverage {c:.4} gives {want:?}");
         }
-        // 2. After Effects: the same shape of falloff, the feather reaching ~500 px into the layer.
-        //    Its kernel is narrower than sigma = feather / 2 (the AE values fit sigma ~ 350), so
-        //    near the mask EffectCraft is lower and far from it higher: 12 levels apart at most
-        //    (green at the bottom edge), allowed 14.
+        // 2. After Effects: within 2 levels per channel.
         for k in 0..3 {
-            assert!((got[k] - want_ae[k]).abs() <= 14, "({x}, {y}): EffectCraft {got:?}, After Effects {want_ae:?}");
+            assert!((got[k] - want_ae[k]).abs() <= 2, "({x}, {y}): EffectCraft {got:?}, After Effects {want_ae:?}");
         }
         report.push(format!("({x},{y}) ec {got:?} ae {want_ae:?}"));
     }
@@ -175,4 +184,68 @@ fn case_398_a_feathered_mask_below_an_adjustment_layer_reaches_into_it() {
     // The mask covers nothing of the layer itself, but its feather does: the top stays (nearly) red.
     assert!(rgb8(&img, 960, 0)[0] >= 253 && rgb8(&img, 960, 0)[1] == 0);
     assert!(rgb8(&img, 960, 1079)[1] > 25, "the feather reaches the bottom edge");
+}
+
+/// After Effects 2026 (sRGB, 32 bpc): a red 1920x1080 solid with a 1000x600 Add mask centred at
+/// [960, 540] (left edge at x 460), feather `f` on both axes; coverage along the row y 540 from
+/// x 160 to 760 in steps of 20 (8-bit values / 255).
+const AE_FEATHER_100: [(i64, f64); 11] =
+    [(360, 0.0), (380, 0.016), (400, 0.059), (420, 0.153), (440, 0.31), (460, 0.506), (480, 0.698), (500, 0.855), (520, 0.945), (540, 0.988), (560, 1.0)];
+const AE_FEATHER_300: [(i64, f64); 31] = [
+    (160, 0.0),
+    (180, 0.004),
+    (200, 0.008),
+    (220, 0.012),
+    (240, 0.024),
+    (260, 0.035),
+    (280, 0.055),
+    (300, 0.078),
+    (320, 0.11),
+    (340, 0.149),
+    (360, 0.192),
+    (380, 0.247),
+    (400, 0.306),
+    (420, 0.369),
+    (440, 0.435),
+    (460, 0.502),
+    (480, 0.569),
+    (500, 0.635),
+    (520, 0.698),
+    (540, 0.757),
+    (560, 0.808),
+    (580, 0.851),
+    (600, 0.89),
+    (620, 0.922),
+    (640, 0.945),
+    (660, 0.965),
+    (680, 0.976),
+    (700, 0.988),
+    (720, 0.992),
+    (740, 0.996),
+    (760, 1.0),
+];
+
+#[test]
+fn the_smooth_feather_falloff_matches_after_effects() {
+    for (f, ae) in [(100.0, &AE_FEATHER_100[..]), (300.0, &AE_FEATHER_300[..])] {
+        let mut p = Project::default();
+        p.settings.bit_depth = BitDepth::Bpc32;
+        let comp = Comp::new(1920, 1080, FrameRate::FPS_30, Tick::from_seconds_f64(1.0));
+        let cid = p.add_item("Comp", Label::Sandstone, None, ItemKind::Comp(comp.clone().into()));
+        let mut l = solid(&mut p, &comp, [1.0, 0.0, 0.0], 1920, 1080);
+        add_mask(&mut p, &mut l, ShapePath::rect([960.0, 540.0], 1000.0, 600.0), [f, f], false);
+        p.comp_mut(cid).unwrap().layers.push(l);
+        let img = render_frame(&p, cid, Tick::ZERO, 1.0);
+        let mut worst = 0.0f64;
+        for &(x, want) in ae {
+            let got = img.get(x, 540)[3] as f64;
+            // Tolerance 2/255 on the 8-bit After Effects values.
+            assert!((got - want).abs() <= 2.0 / 255.0, "feather {f}, x {x}: {got:.4}, After Effects {want}");
+            worst = worst.max((got - want).abs());
+        }
+        // The corner is the product of its two edges (a separable blur): 0.25 for both feathers.
+        let corner = img.get(460, 240)[3] as f64;
+        assert!((corner - 0.251).abs() <= 2.0 / 255.0, "feather {f}: corner {corner}");
+        println!("feather {f}: largest deviation from After Effects {:.2}/255", worst * 255.0);
+    }
 }
