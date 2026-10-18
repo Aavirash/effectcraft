@@ -689,3 +689,35 @@ fn template_frame_output_cannot_alias_its_values_through_a_hard_link() {
     assert_eq!(reply["error"], "--out hard-linked-values.png would overwrite --values values.json", "{reply}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn template_values_fill_a_media_replacement_control_with_a_file_path() {
+    let temp_root = std::env::temp_dir().canonicalize().unwrap();
+    let dir = temp_root.join(format!("ec-qa-template-media-control-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("build.jsx"), BUILD).unwrap();
+    ok(&dir, &["script", "build.jsx", "--save-as", "t.ecproj"]);
+    image::RgbaImage::from_pixel(2, 2, image::Rgba([30, 60, 90, 255])).save(dir.join("source.png")).unwrap();
+    image::RgbaImage::from_pixel(2, 2, image::Rgba([200, 20, 40, 255])).save(dir.join("other.png")).unwrap();
+    let imported = ok(&dir, &["exec", "file.import", r#"{"paths":["source.png"]}"#, "t.ecproj", "--save"]);
+    let item = imported["result"]["items"][0].as_u64().unwrap();
+    let params = serde_json::json!({"comp": "Lower Third", "item": item, "position": [8, 8], "time": 0}).to_string();
+    let added = ok(&dir, &["exec", "layer.addItem", &params, "t.ecproj", "--save"]);
+    let layer = added["result"]["layer"].as_u64().unwrap();
+    let params = serde_json::json!({"comp": "Lower Third", "layer": layer, "name": "Clip"}).to_string();
+    ok(&dir, &["exec", "essential.addMedia", &params, "t.ecproj", "--save"]);
+    ok(&dir, &["exec", "essential.exportTemplate", r#"{"comp":"Lower Third","path":"lt.ectemplate"}"#, "t.ecproj"]);
+
+    std::fs::write(dir.join("values.json"), r#"{"Clip":"other.png"}"#).unwrap();
+    ok(&dir, &["render-frame", "--template", "lt.ectemplate", "--values", "values.json", "--time", "1", "--out", "out.png"]);
+    let px = image::open(dir.join("out.png")).unwrap().to_rgba8().get_pixel(8, 8).0;
+    assert!((px[0] as i32 - 200).abs() <= 2 && (px[1] as i32 - 20).abs() <= 2 && (px[2] as i32 - 40).abs() <= 2, "replacement media rendered: {px:?}");
+
+    // A control that is not given a path is rejected with a clear message.
+    std::fs::write(dir.join("bad.json"), r#"{"Clip":5}"#).unwrap();
+    let (code, reply) = cli(&dir, &["render-frame", "--template", "lt.ectemplate", "--values", "bad.json", "--time", "1", "--out", "bad.png"]);
+    assert_eq!(code, 1, "{reply}");
+    assert!(reply["error"].as_str().unwrap().contains("media control"), "{reply}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
