@@ -199,4 +199,10 @@ fn save_frame_as_defaults_to_png_sequence_with_alpha() {
     let it = s.project.render_queue.last().unwrap();
     assert_eq!(it.output.name, "PNG Sequence with Alpha");
     assert_eq!(it.output.channels, effectcraft_project::render_queue::Channels::Rgba);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert!(s.project.render_queue.is_empty());
+    s.execute("edit.redo", json!({})).unwrap();
+    let it = s.project.render_queue.last().unwrap();
+    assert_eq!(it.output.name, "PNG Sequence with Alpha");
+    assert_eq!(it.output.channels, effectcraft_project::render_queue::Channels::Rgba);
 }
