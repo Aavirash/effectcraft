@@ -377,6 +377,41 @@ fn startup_finishes_when_extended_viewer_frames_are_larger() {
     assert_eq!(audio_frame(&h, cid), Some(0), "from the first frame");
 }
 
+/// A first frame that takes longer than STARTUP_WAIT to be cached (a heavy comp, a busy machine;
+/// here it can't be cached until the RAM preview grows): the start keeps holding it, then the
+/// sound starts from it and keeps playing. It used to give up two seconds after Play, start the
+/// sound on the uncached frame and stop it at once, so the opening played silently.
+#[test]
+fn a_slow_first_frame_keeps_its_opening_sound() {
+    let fake = Fake::default();
+    let (mut h, cid, size) = extended_viewer(&fake);
+    let (comp_bytes, real_bytes) = (160 * 120 * 4, size[0] * size[1] * 4);
+    assert!(real_bytes > comp_bytes * 2, "Extended Viewer frames ({size:?}) are larger than the comp");
+    h.state().frames.set_budget((comp_bytes + real_bytes) / 2);
+    h.state().frames.clear();
+    let start = h.ctx.input(|i| i.time);
+    h.state_mut().play(start);
+    while h.ctx.input(|i| i.time) - start < 3.0 {
+        h.step();
+        assert!(h.state().playback.starting, "it still holds the first frame");
+        assert_eq!(frame(&h, cid), 0);
+    }
+    assert!(fake.0.lock().unwrap().0.is_none(), "no sound yet");
+    h.state().frames.set_budget(1 << 30);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while h.state().playback.starting && std::time::Instant::now() < deadline {
+        h.step();
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert!(!h.state().playback.starting, "the preview left its startup");
+    assert_eq!(audio_frame(&h, cid), Some(0), "with its sound from the first frame");
+    let (started, stopped) = {
+        let d = fake.0.lock().unwrap();
+        (d.0.is_some(), d.1)
+    };
+    assert!(started && !stopped, "the device started and kept playing");
+}
+
 /// An output device whose start fails.
 #[derive(Clone, Default)]
 struct Broken;
@@ -460,7 +495,8 @@ fn a_started_preview_follows_its_sound() {
 }
 
 /// A RAM preview that can't hold even one frame (none, or half of one): the start doesn't wait
-/// for frames that can never be cached; the sound starts at once from the first frame.
+/// for frames that can never be cached. The sound isn't started on a frame that can't be shown
+/// (a stall would stop it at once): the preview goes on as a stalled one does.
 #[test]
 fn startup_does_not_wait_when_the_ram_preview_holds_no_frame() {
     for budget in [0, 9216 / 2] {
@@ -474,16 +510,16 @@ fn startup_does_not_wait_when_the_ram_preview_holds_no_frame() {
         h.state_mut().play(now);
         h.step();
         assert!(!h.state().playback.starting, "budget {budget}: no wait");
-        assert!(fake.0.lock().unwrap().0.is_some(), "budget {budget}: the sound started");
-        assert!(h.state().playback.playing);
+        assert!(fake.0.lock().unwrap().0.is_none(), "budget {budget}: no sound started and dropped");
+        assert!(h.state().playback.playing && h.state().playback.audio_held, "budget {budget}: it goes on as a stalled preview");
     }
 }
 
 /// A frame that never gets cached although the estimate says one fits (an Extended Viewer frame
-/// larger than the whole budget): the start gives up after a short wait instead of holding the
-/// first frame for ever, and the sound starts from it.
+/// larger than the whole budget): the start gives up after STARTUP_LIMIT instead of holding the
+/// first frame for ever, without starting the sound on a frame it can't show.
 #[test]
-fn startup_gives_up_after_a_short_wait() {
+fn startup_gives_up_on_a_first_frame_that_never_caches() {
     let fake = Fake::default();
     let (mut h, cid, size) = extended_viewer(&fake);
     let (comp_bytes, real_bytes) = (160 * 120 * 4, size[0] * size[1] * 4);
@@ -501,6 +537,7 @@ fn startup_gives_up_after_a_short_wait() {
     }
     let waited = h.ctx.input(|i| i.time) - start;
     assert!(!h.state().playback.starting, "it gave up waiting");
-    assert!((1.9..4.0).contains(&waited), "after about two seconds ({waited:.2} s)");
-    assert!(fake.0.lock().unwrap().0.is_some(), "and the sound started");
+    assert!((9.9..12.0).contains(&waited), "after about ten seconds ({waited:.2} s)");
+    assert!(fake.0.lock().unwrap().0.is_none(), "no sound started and dropped");
+    assert!(h.state().playback.playing && h.state().playback.audio_held, "it goes on as a stalled preview");
 }

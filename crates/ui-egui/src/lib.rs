@@ -52,11 +52,17 @@ const SCREENSHOT_TIMEOUT_S: f64 = 4.0;
 /// [`EffectcraftApp::editing`]).
 const EDIT_QUIET: f64 = 0.3;
 
-/// Longest a preview with sound holds its first frame waiting for frames (seconds, #947). A frame
-/// that never gets cached (larger than the RAM preview, which the size estimate can't always
-/// tell) mustn't hold it for ever: the sound starts from the first frame anyway, and the preview
-/// goes on as a stalled one does.
+/// Longest a preview with sound holds its first frame, once that frame is cached, waiting for the
+/// frames ahead (seconds, #947). A frame ahead that never gets cached mustn't hold it for ever:
+/// the sound starts from the first frame anyway, and the preview goes on as a stalled one does.
 const STARTUP_WAIT: f64 = 2.0;
+
+/// Longest a preview with sound holds its first frame in all (seconds, #947). The first frame
+/// itself can take a while (a heavy comp, a busy machine), and [`STARTUP_WAIT`] counts only from
+/// when it is cached; but one that never gets cached (larger than the RAM preview, which the size
+/// estimate can't always tell) mustn't hold it for ever. The preview then goes on as a stalled
+/// one does: its sound starts once the frames are cached.
+const STARTUP_LIMIT: f64 = 10.0;
 
 /// How many frames from the first a preview with sound waits for before it starts (#947): the
 /// prefetch's `ahead`, but no more than its `window` requests from the current frame (offsets
@@ -240,8 +246,11 @@ pub struct Playback {
     /// while they rendered and the sound started at the later frame, so the opening was lost.
     /// A stall later on still falls back to [`Playback::audio_held`].
     pub starting: bool,
-    /// When the preview started (seconds): [`Playback::starting`] gives up after [`STARTUP_WAIT`].
+    /// When the preview started (seconds): [`Playback::starting`] gives up after [`STARTUP_LIMIT`].
     pub starting_since: f64,
+    /// When the first frame was cached while [`Playback::starting`] (seconds): the wait for the
+    /// frames ahead gives up [`STARTUP_WAIT`] after it.
+    pub first_cached: Option<f64>,
     /// When the last frames were shown (seconds, the last second's worth): the achieved rate.
     pub shown_at: std::collections::VecDeque<f64>,
 }
@@ -1031,6 +1040,7 @@ impl EffectcraftApp {
             audio_held: false,
             starting: false,
             starting_since: now,
+            first_cached: None,
             shown_at: Default::default(),
         };
         if !self.playback.caching {
@@ -1307,18 +1317,28 @@ impl EffectcraftApp {
                 let [w, h] = img.size();
                 startup_frames(ahead, window, self.frames.budget(), w.saturating_mul(h).saturating_mul(4))
             });
-            // Don't wait for frames the RAM preview can't hold (not even one frame fits), nor for
-            // longer than STARTUP_WAIT (a frame that never gets cached).
-            let give_up = (self.frames.budget() as f64) < self.frame_bytes(&c, scale) || now - self.playback.starting_since >= STARTUP_WAIT;
+            if need.is_some() && self.playback.first_cached.is_none() {
+                self.playback.first_cached = Some(now);
+            }
+            // Don't wait for frames the RAM preview can't hold (not even one frame fits), for the
+            // frames ahead longer than STARTUP_WAIT once the first is in, nor longer than
+            // STARTUP_LIMIT in all (a frame that never gets cached).
+            let give_up = (self.frames.budget() as f64) < self.frame_bytes(&c, scale)
+                || self.playback.first_cached.is_some_and(|t| now - t >= STARTUP_WAIT)
+                || now - self.playback.starting_since >= STARTUP_LIMIT;
             if !give_up && !need.is_some_and(|n| self.cached_ahead(&p, &series, cur, n)) {
                 self.playback.waiting = true;
                 ctx.request_repaint();
                 return;
             }
             self.playback.starting = false;
-            self.playback.audio_held = false;
             self.playback.waiting = false;
-            self.start_audio(fr.tick_of(cur));
+            // Not on a frame that isn't cached: the stall below would stop the sound at once. The
+            // preview goes on as a stalled one does, and the sound starts once frames are cached.
+            if need.is_some() {
+                self.playback.audio_held = false;
+                self.start_audio(fr.tick_of(cur));
+            }
         }
         // Held sound starts once the frames ahead are cached again after a stall (see
         // `Playback::audio_held`): the prefetch window when the silent preview keeps real time,
