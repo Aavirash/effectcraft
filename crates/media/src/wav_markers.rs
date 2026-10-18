@@ -7,8 +7,13 @@
 //!   one entry per marker (`xmpDM:startTime`, `xmpDM:duration`, `xmpDM:name`), counted in frames
 //!   of `xmpDM:frameRate` (`f44100` for samples at 44.1 kHz).
 //!
+//! RF64 files (WAVs over 4 GB) carry a `0xFFFFFFFF` size for a chunk too big for 32 bits and give its real size in a
+//! `ds64` chunk; those sizes are resolved so the chunks after the audio are still found.
+//!
 //! The file is untrusted input: every read is bounds-checked, sizes use checked arithmetic, and
-//! the number of markers and the size of the XMP packet are capped.
+//! the number of markers, of `adtl` sub-chunks looked at and the size of the XMP packet are capped.
+
+use std::collections::{HashMap, HashSet};
 
 use effectcraft_color::Label;
 use effectcraft_project::Marker;
@@ -18,10 +23,19 @@ use effectcraft_time::Tick;
 pub const MAX_MARKERS: usize = 10_000;
 /// Largest XMP packet read (bytes).
 const MAX_XMP: usize = 4 << 20;
+/// Most `adtl` sub-chunks (`labl`, `note`, `ltxt`) looked at in one file: a few per cue point is plenty.
+const MAX_ADTL_RECORDS: usize = 4 * MAX_MARKERS;
+/// Most entries read from an RF64 file's `ds64` size table.
+const MAX_DS64_TABLE: usize = 1_024;
 
 fn u32_at(b: &[u8], at: usize) -> Option<u32> {
     let s = b.get(at..at.checked_add(4)?)?;
     Some(u32::from_le_bytes(s.try_into().ok()?))
+}
+
+fn u64_at(b: &[u8], at: usize) -> Option<u64> {
+    let s = b.get(at..at.checked_add(8)?)?;
+    Some(u64::from_le_bytes(s.try_into().ok()?))
 }
 
 /// The text of a NUL-terminated label (the rest of the chunk), lossily decoded.
@@ -39,14 +53,55 @@ pub fn is_wav(bytes: &[u8]) -> bool {
     matches!(bytes.get(0..4), Some(b"RIFF" | b"RF64")) && bytes.get(8..12) == Some(b"WAVE")
 }
 
+/// The sizes an RF64 file's `ds64` chunk gives for chunks too big for the 32-bit size field.
+struct Ds64 {
+    /// The `data` chunk's size.
+    data: u64,
+    /// Other chunks: `(id, size)`.
+    table: Vec<([u8; 4], u64)>,
+}
+
+impl Ds64 {
+    /// The real size of chunk `id`, when the file says.
+    fn size_of(&self, id: &[u8; 4]) -> Option<u64> {
+        if id == b"data" { Some(self.data) } else { self.table.iter().find(|(t, _)| t == id).map(|(_, size)| *size) }
+    }
+}
+
+/// The `ds64` chunk of an RF64 file (`RF64`, size, `WAVE`, then `ds64`); `None` for any other file or one whose
+/// `ds64` doesn't fit.
+fn ds64(bytes: &[u8]) -> Option<Ds64> {
+    if bytes.get(0..4) != Some(b"RF64") || bytes.get(12..16) != Some(b"ds64") {
+        return None;
+    }
+    let size = usize::try_from(u32_at(bytes, 16)?).ok()?;
+    let body = bytes.get(20..20usize.checked_add(size)?)?;
+    // riff size (8), data size (8), sample count (8), table length (4), then `(id, size)` entries of 12 bytes
+    let data = u64_at(body, 8)?;
+    let entries = usize::try_from(u32_at(body, 24)?).ok()?;
+    let mut table = Vec::new();
+    for i in 0..entries.min(MAX_DS64_TABLE) {
+        let at = 28usize.checked_add(i.checked_mul(12)?)?;
+        let id = <[u8; 4]>::try_from(body.get(at..at.checked_add(4)?)?).ok()?;
+        table.push((id, u64_at(body, at + 4)?));
+    }
+    Some(Ds64 { data, table })
+}
+
 /// The chunks of a WAVE file as `(id, body)`, stopping at the first one that doesn't fit.
 fn chunks(bytes: &[u8]) -> Vec<([u8; 4], &[u8])> {
+    let big = ds64(bytes);
     let mut out = Vec::new();
     let mut at = 12usize;
     while let Some(head) = bytes.get(at..at.saturating_add(8)) {
-        let (Ok(id), Some(size)) = (<[u8; 4]>::try_from(&head[..4]), u32_at(head, 4)) else { break };
+        let (Ok(id), Some(field)) = (<[u8; 4]>::try_from(&head[..4]), u32_at(head, 4)) else { break };
+        // In an RF64 file a size field of 0xFFFFFFFF stands for the size `ds64` gives.
+        let size = match &big {
+            Some(d) if field == u32::MAX => d.size_of(&id).unwrap_or(u64::from(field)),
+            _ => u64::from(field),
+        };
         let start = at.saturating_add(8);
-        let Some(end) = start.checked_add(size as usize) else { break };
+        let Some(end) = usize::try_from(size).ok().and_then(|n| start.checked_add(n)) else { break };
         let Some(body) = bytes.get(start..end) else { break };
         out.push((id, body));
         // Chunks are padded to an even size.
@@ -64,9 +119,10 @@ pub fn read(bytes: &[u8]) -> Vec<Marker> {
     let rate = chunks.iter().find(|(id, _)| id == b"fmt ").and_then(|(_, b)| u32_at(b, 4)).map_or(0.0, f64::from);
     let mut out = cue_markers(&chunks, rate);
     if let Some((_, xmp)) = chunks.iter().find(|(id, _)| id == b"_PMX") {
+        // Tools that write both encodings repeat each marker.
+        let mut seen: HashSet<(String, Tick)> = out.iter().map(|o| (o.comment.clone(), o.time)).collect();
         for m in xmp_markers(xmp, rate) {
-            // Tools that write both encodings repeat each marker.
-            if !out.iter().any(|o| o.comment == m.comment && o.time == m.time) {
+            if seen.insert((m.comment.clone(), m.time)) {
                 out.push(m);
             }
         }
@@ -80,43 +136,57 @@ pub fn read(bytes: &[u8]) -> Vec<Marker> {
 fn cue_markers(chunks: &[([u8; 4], &[u8])], rate: f64) -> Vec<Marker> {
     let Some((_, cue)) = chunks.iter().find(|(id, _)| id == b"cue ") else { return Vec::new() };
     let count = (u32_at(cue, 0).unwrap_or(0) as usize).min(MAX_MARKERS);
-    // Cue id -> (name, length in samples).
-    let mut names: Vec<(u32, String)> = Vec::new();
-    let mut lengths: Vec<(u32, u32)> = Vec::new();
-    for (_, list) in chunks.iter().filter(|(id, b)| id == b"LIST" && b.get(0..4) == Some(b"adtl")) {
+    // The cue points first: `(id, offset in samples)`.
+    let mut points = Vec::new();
+    for i in 0..count {
+        let Some(point) = cue.get(4usize.saturating_add(i.saturating_mul(24))..) else { break };
+        let (Some(id), Some(offset)) = (u32_at(point, 0), u32_at(point, 20)) else { break };
+        points.push((id, offset));
+    }
+    // Only the names and lengths of those ids are kept, so a hostile `adtl` list cannot grow them past the cue count,
+    // and each record is a lookup, not a scan.
+    let wanted: HashSet<u32> = points.iter().map(|(id, _)| *id).collect();
+    let mut names: HashMap<u32, String> = HashMap::new();
+    let mut lengths: HashMap<u32, u32> = HashMap::new();
+    let mut records = 0usize;
+    'lists: for (_, list) in chunks.iter().filter(|(id, b)| id == b"LIST" && b.get(0..4) == Some(b"adtl")) {
         let mut at = 4usize;
         while let Some(head) = list.get(at..at.saturating_add(8)) {
             let (Ok(id), Some(size)) = (<[u8; 4]>::try_from(&head[..4]), u32_at(head, 4)) else { break };
             let start = at.saturating_add(8);
             let Some(end) = start.checked_add(size as usize) else { break };
             let Some(body) = list.get(start..end) else { break };
-            if let Some(cue_id) = u32_at(body, 0) {
+            records += 1;
+            if records > MAX_ADTL_RECORDS {
+                break 'lists;
+            }
+            if let Some(cue_id) = u32_at(body, 0).filter(|c| wanted.contains(c)) {
                 match &id {
-                    b"labl" | b"note" => {
-                        let text = label(body.get(4..).unwrap_or_default());
-                        // A `labl` is the name; a `note` only when there is none.
-                        let known = names.iter().any(|(c, _)| *c == cue_id);
-                        if &id == b"labl" || !known {
-                            names.retain(|(c, _)| *c != cue_id);
-                            names.push((cue_id, text));
-                        }
+                    // A `labl` is the name; a `note` only when there is none.
+                    b"labl" => {
+                        names.insert(cue_id, label(body.get(4..).unwrap_or_default()));
                     }
-                    b"ltxt" => lengths.push((cue_id, u32_at(body, 4).unwrap_or(0))),
+                    b"note" => {
+                        names.entry(cue_id).or_insert_with(|| label(body.get(4..).unwrap_or_default()));
+                    }
+                    // The first `ltxt` of a cue point gives its length.
+                    b"ltxt" => {
+                        lengths.entry(cue_id).or_insert_with(|| u32_at(body, 4).unwrap_or(0));
+                    }
                     _ => {}
                 }
             }
             at = end.saturating_add(end & 1);
         }
     }
-    let mut out = Vec::new();
-    for i in 0..count {
-        let Some(point) = cue.get(4usize.saturating_add(i.saturating_mul(24))..) else { break };
-        let (Some(id), Some(offset)) = (u32_at(point, 0), u32_at(point, 20)) else { break };
-        let comment = names.iter().find(|(c, _)| *c == id).map(|(_, t)| t.clone()).unwrap_or_default();
-        let length = lengths.iter().find(|(c, _)| *c == id).map_or(0, |(_, l)| *l);
-        out.push(Marker { time: secs(f64::from(offset), rate), duration: secs(f64::from(length), rate), comment, label: Label::None, ..Default::default() });
-    }
-    out
+    points
+        .into_iter()
+        .map(|(id, offset)| {
+            let comment = names.get(&id).cloned().unwrap_or_default();
+            let length = lengths.get(&id).copied().unwrap_or(0);
+            Marker { time: secs(f64::from(offset), rate), duration: secs(f64::from(length), rate), comment, label: Label::None, ..Default::default() }
+        })
+        .collect()
 }
 
 /// The text of `name` in an XMP entry, as an attribute (`name="v"`) or an element
@@ -346,5 +416,102 @@ mod tests {
         // No sample rate: times are zero, not a division by zero.
         let m = read(&wav(&[cue(&[(1, 44100)])]));
         assert_eq!(m[0].time, Tick::ZERO);
+    }
+
+    /// A chunk whose size field says `field` (an RF64 file's `0xFFFFFFFF`) while its body is `body`.
+    fn chunk_with_size_field(id: &[u8; 4], field: u32, body: &[u8]) -> Vec<u8> {
+        let mut v = id.to_vec();
+        v.extend(field.to_le_bytes());
+        v.extend(body);
+        if body.len() % 2 == 1 {
+            v.push(0);
+        }
+        v
+    }
+
+    /// An RF64 `ds64` chunk: the `data` chunk's size and a table of other chunks' sizes.
+    fn ds64_chunk(data_size: u64, table: &[([u8; 4], u64)]) -> Vec<u8> {
+        let mut b = 0u64.to_le_bytes().to_vec(); // riff size (not used)
+        b.extend(data_size.to_le_bytes());
+        b.extend(0u64.to_le_bytes()); // sample count
+        b.extend((table.len() as u32).to_le_bytes());
+        for (id, size) in table {
+            b.extend(id);
+            b.extend(size.to_le_bytes());
+        }
+        chunk(b"ds64", &b)
+    }
+
+    fn rf64(chunks: &[Vec<u8>]) -> Vec<u8> {
+        let body: Vec<u8> = chunks.iter().flatten().copied().collect();
+        let mut v = b"RF64".to_vec();
+        v.extend(u32::MAX.to_le_bytes());
+        v.extend(b"WAVE");
+        v.extend(body);
+        v
+    }
+
+    #[test]
+    fn rf64_markers_after_a_data_chunk_of_sentinel_size_are_read() {
+        let audio = [0u8; 8];
+        let file = rf64(&[
+            ds64_chunk(audio.len() as u64, &[]),
+            fmt(44100),
+            chunk_with_size_field(b"data", u32::MAX, &audio),
+            cue(&[(1, 44100)]),
+            adtl(&[labl(b"labl", 1, "After the audio")]),
+        ]);
+        let m = read(&file);
+        assert_eq!(m.len(), 1);
+        assert_eq!((m[0].comment.as_str(), m[0].time), ("After the audio", Tick::from_seconds_f64(1.0)));
+    }
+
+    #[test]
+    fn rf64_sizes_of_other_chunks_come_from_the_ds64_table() {
+        let junk = [7u8; 6];
+        let tail = || [cue(&[(1, 8000)]), adtl(&[labl(b"labl", 1, "Found")])].concat();
+        let with_entry = rf64(&[ds64_chunk(0, &[(*b"junk", junk.len() as u64)]), fmt(8000), chunk_with_size_field(b"junk", u32::MAX, &junk), tail()]);
+        assert_eq!(read(&with_entry)[0].comment, "Found");
+        // Without the table entry the sentinel is all there is, and what follows is not reached.
+        let without = rf64(&[ds64_chunk(0, &[]), fmt(8000), chunk_with_size_field(b"junk", u32::MAX, &junk), tail()]);
+        assert!(read(&without).is_empty());
+    }
+
+    #[test]
+    fn hostile_rf64_size_tables_read_as_far_as_they_go_without_panicking() {
+        // sizes that overflow when added to an offset
+        for data in [u64::MAX, u64::MAX - 7, 1 << 63] {
+            let file = rf64(&[ds64_chunk(data, &[(*b"junk", u64::MAX)]), fmt(8000), chunk_with_size_field(b"data", u32::MAX, &[0; 4]), cue(&[(1, 0)])]);
+            assert!(read(&file).is_empty());
+        }
+        // a table that claims far more entries than its chunk holds
+        let mut liar = ds64_chunk(0, &[]);
+        liar[8 + 24..8 + 28].copy_from_slice(&u32::MAX.to_le_bytes());
+        let _ = read(&rf64(&[liar, fmt(8000), cue(&[(1, 0)])]));
+        // every truncation of a good RF64 file is safe
+        let good =
+            rf64(&[ds64_chunk(4, &[]), fmt(44100), chunk_with_size_field(b"data", u32::MAX, &[0; 4]), cue(&[(1, 44100)]), adtl(&[labl(b"labl", 1, "Kept")])]);
+        assert_eq!(read(&good).len(), 1);
+        for n in 0..good.len() {
+            let _ = read(&good[..n]);
+        }
+    }
+
+    #[test]
+    fn a_huge_adtl_list_is_read_in_linear_time_and_only_for_the_cue_points_that_exist() {
+        // Records for ids that have no cue point are skipped, not stored, and the number looked at is capped.
+        let junk = |n: u32| (1000..1000 + n).map(|id| labl(b"labl", id, "n")).collect::<Vec<_>>();
+        let started = std::time::Instant::now();
+        // the real label comes first: read
+        let mut subs = vec![labl(b"labl", 1, "Real")];
+        subs.extend(junk(100_000));
+        let m = read(&wav(&[fmt(44100), cue(&[(1, 44100)]), adtl(&subs)]));
+        assert_eq!(m[0].comment, "Real");
+        // it comes after more records than are looked at: not read, and the marker is still there
+        let mut subs = junk(MAX_ADTL_RECORDS as u32 + 10);
+        subs.push(labl(b"labl", 1, "Too late"));
+        let m = read(&wav(&[fmt(44100), cue(&[(1, 44100)]), adtl(&subs)]));
+        assert_eq!((m.len(), m[0].comment.as_str()), (1, ""));
+        assert!(started.elapsed() < std::time::Duration::from_secs(5), "took {:?}", started.elapsed());
     }
 }
