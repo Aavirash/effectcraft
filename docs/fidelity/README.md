@@ -80,6 +80,16 @@ every-line composer ignored the last line's slack and left "twelve" alone on a s
 counts that slack for Justify All, and every word starts within 1 px of AE's. Regression test:
 `justify_all_balances_the_lines_with_the_every_line_composer`.
 
+## Right-to-left point text with a justified paragraph
+
+Measured on 19 October 2026 with After Effects 2026 (26.2) (EXPORTER read-back t7): right-to-left
+point text whose paragraph has a justified code (justify last left / centre / right, justify all)
+sits flush right at its anchor, like right-aligned text. EffectCraft placed it by the last-line
+side (left / centre / left). Now flush right; left-to-right point text is unchanged (not measured).
+Regression test: `rtl_point_text_with_a_justified_paragraph_is_flush_at_its_start`. Still open:
+AE wraps right-to-left box text slightly wider (its word gaps are 1–2 px narrower than in
+left-to-right text with the same font), so a 300 px box fits a word more per line.
+
 ## Still unmeasured
 
 Rendered frame comparisons now have a deterministic `effectcraft_effects::fidelity::compare_frames`

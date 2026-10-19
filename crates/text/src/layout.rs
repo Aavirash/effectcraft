@@ -635,7 +635,11 @@ fn paragraph(text: &str, base: usize, runs: &[(Range<usize>, TextStyle)], primar
         first_ascent(primaries[si].face, st.size).unwrap_or_else(|| fonts::face(primaries[si].face).metrics(st.size).ascent)
     };
     let eff_align = |last: bool| -> Align {
-        if (last || width.is_none()) && para.align == Align::Justify {
+        if rtl_para && width.is_none() && para.align == Align::Justify {
+            // Right-to-left point text with a justified paragraph sits flush at its start, the
+            // right (After Effects 2026, every justify code; left-to-right not measured).
+            Align::Right
+        } else if (last || width.is_none()) && para.align == Align::Justify {
             if width.is_none() && para.justify_last == Align::Justify { Align::Left } else { para.justify_last }
         } else {
             para.align
@@ -1497,6 +1501,25 @@ mod tests {
             &[ParagraphStyle { width: Some(400.0), hanging: true, align: Align::Right, ..Default::default() }],
         );
         assert!(r.lines[0].x + r.lines[0].width > 401.0, "closing quote hangs right");
+    }
+
+    /// After Effects 2026 (EXPORTER read-back t7): right-to-left point text with any justified
+    /// code (justify last left / centre / right, justify all) sits flush right at its anchor, as
+    /// right-aligned text does.
+    #[test]
+    fn rtl_point_text_with_a_justified_paragraph_is_flush_at_its_start() {
+        let text = "Right to left";
+        let s = st(30.0);
+        let at = |align: Align, last: Align| {
+            let p = ParagraphStyle { align, justify_last: last, rtl: Some(true), ..Default::default() };
+            let l = layout_rich_uncached(text, &[(0..text.len(), s.clone())], &[p]);
+            (l.lines[0].x, l.lines[0].x + l.lines[0].width)
+        };
+        let right = at(Align::Right, Align::Left);
+        for last in [Align::Left, Align::Center, Align::Right, Align::Justify] {
+            let got = at(Align::Justify, last);
+            assert!((got.0 - right.0).abs() < 1e-3 && (got.1 - right.1).abs() < 1e-3, "{last:?}: {got:?} vs right-aligned {right:?}");
+        }
     }
 
     #[test]
