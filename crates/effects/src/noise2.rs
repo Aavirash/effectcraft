@@ -87,9 +87,10 @@ pub(crate) fn grain_stats_boxes(img: &Image, boxes: &[(usize, usize, usize)]) ->
     if w < 3 || h < 3 {
         return GrainStats::default();
     }
-    // The Gaussian's three box passes at sigma 1.5 have radius 1 each, so a 3 px halo is enough
-    // for the high-pass residual of every pixel inside a box.
-    const HALO: usize = 3;
+    // The Gaussian's three box passes at sigma 1.5 have radius 1 each, so 3 px of halo make the
+    // residual exact inside a box; one more column covers the right neighbour used by the lag-1
+    // correlation.
+    const HALO: usize = 4;
     let mut mask = vec![false; w * h];
     for &(x, y, s) in boxes {
         for yy in y..y.saturating_add(s).min(h) {
@@ -418,9 +419,9 @@ mod tests {
         let masked = grain_stats_masked(&img, Some(&mask));
         let boxed = grain_stats_boxes(&img, &boxes);
         for k in 0..3 {
-            assert!((masked.std[k] - boxed.std[k]).abs() < 1e-5, "{k}: {masked:?} vs {boxed:?}");
+            assert!((masked.std[k] - boxed.std[k]).abs() < 1e-6, "{k}: {masked:?} vs {boxed:?}");
         }
-        assert!((masked.size - boxed.size).abs() <= 0.05 * masked.size.max(1.0), "size: {masked:?} vs {boxed:?}");
+        assert!((masked.size - boxed.size).abs() <= 1e-7, "size: {masked:?} vs {boxed:?}");
         // A denser grid where every box overlaps its neighbours (mask dedup across boxes).
         let img2 = noisy(96, 64, 0.15, 21);
         let mut boxes2 = Vec::new();
@@ -441,9 +442,9 @@ mod tests {
         let masked2 = grain_stats_masked(&img2, Some(&mask2));
         let boxed2 = grain_stats_boxes(&img2, &boxes2);
         for k in 0..3 {
-            assert!((masked2.std[k] - boxed2.std[k]).abs() < 1e-5, "{k}: {masked2:?} vs {boxed2:?}");
+            assert!((masked2.std[k] - boxed2.std[k]).abs() < 1e-6, "{k}: {masked2:?} vs {boxed2:?}");
         }
-        assert!((masked2.size - boxed2.size).abs() <= 0.05 * masked2.size.max(1.0), "size: {masked2:?} vs {boxed2:?}");
+        assert!((masked2.size - boxed2.size).abs() <= 1e-7, "size: {masked2:?} vs {boxed2:?}");
         // No boxes measures the whole image, like no mask.
         assert_eq!(grain_stats_boxes(&img, &[]), grain_stats(&img));
     }
