@@ -313,6 +313,41 @@ fn interpolation_with_arrays() {
     assert_eq!(f.pos("ease(time, 0, 1, [0, 0], [100, 50])", 1.0), [100.0, 50.0, 0.0]);
 }
 
+#[test]
+fn cubic_bezier_curves() {
+    let f = fx();
+    // ease(t, …) is cubic-bezier(1/3, 0, 2/3, 1): x(u) = u and y(u) = 3u² - 2u³.
+    assert_close!(f.num("bezier(0.25, 0, 1, 0, 100, [0.3333333333333333, 0, 0.6666666666666666, 1])", 0.0), f.num("ease(0.25, 0, 1, 0, 100)", 0.0));
+    assert_close!(f.num("bezier(0.5, 0, 1, 0, 100, [0.3333333333333333, 0, 0.6666666666666666, 1])", 0.0), 50.0);
+    // Symmetric ease-in-out: slower at both ends, faster in the middle.
+    let early = f.num("bezier(0.25, 0, 1, 0, 100, [0.42, 0, 0.58, 1])", 0.0);
+    let late = f.num("bezier(0.75, 0, 1, 0, 100, [0.42, 0, 0.58, 1])", 0.0);
+    assert!(early < 25.0 && late > 75.0, "ease-in-out: {early}, {late}");
+    // Control points on the diagonal are linear.
+    assert_close!(f.num("bezier(0.3, 0, 1, 0, 100, [0, 0, 1, 1])", 0.0), 30.0);
+    // t is clamped to tMin..tMax; tMin == tMax behaves like the other helpers.
+    assert_close!(f.num("bezier(-1, 0, 1, 0, 100, [0.42, 0, 0.58, 1])", 0.0), 0.0);
+    assert_close!(f.num("bezier(2, 0, 1, 0, 100, [0.42, 0, 0.58, 1])", 0.0), 100.0);
+    assert_close!(f.num("bezier(5, 2, 2, 0, 100, [0.42, 0, 0.58, 1])", 0.0), 100.0);
+}
+
+#[test]
+fn cubic_bezier_short_form_arrays_and_fallbacks() {
+    let f = fx();
+    // Short form: no tMin / tMax.
+    assert_close!(f.num("bezier(0.25, 10, 20, [0, 0, 1, 1])", 0.0), 12.5);
+    assert_eq!(f.pos("bezier(time, 0, 1, [0, 0], [100, 50], [0.42, 0, 0.58, 1])", 1.0), [100.0, 50.0, 0.0]);
+    // y outside 0..1 overshoots, as CSS allows.
+    let over = f.num("bezier(0.5, 0, 1, 0, 100, [0.5, 2, 0.5, 2])", 0.0);
+    assert!(over > 100.0, "overshoot: {over}");
+    // A curve that is not four finite numbers falls back to linear instead of throwing.
+    assert_close!(f.num("bezier(0.5, 0, 1, 0, 100, [1, 0])", 0.0), 50.0);
+    assert_close!(f.num("bezier(0.5, 0, 1, 0, 100, 'ease')", 0.0), 50.0);
+    // x control points outside 0..1 are clamped, as CSS requires.
+    let v = f.num("bezier(0.5, 0, 1, 0, 100, [-1, 0, 2, 1])", 0.0);
+    assert!(v.is_finite(), "clamped curve: {v}");
+}
+
 // ---- object model -----------------------------------------------------------------------------
 
 #[test]
