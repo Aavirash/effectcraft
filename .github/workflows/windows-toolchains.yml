@@ -1,6 +1,6 @@
 # Windows builds with the toolchains contributors use, not just the MSVC one releases use: build
 # the desktop app and the CLI with MSVC, with GNU (mingw-w64 from MSYS2, the setup CONTRIBUTING.md
-# describes), and with GNU linked by Rust's bundled LLD plus mingw-w64's import libraries (#1886),
+# describes), and with GNU linked by Rust's bundled LLD plus mingw-w64's `libshlwapi.a` (#1886),
 # then run each binary with `--version`. Both packages build in one `cargo build`, the way people
 # build them, so features unify and the CLI links everything the desktop app pulls in.
 name: Windows toolchains
@@ -52,11 +52,15 @@ jobs:
         if: matrix.target == 'x86_64-pc-windows-gnu' && !matrix.rust-lld
         run: |
           printf '%s\n' 'C:\msys64\mingw64\bin' >> "$GITHUB_PATH"
-      - name: Link with Rust's bundled LLD and mingw-w64's import libraries
+      # Only libshlwapi.a, in a folder of its own: with all of mingw-w64's lib folder on the search
+      # path, its C runtime mixes with Rust's bundled one (undefined `DllEntryPoint`).
+      - name: Link with Rust's bundled LLD and mingw-w64's shlwapi import library
         if: matrix.rust-lld
         run: |
+          mkdir -p /c/gnu-import-libs
+          cp /c/msys64/mingw64/lib/libshlwapi.a /c/gnu-import-libs/
           echo 'CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=rust-lld' >> "$GITHUB_ENV"
-          echo 'CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUSTFLAGS=-C link-self-contained=yes -L native=C:/msys64/mingw64/lib' >> "$GITHUB_ENV"
+          echo 'CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUSTFLAGS=-C link-self-contained=yes -L native=C:/gnu-import-libs' >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: ${{ matrix.name }}
