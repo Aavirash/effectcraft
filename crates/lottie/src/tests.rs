@@ -919,12 +919,12 @@ fn per_corner_roundness_exports_equal_radii_and_warns_when_mixed() {
     // Four equal static radii: `rc.r` carries the value, no warning.
     let (p, cid) = shape([12.0; 4], 5.0, true);
     let (_, _, warnings, json) = roundtrip(&p, cid, &ExportOptions::default());
-    assert_eq!(rc(&json)["r"], json!(12.0));
+    assert_eq!(rc(&json)["r"], json!({"a": 0, "k": 12.0}));
     assert!(!warnings.iter().any(|w| w.contains("per-corner")), "{warnings:?}");
     // Mixed radii: not representable, roundness 0 exported with a warning.
     let (p, cid) = shape([10.0, 20.0, 10.0, 20.0], 5.0, true);
     let (_, _, warnings, json) = roundtrip(&p, cid, &ExportOptions::default());
-    assert_eq!(rc(&json)["r"], json!(0));
+    assert_eq!(rc(&json)["r"], json!({"a": 0, "k": 0}));
     assert!(warnings.iter().any(|w| w.contains("per-corner roundness")), "{warnings:?}");
     // The checkbox off exports the single Roundness and ignores the four values.
     let (p, cid) = shape([10.0, 20.0, 10.0, 20.0], 5.0, false);

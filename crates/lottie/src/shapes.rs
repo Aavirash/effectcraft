@@ -239,11 +239,12 @@ pub(crate) fn export_items(ex: &mut Ex, contents: &PropGroup, label: &str) -> Ve
                     let names = ["topLeftRoundness", "topRightRoundness", "bottomRightRoundness", "bottomLeftRoundness"];
                     let radii = names.map(|m| o.f(m));
                     // Lottie `rc` has one `r`: four equal static radii export as that value.
+                    // `r` is a property (`{a, k}`) like the uniform branch writes, not a bare number.
                     if radii.iter().all(|v| (v - radii[0]).abs() < 1e-6) && !names.iter().any(|m| o.animated(m)) && radii[0] >= 0.0 {
-                        o.raw("r", json!(r(radii[0])));
+                        o.raw("r", json!({"a": 0, "k": r(radii[0])}));
                     } else {
                         o.ex.warn(format!("{}: per-corner roundness has no Lottie rectangle equivalent (roundness 0 exported)", o.label));
-                        o.raw("r", json!(0));
+                        o.raw("r", json!({"a": 0, "k": 0}));
                     }
                 } else {
                     o.put("r", "roundness", &anim::num);
