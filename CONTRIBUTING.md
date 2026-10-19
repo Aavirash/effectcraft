@@ -33,13 +33,20 @@ An older MinGW earlier on `PATH` can break the build: CodeBlocks' GCC 8.1 fails 
 
 Rust's bundled LLD and self-contained libraries don't include every import library EffectCraft
 needs, so on their own they stop with `unable to find library -lshlwapi`
-([#1886](https://github.com/storytold/effectcraft/issues/1886)). To link that way, add mingw-w64's
-libraries to the search path in your own Cargo config (`%USERPROFILE%\.cargo\config.toml`):
+([#1886](https://github.com/storytold/effectcraft/issues/1886)). To link that way, copy
+mingw-w64's `libshlwapi.a` into a folder of its own and add that folder to the search path in your
+own Cargo config (`%USERPROFILE%\.cargo\config.toml`). Don't add all of mingw-w64's `lib` folder:
+its C runtime clashes with Rust's bundled one (`undefined symbol: DllEntryPoint`).
+
+```powershell
+New-Item -ItemType Directory -Force C:\gnu-import-libs
+Copy-Item C:\msys64\mingw64\lib\libshlwapi.a C:\gnu-import-libs\
+```
 
 ```toml
 [target.x86_64-pc-windows-gnu]
 linker = "rust-lld"
-rustflags = ["-C", "link-self-contained=yes", "-L", "native=C:/msys64/mingw64/lib"]
+rustflags = ["-C", "link-self-contained=yes", "-L", "native=C:/gnu-import-libs"]
 ```
 
 The `Windows toolchains` workflow builds the app and the CLI each of these three ways every night.
