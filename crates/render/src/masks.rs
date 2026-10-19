@@ -76,9 +76,13 @@ const SMOOTH_BOX_RADIUS: f64 = 0.37;
 /// bounds the padded area, i.e. memory.)
 const FULL_RES_RADIUS: usize = 48;
 const COARSE_RADIUS: usize = 32;
-/// The largest padded grid (pixels); a bigger one (only reachable with a huge buffer) falls back
-/// to blurring within the buffer.
+/// The largest padded grid (pixels). A grid that would be bigger (a huge buffer) is coarsened
+/// (`grid`) until it fits, so the padding, and with it the feather of a mask edge outside the
+/// buffer, is never dropped.
 const MAX_GRID_PX: usize = 1 << 26;
+/// The coarsest factor `grid` tries before giving up on the padding (unreachable for any buffer
+/// that fits in memory: 1024 x 1024 buffer pixels per grid pixel).
+const MAX_COARSEN: usize = 1024;
 /// Padding for a variable-width feather, which is rasterised at the buffer's resolution.
 const MAX_VARIABLE_PAD: usize = 256;
 
@@ -103,8 +107,10 @@ impl Axis {
         }
         let cap = |pad: usize| if full_res_only { pad.min(MAX_VARIABLE_PAD) } else { pad };
         if linear {
-            // Linear falloff (not measured against After Effects; kept as it was): one box pass,
-            // a straight ramp `feather` pixels wide across the edge.
+            // Linear falloff (not measured against After Effects): one box pass, a straight ramp
+            // `feather` pixels wide across the edge, as before. Not quite unchanged: a ramp wider
+            // than about `4 x FULL_RES_RADIUS` pixels is now blurred on the coarse grid and
+            // resampled bilinearly (a smooth ramp, so the difference is a rounding of the ramp).
             let r = (f / 2.0).round().max(1.0) as usize;
             let step = if full_res_only || r <= 2 * FULL_RES_RADIUS { 1 } else { r.div_ceil(2 * COARSE_RADIUS) };
             let rg = ((r as f64 / step as f64).round() as usize).max(1);
@@ -134,6 +140,22 @@ impl Axis {
 
     fn blurs(&self) -> bool {
         self.radii.iter().any(|&r| r > 0)
+    }
+
+    /// The same blur on a grid `k` times coarser: radii and padding scaled down (a blurring
+    /// axis keeps at least one grid pixel of radius), the padding still covering the support.
+    fn coarser(self, k: usize) -> Axis {
+        if k <= 1 {
+            return self;
+        }
+        let blurs = self.blurs();
+        let mut radii = self.radii.map(|r| (r as f64 / k as f64).round() as usize);
+        if blurs && radii.iter().all(|&r| r == 0) {
+            radii[0] = 1;
+        }
+        let support = radii.iter().fold(0usize, |a, &r| a.saturating_add(r)).saturating_add(1);
+        let pad = if self.pad == 0 { 0 } else { self.pad.div_ceil(k).max(support) };
+        Axis { step: self.step.saturating_mul(k), pad, radii }
     }
 
     /// Grid pixels for `n` buffer pixels.
@@ -169,36 +191,59 @@ fn crop(grid: &Mask, ax: Axis, ay: Axis, w: u32, h: u32) -> Mask {
 
 fn coverage_at(ctx: &EvalCtx, layer: &Layer, g: &effectcraft_project::PropGroup, buf: &Buf) -> Option<Mask> {
     let Value::Path(sp) = ctx.group_value(layer, g, "path")? else { return None };
-    let path = effectcraft_path::to_kurbo(&sp);
-    let (w, h) = (buf.img.width, buf.img.height);
     let m = Mat3::translate(vec2(buf.offset[0], buf.offset[1])) * Mat3::scale(vec2(buf.scale, buf.scale));
     let exp = ctx.f(layer, g, "expansion", 0.0);
     let linear = matches!(g.kind, GroupKind::Mask { feather_falloff: FeatherFalloff::Linear, .. });
+    let feather = ctx.v2(layer, g, "feather", [0.0; 2]);
+    let feather = [feather[0] * buf.scale, feather[1] * buf.scale];
+    Some(feathered(&sp, &m, (buf.img.width, buf.img.height), exp, feather, linear, MAX_GRID_PX))
+}
+
+/// The padded grid for a `w x h` buffer: the axes as given, or coarsened together (by 2, 4, …)
+/// until the grid has at most `max_px` pixels. `None` without a blur (or, unreachably, when even
+/// the coarsest grid is too big).
+fn grid(w: u32, h: u32, ax: Axis, ay: Axis, max_px: usize) -> Option<(u32, u32, Axis, Axis)> {
+    if !(ax.blurs() || ay.blurs()) {
+        return None;
+    }
+    let mut k = 1usize;
+    while k <= MAX_COARSEN {
+        let (cx, cy) = (ax.coarser(k), ay.coarser(k));
+        if let (Some(gw), Some(gh)) = (cx.len(w), cy.len(h))
+            && gw.checked_mul(gh).is_some_and(|n| n <= max_px)
+            && let (Ok(gw), Ok(gh)) = (u32::try_from(gw), u32::try_from(gh))
+        {
+            return Some((gw, gh, cx, cy));
+        }
+        k = k.saturating_mul(2);
+    }
+    None
+}
+
+/// Coverage of the mask path `sp` (layer -> buffer `m`) on a `w x h` buffer, expanded by `exp`
+/// and feathered by `feather` buffer pixels per axis, on a padded grid of at most `max_px` pixels.
+fn feathered(sp: &effectcraft_keyframe::ShapePath, m: &Mat3, (w, h): (u32, u32), exp: f64, feather: [f64; 2], linear: bool, max_px: usize) -> Mask {
+    let path = effectcraft_path::to_kurbo(sp);
     // Variable-width feather (Mask Feather tool points): expansion and the per-point feather
     // are applied together from the signed distance to the path.
     let variable = !sp.feather.is_empty();
-    let feather = ctx.v2(layer, g, "feather", [0.0; 2]);
     // The feather blurs the mask's own edge, also where the path lies outside the layer (After
     // Effects: a feathered mask just below a layer still fades into it). So a feathered mask is
     // rasterised on a grid padded by the blur's reach, blurred there and cropped to the buffer.
-    // A variable feather scales its point radii by the mean scale: it stays at full resolution.
-    let (ax, ay) = (Axis::new(feather[0] * buf.scale, linear, variable), Axis::new(feather[1] * buf.scale, linear, variable));
+    // A variable feather scales its point radii by the mean scale: it stays at full resolution
+    // (unless the grid has to be coarsened to fit `max_px`).
+    let (ax, ay) = (Axis::new(feather[0], linear, variable), Axis::new(feather[1], linear, variable));
     let blurred = ax.blurs() || ay.blurs();
-    let grid = match (ax.len(w), ay.len(h)) {
-        (Some(gw), Some(gh)) if blurred && gw.checked_mul(gh).is_some_and(|n| n <= MAX_GRID_PX) => {
-            let (Ok(gw), Ok(gh)) = (u32::try_from(gw), u32::try_from(gh)) else { return None };
-            Some((gw, gh, ax, ay))
-        }
-        _ => None,
-    };
-    // Without the grid: blurred within the buffer at its resolution (the behaviour before the padding).
+    let grid = grid(w, h, ax, ay, max_px);
+    // Without the grid (no blur, or, unreachably, a grid too big even at the coarsest step):
+    // blurred within the buffer at its resolution.
     let unpadded = |f: f64| Axis { pad: 0, ..Axis::new(f, linear, true) };
-    let (gw, gh, gx, gy) = grid.unwrap_or_else(|| (w, h, unpadded(feather[0] * buf.scale), unpadded(feather[1] * buf.scale)));
+    let (gw, gh, gx, gy) = grid.unwrap_or_else(|| (w, h, unpadded(feather[0]), unpadded(feather[1])));
     // Buffer pixels -> grid pixels.
     let to_grid = Mat3::scale(vec2(1.0 / gx.step as f64, 1.0 / gy.step as f64)) * Mat3::translate(vec2((gx.pad * gx.step) as f64, (gy.pad * gy.step) as f64));
-    let mg = to_grid * m;
+    let mg = to_grid * *m;
     let mut cov = if variable {
-        effectcraft_path::feather::variable_feather_coverage(&sp, &mg, gw, gh, exp, linear)
+        effectcraft_path::feather::variable_feather_coverage(sp, &mg, gw, gh, exp, linear)
     } else if exp.abs() > 0.01 {
         // Expansion offsets the outline itself (round joins). Offset Paths' geometry stays right
         // when the expansion exceeds a curvature radius, where a fill + stroke blend leaves a
@@ -221,7 +266,7 @@ fn coverage_at(ctx: &EvalCtx, layer: &Layer, g: &effectcraft_project::PropGroup,
     if grid.is_some() {
         cov = crop(&cov, gx, gy, w, h);
     }
-    Some(cov)
+    cov
 }
 
 /// The layer's enabled masks at the context time, flattened to polylines in layer space (for
@@ -298,4 +343,49 @@ pub fn apply(ctx: &EvalCtx, layer: &Layer, buf: &mut Buf, blur: MaskBlur) -> boo
     }
     buf.img.mul_mask(&acc);
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use effectcraft_keyframe::ShapePath;
+
+    /// CodeRabbit on #1874: an 8192 x 8192 layer with a 40 px Smooth feather needs a padded
+    /// grid larger than `MAX_GRID_PX`; it used to fall back to the unpadded buffer, so an Add mask
+    /// just outside the layer covered nothing and the whole layer vanished. The grid is now
+    /// coarsened instead and keeps a pad that covers the blur.
+    #[test]
+    fn a_grid_too_big_is_coarsened_and_keeps_its_padding() {
+        let a = Axis::new(40.0, false, false);
+        assert!(a.len(8192).zip(a.len(8192)).is_some_and(|(x, y)| x * y > MAX_GRID_PX), "the full-resolution grid is over the limit");
+        let (gw, gh, gx, gy) = grid(8192, 8192, a, a, MAX_GRID_PX).expect("a padded grid");
+        assert!((gw as usize) * (gh as usize) <= MAX_GRID_PX);
+        for g in [gx, gy] {
+            assert!(g.step > 1 && g.pad > 0 && g.blurs(), "{g:?}");
+            // The pad covers the blur's support (the three boxes' radii) in buffer pixels.
+            assert!(g.pad * g.step >= g.radii.iter().sum::<usize>() * g.step, "{g:?}");
+        }
+        // A grid that fits is not touched.
+        assert_eq!(grid(200, 100, a, a, MAX_GRID_PX).map(|g| g.2), Some(a));
+    }
+
+    /// The same failure at a testable size: a 200 x 100 buffer, a 40 px feather and a grid limit
+    /// just below the full-resolution padded grid. The Add mask lies just right of the buffer
+    /// (x 210..260); its feather still fades into the layer, close to the full-resolution result.
+    #[test]
+    fn a_coarsened_grid_still_feathers_a_mask_outside_the_buffer() {
+        let sp = ShapePath::rect([235.0, 50.0], 50.0, 200.0);
+        let m = Mat3::IDENTITY;
+        let full = feathered(&sp, &m, (200, 100), 0.0, [40.0, 40.0], false, MAX_GRID_PX);
+        let a = Axis::new(40.0, false, false);
+        let limit = a.len(200).zip(a.len(100)).map_or(0, |(x, y)| x * y) - 1;
+        let coarse = feathered(&sp, &m, (200, 100), 0.0, [40.0, 40.0], false, limit);
+        let at = |c: &Mask, x: usize, y: usize| c.data.get(y * 200 + x).copied().unwrap_or(-1.0);
+        assert!(at(&full, 199, 50) > 0.25, "full resolution: {}", at(&full, 199, 50));
+        assert!(at(&coarse, 199, 50) > 0.2, "the soft fade survives the coarse grid: {}", at(&coarse, 199, 50));
+        for x in [150, 170, 180, 190, 199] {
+            assert!((at(&coarse, x, 50) - at(&full, x, 50)).abs() < 0.05, "x {x}: coarse {} full {}", at(&coarse, x, 50), at(&full, x, 50));
+        }
+        assert!(at(&coarse, 100, 50) < 0.01, "far from the mask stays clear");
+    }
 }
