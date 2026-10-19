@@ -98,8 +98,8 @@ characters at 80 px and at 40 px, half before and half after each), and a Subtra
 over characters the first selector leaves out keeps them at 0 instead of tracking them negatively.
 With both, the EXPORTER's t8 layer D (Tracking 30 on characters 2–4 by index, a Subtract selector
 over the last 20 %) puts every glyph where AE does (it ended 88 px short). The "Tracking In" text
-preset now animates 40 → 0 px (was 400 → 0 thousandths of an em); Lottie export writes a style run's
-tracking as pixels. Regression tests: `animator_tracking_is_in_pixels_as_in_after_effects`,
+preset now animates 40 → 0 px (was 400 → 0 thousandths of an em). Lottie export is unchanged (not
+checked against a player). Regression tests: `animator_tracking_is_in_pixels_as_in_after_effects`,
 `modes_combine`.
 
 ## Per-character 3D rotation order
