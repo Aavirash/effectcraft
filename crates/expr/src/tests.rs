@@ -343,13 +343,42 @@ fn cubic_bezier_short_form_arrays_and_fallbacks() {
     // A curve that is not four finite numbers falls back to linear instead of throwing.
     assert_close!(f.num("bezier(0.5, 0, 1, 0, 100, [1, 0])", 0.0), 50.0);
     assert_close!(f.num("bezier(0.5, 0, 1, 0, 100, 'ease')", 0.0), 50.0);
+    // Exactly four values are a curve; extra ones mean the curve is malformed, so linear.
+    assert_close!(f.num("bezier(0.5, 0, 1, 0, 100, [0.42, 0, 0.58, 1, 0])", 0.0), 50.0);
+    assert_close!(f.num("bezier(0.5, 0, 1, 0, 100, [0.42, 0, 0.58, 1, 2, 3])", 0.0), 50.0);
     // x control points outside 0..1 are clamped, as CSS requires.
     let v = f.num("bezier(0.5, 0, 1, 0, 100, [-1, 0, 2, 1])", 0.0);
     assert!(v.is_finite(), "clamped curve: {v}");
 }
 
-// ---- object model -----------------------------------------------------------------------------
+#[test]
+fn cubic_bezier_is_accurate_near_the_endpoints() {
+    /// The value the curve reaches at `x`, by bisection on its monotone x(u).
+    fn reference(x1: f64, y1: f64, x2: f64, y2: f64, x: f64) -> f64 {
+        let bx = |u: f64| 3.0 * (1.0 - u) * (1.0 - u) * u * x1 + 3.0 * (1.0 - u) * u * u * x2 + u * u * u;
+        let by = |u: f64| 3.0 * (1.0 - u) * (1.0 - u) * u * y1 + 3.0 * (1.0 - u) * u * u * y2 + u * u * u;
+        let (mut lo, mut hi) = (0.0f64, 1.0f64);
+        for _ in 0..100 {
+            let mid = 0.5 * (lo + hi);
+            if bx(mid) < x {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        by(0.5 * (lo + hi))
+    }
+    // Steep curves: a residual in x is not a residual in y near the endpoints (dy/dx is in the
+    // thousands), so the solver stops on the estimated y error instead.
+    let f = fx();
+    for (c, x) in [([0.0, 1000.0, 1.0, 1.0], 1e-6), ([0.0, 100.0, 1.0, 0.0], 1e-9), ([0.8, -500.0, 1.0, 1.0], 0.999999)] {
+        let got = f.num(&format!("bezier({x}, 0, 1, [{}, {}, {}, {}])", c[0], c[1], c[2], c[3]), 0.0);
+        let want = reference(c[0], c[1], c[2], c[3], x);
+        assert!((got - want).abs() < 1e-6, "curve {c:?} at {x}: {got} vs {want}");
+    }
+}
 
+// ---- object model -----------------------------------------------------------------------------
 #[test]
 fn comp_attributes() {
     let f = fx();
