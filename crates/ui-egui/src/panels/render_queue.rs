@@ -870,6 +870,7 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
         && !rendering
         && let Some(id) = selected
         && app.dialog.is_none()
+        && !crate::widgets::any_menu_open(ui.ctx())
         && ui.input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace))
         // (A focused queue row is not typing; any other focused widget may be.)
         && (on_row || !ui.ctx().egui_wants_keyboard_input())
