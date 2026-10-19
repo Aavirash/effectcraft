@@ -1036,6 +1036,7 @@ Animation
   ---
   Add Keyframe | anim.addKeyframe
   Toggle Hold Keyframe | keys.toggleHold
+  Mute Keyframes | keys.setMuted
   Keyframe Interpolation... | keys.interpolation
   Keyframe Velocity... | keys.velocity
   Keyframe Assistant
