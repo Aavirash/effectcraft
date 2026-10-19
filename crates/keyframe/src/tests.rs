@@ -398,8 +398,7 @@ proptest::proptest! {
 
 #[test]
 fn muted_keys_are_skipped_by_evaluation() {
-    let mut keys =
-        vec![Keyframe::new(s(0.0), Value::Scalar(0.0)), Keyframe::new(s(1.0), Value::Scalar(100.0)), Keyframe::new(s(2.0), Value::Scalar(300.0))];
+    let mut keys = vec![Keyframe::new(s(0.0), Value::Scalar(0.0)), Keyframe::new(s(1.0), Value::Scalar(100.0)), Keyframe::new(s(2.0), Value::Scalar(300.0))];
     let at = |keys: &[Keyframe], t: f64| evaluate(keys, s(t), false).unwrap().as_f64();
     assert!((at(&keys, 0.5) - 50.0).abs() < 1e-9);
     assert!((at(&keys, 1.5) - 200.0).abs() < 1e-9);
