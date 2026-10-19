@@ -761,7 +761,10 @@ fn paragraph(text: &str, base: usize, runs: &[(Range<usize>, TextStyle)], primar
             let opps: Vec<usize> = unicode_linebreak::linebreaks(text).map(|(p, _)| p).collect();
             let avail = |line: usize| avail_for(line == 0).unwrap_or(f32::MAX);
             if para.every_line && opps.len() > 1 && opps.len() <= 1500 {
-                // Minimise the summed squared slack of every line but the last.
+                // Minimise the summed squared slack of every line but the last; with Justify All
+                // the last line is stretched too, so its slack counts (After Effects then balances
+                // the lines: 4 / 4 / 4 words where the other modes break 6 / 6 / 1).
+                let last_counts = para.align == Align::Justify && para.justify_last == Align::Justify;
                 let nodes: Vec<usize> = std::iter::once(0).chain(opps.iter().copied()).collect();
                 let m = nodes.len();
                 let mut best = vec![(f32::INFINITY, 0usize); m];
@@ -781,7 +784,7 @@ fn paragraph(text: &str, base: usize, runs: &[(Range<usize>, TextStyle)], primar
                         let slack = maxw - w;
                         let cost = if over {
                             1e12 + w
-                        } else if j == m - 1 {
+                        } else if j == m - 1 && !last_counts {
                             0.0
                         } else {
                             slack * slack
@@ -1462,6 +1465,23 @@ mod tests {
         let every = layout_rich_uncached(text, &[(0..text.len(), s)], &[ParagraphStyle { width: Some(320.0), every_line: true, ..Default::default() }]);
         assert!(slack(&every) <= slack(&greedy) + 1e-3, "{} vs {}", slack(&every), slack(&greedy));
         assert!(every.lines.iter().all(|ln| ln.width <= 320.0 + 0.5));
+    }
+
+    /// After Effects 2026 (EXPORTER t6): with Justify All and the every-line composer, a box that
+    /// the other justifications break into lines of 6, 6 and 1 words breaks 4 / 4 / 4, so the
+    /// stretched last line is not a lone word; word positions then match AE to 1 px.
+    #[test]
+    fn justify_all_balances_the_lines_with_the_every_line_composer() {
+        let text = "one two three four five six seven eight nine ten eleven twelve";
+        let s = st(30.0);
+        let words = |l: &Layout| -> Vec<usize> { l.lines.iter().map(|ln| text[ln.range.clone()].split_whitespace().count()).collect() };
+        let p = |last: Align| ParagraphStyle { width: Some(450.0), align: Align::Justify, justify_last: last, every_line: true, ..Default::default() };
+        let left = layout_rich_uncached(text, &[(0..text.len(), s.clone())], &[p(Align::Left)]);
+        let all = layout_rich_uncached(text, &[(0..text.len(), s)], &[p(Align::Justify)]);
+        let (wl, wa) = (words(&left), words(&all));
+        assert!(wl.last().copied().unwrap_or(0) < *wl.first().unwrap_or(&0), "{wl:?}");
+        let (lo, hi) = (wa.iter().min().copied().unwrap_or(0), wa.iter().max().copied().unwrap_or(0));
+        assert!(hi - lo <= 1, "Justify All balances the lines: {wa:?} (left-justified: {wl:?})");
     }
 
     #[test]

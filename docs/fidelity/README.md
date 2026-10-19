@@ -71,6 +71,15 @@ After the fix, all ten tangents equal AE's to the printed 0.001 px, and the two 
 test `spatial_auto_bezier_tangents_follow_after_effects` checks the rule on other original keys,
 including a timing change. AE's output stays local; only the script and these scores are tracked.
 
+## Justify All with the every-line composer
+
+Measured on 19 October 2026 with After Effects 2026 (26.2) on box text (EXPORTER read-back t6):
+with Justify All, AE stretches the paragraph's last line too and breaks the lines so that it is not
+a lone word (4 / 4 / 4 words where the other justifications break 6 / 6 / 1). EffectCraft's
+every-line composer ignored the last line's slack and left "twelve" alone on a stretched line; it now
+counts that slack for Justify All, and every word starts within 1 px of AE's. Regression test:
+`justify_all_balances_the_lines_with_the_every_line_composer`.
+
 ## Still unmeasured
 
 Rendered frame comparisons now have a deterministic `effectcraft_effects::fidelity::compare_frames`
