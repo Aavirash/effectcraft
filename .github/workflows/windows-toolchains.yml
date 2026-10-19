@@ -51,7 +51,7 @@ jobs:
       - name: Put it first on PATH
         if: matrix.target == 'x86_64-pc-windows-gnu' && !matrix.rust-lld
         run: |
-          echo 'C:\msys64\mingw64\bin' >> "$GITHUB_PATH"
+          printf '%s\n' 'C:\msys64\mingw64\bin' >> "$GITHUB_PATH"
       - name: Link with Rust's bundled LLD and mingw-w64's import libraries
         if: matrix.rust-lld
         run: |
