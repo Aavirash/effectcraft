@@ -42,7 +42,8 @@ pub struct CharXf {
     pub stroke_hsb: [f64; 3],
     pub stroke_opacity: f64,
     pub stroke_width: f64,
-    /// Tracking (1/1000 em) added before / after the character.
+    /// Tracking (pixels: an animator's Tracking Amount, as After Effects) added before / after
+    /// the character.
     pub track_before: f64,
     pub track_after: f64,
     /// Line Anchor (percent) and the selection weight it was set with.
@@ -752,6 +753,9 @@ pub fn text_geom(ctx: &EvalCtx, layer: &Layer) -> Option<TextGeom> {
         };
         // Outline relative to the pivot.
         let local = kurbo::Affine::translate((o[0] - pivot[0], o[1] - pivot[1])) * outline;
+        // Rx · Ry · Rz (Z turns first): the order After Effects gives a 3D layer's X / Y / Z
+        // Rotation too. #1876 moves layers to it with a helper, `Mat4::rotation_xyz`; once both
+        // land, this should call that helper (one convention, one place).
         let char_m = Mat4::rotate_x(x.rotation_x)
             * Mat4::rotate_y(x.rotation_y)
             * Mat4::rotate_z(x.rotation)

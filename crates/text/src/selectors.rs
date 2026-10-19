@@ -74,6 +74,11 @@ impl Mode {
             // Subtracting more than is selected leaves nothing, not a negative selection (After
             // Effects 2026: a Subtract selector over unselected characters leaves their
             // Tracking at 0, EXPORTER read-back t8).
+            // Intended for every animator property, not only Tracking: selectors combine into one
+            // selection per character for the whole animator (`render::text::animator_selection`),
+            // which then scales each of its properties, as in After Effects, where selectors
+            // belong to the animator. The read-back observed that selection through Tracking;
+            // Opacity, Position and the rest were not measured separately.
             Mode::Subtract if acc >= 0.0 => (acc - v).max(0.0),
             Mode::Subtract => acc - v,
             Mode::Intersect => acc * v,

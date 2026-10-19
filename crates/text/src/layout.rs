@@ -577,8 +577,20 @@ fn first_ascent(face: FaceId, px: f32) -> Option<f32> {
     let units = crate::outline_units(face, gid)?;
     let top = kurbo::Shape::bounding_box(&*units).y1 as f32;
     let em = (top / f.units_per_em() * 1000.0).round() / 1000.0;
+    plausible_first(em, px, f.metrics(px).ascent)
+}
+
+/// A `d` at least this fraction of the font ascent is a Latin lowercase ascender; a shorter one
+/// (a symbol or icon font's `d`) would put the first baseline almost at the box top, so the font
+/// ascent is used instead (the rule before the `d` height).
+const MIN_D_OF_ASCENT: f32 = 0.3;
+
+/// The first baseline `em * px` below the box top, if `em` (the `d` height in em) is plausible:
+/// finite, positive, under 4 em and at least [`MIN_D_OF_ASCENT`] of the font `ascent` (px).
+fn plausible_first(em: f32, px: f32, ascent: f32) -> Option<f32> {
     let h = em * px;
-    (h.is_finite() && h > 0.0 && em < 4.0).then_some(h)
+    let tall_enough = !(ascent.is_finite() && ascent > 0.0) || h >= MIN_D_OF_ASCENT * ascent;
+    (h.is_finite() && h > 0.0 && em < 4.0 && tall_enough).then_some(h)
 }
 
 struct ParaLine {
@@ -1281,6 +1293,29 @@ mod tests {
                 let drawn = l.glyphs[0].y;
                 assert!((drawn - glyph_baseline).abs() < 0.15, "{family} {size} {script:?}: {drawn} vs AE {glyph_baseline}");
             }
+        }
+    }
+
+    /// CodeRabbit on #1875: a face whose `d` is very short (a symbol or icon font) would put the
+    /// first baseline almost at the box top; below 0.3 of the ascent the font ascent is used.
+    #[test]
+    fn a_short_d_falls_back_to_the_font_ascent() {
+        // Latin faces: the `d` is about 0.7 em, the ascent about 0.9 em.
+        let near = |v: Option<f32>, want: f32| v.is_some_and(|v| (v - want).abs() < 1e-3);
+        assert!(near(plausible_first(0.7, 100.0, 90.0), 70.0));
+        // A `d` a tenth of the ascent: not a lowercase ascender.
+        assert_eq!(plausible_first(0.09, 100.0, 90.0), None);
+        assert_eq!(plausible_first(0.26, 100.0, 90.0), None);
+        assert!(near(plausible_first(0.28, 100.0, 90.0), 28.0));
+        // Broken values stay rejected; an unusable ascent does not reject a sane `d`.
+        for (em, px) in [(0.0, 100.0), (-0.5, 100.0), (f32::NAN, 100.0), (5.0, 100.0), (0.7, f32::INFINITY)] {
+            assert_eq!(plausible_first(em, px, 90.0), None, "{em} {px}");
+        }
+        assert!(near(plausible_first(0.7, 100.0, f32::NAN), 70.0));
+        // The bundled faces keep the `d` rule.
+        for family in ["Inter", "Noto Serif"] {
+            let r = fonts::resolve(family, "Regular");
+            assert!(first_ascent(r.face, 100.0).is_some(), "{family}");
         }
     }
 
