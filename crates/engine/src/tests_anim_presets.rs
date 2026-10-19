@@ -140,15 +140,20 @@ fn every_behavior_preset_applies_and_undoes() {
         ["transform/position", "transform/scale", "transform/rotation", "transform/opacity"]
             .iter()
             .filter(|p| l.props.prop(p).is_some_and(|pr| pr.has_expression()))
-            .count()
+            .copied()
+            .collect::<Vec<_>>()
     };
     for p in &list {
         let id = p["id"].as_str().unwrap();
         let r = s.execute("anim.applyBuiltinPreset", json!({"layers": [solid], "preset": id})).unwrap();
         assert_eq!(r["skipped"], json!([]), "{id}: every path and expression applies");
         assert_eq!(r["effects"], json!([]), "{id}: behaviors add no effects");
-        assert_eq!(driven(&s), 1, "{id}: exactly one property is driven");
+        let applied = driven(&s);
+        assert_eq!(applied.len(), 1, "{id}: exactly one property is driven");
         s.execute("edit.undo", json!({})).unwrap();
-        assert_eq!(driven(&s), 0, "{id}: undo removes the expression");
+        assert!(driven(&s).is_empty(), "{id}: undo removes the expression");
+        s.execute("edit.redo", json!({})).unwrap();
+        assert_eq!(driven(&s), applied, "{id}: redo restores the expression");
+        s.execute("edit.undo", json!({})).unwrap();
     }
 }
