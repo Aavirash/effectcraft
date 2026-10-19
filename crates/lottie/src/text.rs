@@ -227,8 +227,8 @@ fn style_run_animators(ex: &mut Ex, d: &TextDoc, label: &str) -> Vec<Json> {
             props.insert("s".into(), k(json!([p, p, 100.0])));
         }
         if (s.tracking - base.tracking).abs() > 1e-9 {
-            // Lottie tracking is in 1/1000 em like the Character panel's.
-            props.insert("t".into(), k(json!(s.tracking - base.tracking)));
+            // An animator's tracking is in pixels; the Character panel's in 1/1000 em.
+            props.insert("t".into(), k(json!((s.tracking - base.tracking) / 1000.0 * s.size)));
         }
         if (s.baseline_shift - base.baseline_shift).abs() > 1e-9 {
             props.insert("p".into(), k(json!([0.0, -(s.baseline_shift - base.baseline_shift), 0.0])));

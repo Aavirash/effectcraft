@@ -90,6 +90,18 @@ Regression test: `rtl_point_text_with_a_justified_paragraph_is_flush_at_its_star
 AE wraps right-to-left box text slightly wider (its word gaps are 1–2 px narrower than in
 left-to-right text with the same font), so a 300 px box fits a word more per line.
 
+## Text animator tracking
+
+Measured on 19 October 2026 with After Effects 2026 (26.2): a text animator's Tracking Amount is in
+pixels, not 1/1000 em like the Character panel's tracking (Amount 30 adds 30 px between neighbouring
+characters at 80 px and at 40 px, half before and half after each), and a Subtract range selector
+over characters the first selector leaves out keeps them at 0 instead of tracking them negatively.
+With both, the EXPORTER's t8 layer D (Tracking 30 on characters 2–4 by index, a Subtract selector
+over the last 20 %) puts every glyph where AE does (it ended 88 px short). The "Tracking In" text
+preset now animates 40 → 0 px (was 400 → 0 thousandths of an em); Lottie export writes a style run's
+tracking as pixels. Regression tests: `animator_tracking_is_in_pixels_as_in_after_effects`,
+`modes_combine`.
+
 ## Still unmeasured
 
 Rendered frame comparisons now have a deterministic `effectcraft_effects::fidelity::compare_frames`

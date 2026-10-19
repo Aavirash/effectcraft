@@ -639,10 +639,12 @@ pub fn text_geom(ctx: &EvalCtx, layer: &Layer) -> Option<TextGeom> {
         let (mut la, mut la_k) = (50.0 * f64::from(align_index(justify)), 0.0);
         for gi in li_start..li_end {
             let x = &xfs[gi];
-            let em = lay.styles.get(lay.glyphs[gi].run).map_or(doc.size, |s| s.size) / 1000.0;
-            pen += x.track_before * em;
+            // An animator's Tracking Amount is in pixels, whatever the font size (After Effects
+            // 2026: Amount 30 adds 30 px between selected characters at 80 px and at 40 px), unlike
+            // the Character panel's tracking in 1/1000 em.
+            pen += x.track_before;
             shift[gi] = pen;
-            pen += x.track_after * em + vadv[gi];
+            pen += x.track_after + vadv[gi];
             if x.line_anchor_k > la_k {
                 la = x.line_anchor;
                 la_k = x.line_anchor_k;
