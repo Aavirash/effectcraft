@@ -340,6 +340,11 @@ fn timeline_colour_eyedropper_samples_the_comp() {
     let fill = fill.expect("a fill colour");
     fn groups(g: &effectcraft_engine::project::PropGroup, out: &mut Vec<u64>) {
         for c in g.groups() {
+            // The rectangle's path rows would push Fill below the rows the Timeline fits; the
+            // eyedropper only needs Fill, so leave that group collapsed.
+            if c.name == "Rectangle Path 1" {
+                continue;
+            }
             out.push(c.uid);
             groups(c, out);
         }
