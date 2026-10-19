@@ -752,9 +752,9 @@ pub fn text_geom(ctx: &EvalCtx, layer: &Layer) -> Option<TextGeom> {
         };
         // Outline relative to the pivot.
         let local = kurbo::Affine::translate((o[0] - pivot[0], o[1] - pivot[1])) * outline;
-        let char_m = Mat4::rotate_z(x.rotation)
+        let char_m = Mat4::rotate_x(x.rotation_x)
             * Mat4::rotate_y(x.rotation_y)
-            * Mat4::rotate_x(x.rotation_x)
+            * Mat4::rotate_z(x.rotation)
             * Mat4::from_mat3_affine(&Mat3::skew_deg(-x.skew, x.skew_axis))
             * Mat4::scale(Vec3::from(x.scale) / 100.0)
             * Mat4::translate(-Vec3::from(x.anchor));

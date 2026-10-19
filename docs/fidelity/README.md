@@ -102,6 +102,14 @@ preset now animates 40 → 0 px (was 400 → 0 thousandths of an em); Lottie exp
 tracking as pixels. Regression tests: `animator_tracking_is_in_pixels_as_in_after_effects`,
 `modes_combine`.
 
+## Per-character 3D rotation order
+
+Measured on 19 October 2026 with After Effects 2026 (26.2) (case 931: "H" at 400 px, per-character
+3D, animator X / Y / Z Rotation 40 / 30 / 20): a character turns as a 3D layer does, Rx · Ry · Rz
+(Z first). EffectCraft composed Rz · Ry · Rx, so the glyph faced another way (23 of 5184 grid points
+off, max 255); now 3 at the anti-aliased edge (mean 0.015). Regression test:
+`per_character_rotation_turns_z_first_as_a_3d_layer`.
+
 ## Still unmeasured
 
 Rendered frame comparisons now have a deterministic `effectcraft_effects::fidelity::compare_frames`

@@ -484,6 +484,37 @@ fn per_character_3d_projects_characters() {
     assert!(b[2] - b[0] < flat[2] - flat[0] && b[2] > b[0] + 10, "{b:?} {flat:?}");
 }
 
+/// After Effects 2026 (case 931: "H", 400 px, per-character 3D, X / Y / Z Rotation 40 / 30 /
+/// 20): a character turns like a 3D layer, Rx · Ry · Rz (Z first), so its matrix is the same
+/// product as a layer's X / Y / Z Rotation. The render then matches AE (3 of 5184 grid points
+/// off at edges; with Rz · Ry · Rx 23).
+#[test]
+fn per_character_rotation_turns_z_first_as_a_3d_layer() {
+    let (mut p, cid, comp) = setup(400, 300);
+    let mut l = text_layer(&mut p, &comp, doc("H", 80.0));
+    l.switches.three_d = true;
+    animator(&mut p, &mut l, &["rotation"], &["range"]);
+    let mut next = p.next_id;
+    let mut extra = build::text_anim_props(&mut Ids(&mut next), "rotation", true);
+    p.next_id = next;
+    let props: &mut PropGroup = l.props.group_mut("text/animators/#1/properties").unwrap();
+    props.children.retain(|c| c.match_id() != "rotation");
+    props.children.extend(extra.drain(..).map(Into::into));
+    for (id, v) in [("rotationX", 40.0), ("rotationY", 30.0), ("rotation", 20.0)] {
+        props.get_mut(id).unwrap().value = Value::Scalar(v);
+    }
+    l.props.sub_mut("text").unwrap().get_mut("perChar3d").unwrap().value = Value::Bool(true);
+    p.comp_mut(cid).unwrap().layers.push(l);
+    let geom = text_geom(&ctx(&p, cid, 0.0), &p.comp(cid).unwrap().layers[0]).unwrap();
+    let g = &geom.glyphs[0];
+    let want = Mat4::rotate_x(40.0) * Mat4::rotate_y(30.0) * Mat4::rotate_z(20.0);
+    for r in 0..3 {
+        for c in 0..3 {
+            assert!((g.m.0[r][c] - want.0[r][c]).abs() < 1e-9, "row {r} col {c}: {:?} vs {:?}", g.m.0, want.0);
+        }
+    }
+}
+
 #[test]
 fn keyframed_selector_animates() {
     let (mut p, cid, comp) = setup(400, 200);
