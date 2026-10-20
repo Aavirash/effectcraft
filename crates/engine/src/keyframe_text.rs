@@ -4,7 +4,7 @@
 //! number in comp time, then the value) and static ones as a single row with no frame. Easing
 //! and tangents aren't part of the format; EffectCraft's own paste keeps them.
 
-use effectcraft_project::{AutoOrient, Comp, ItemKind, Layer, LayerId, LayerSource, Project, Property, Uid};
+use effectcraft_project::{AutoOrient, Comp, GroupKind, ItemKind, Layer, LayerId, LayerSource, Node, ParamUi, Project, PropGroup, Property, Uid};
 
 use crate::KeyRef;
 
@@ -39,14 +39,25 @@ enum Values {
     /// A 2D layer's Transform vector: the third component is the one the layer shows (it may
     /// keep another from pasted 3D keys).
     Flat(f64),
+    /// RGBA 0–1 as alpha, red, green, blue 0–255.
+    Argb,
+    /// A popup's 0-based choice as After Effects' 1-based one.
+    OneBased,
 }
 
 impl Values {
     fn row(self, mut v: Vec<f64>) -> Vec<f64> {
-        if let (Values::Flat(z), Some(c)) = (self, v.get_mut(2)) {
-            *c = z;
+        match (self, v.as_slice()) {
+            (Values::Flat(z), _) => {
+                if let Some(c) = v.get_mut(2) {
+                    *c = z;
+                }
+                v
+            }
+            (Values::Argb, [r, g, b, a]) => [a, r, g, b].map(|c| c * 255.0).to_vec(),
+            (Values::OneBased, _) => v.into_iter().map(|c| c + 1.0).collect(),
+            _ => v,
         }
-        v
     }
 }
 
@@ -118,8 +129,40 @@ fn channel(layer: &Layer, pr: &Property) -> Option<Channel> {
     match chain.first().and_then(|n| n.as_group()).map(|g| g.match_id.as_str()) {
         None if pr.match_id == "timeRemap" => Some(Channel { header: "Time Remap".into(), labels: labels("seconds", 1), values: Values::Plain }),
         Some("transform") => transform(layer, pr),
+        Some("effects") => effect(&chain, pr),
         _ => None,
     }
+}
+
+/// An effect property: `Effects`, the effect's name (not a custom one) and place on the layer,
+/// then the property's name and place, counting the effect's hidden input layer as the first.
+fn effect(chain: &[&Node], pr: &Property) -> Option<Channel> {
+    let [Node::Group(effects), Node::Group(fx), _] = chain else { return None };
+    let GroupKind::Effect { effect } = &fx.kind else { return None };
+    let name = effectcraft_effects::find(effect).map_or(fx.name.as_str(), |spec| spec.name);
+    let (labels, values) = by_ui(pr)?;
+    let header = format!("Effects\t{name} #{}\t{} #{}", place(effects, fx.uid)?, pr.name, place(fx, pr.uid)? + 1);
+    Some(Channel { header, labels, values })
+}
+
+/// 1-based position of a child in its group.
+fn place(group: &PropGroup, uid: Uid) -> Option<usize> {
+    group.children.iter().position(|c| c.uid() == uid).map(|i| i + 1)
+}
+
+/// Column labels and values for an effect or text property, by how it's edited (After Effects
+/// labels sliders, checkboxes and popups with no unit).
+fn by_ui(pr: &Property) -> Option<(Vec<String>, Values)> {
+    let dims = pr.value.dims();
+    Some(match &pr.ui {
+        ParamUi::Color => (["alpha ", "red ", "green ", "blue "].map(String::from).to_vec(), Values::Argb),
+        ParamUi::Popup { .. } => (labels("", dims), Values::OneBased),
+        ParamUi::Percent => (labels("percent", dims), Values::Plain),
+        ParamUi::Angle => (labels("degrees", dims), Values::Plain),
+        ParamUi::Point | ParamUi::Point3 => (labels("pixels", dims), Values::Plain),
+        ParamUi::Number | ParamUi::Slider { .. } | ParamUi::Pixels | ParamUi::Checkbox => (labels("", dims), Values::Plain),
+        _ => return None,
+    })
 }
 
 fn transform(layer: &Layer, pr: &Property) -> Option<Channel> {

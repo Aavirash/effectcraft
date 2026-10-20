@@ -175,6 +175,47 @@ fn time_remap_writes_source_seconds_at_comp_frames() {
     assert!(text.contains("Layer\nTime Remap\n\tFrame\tseconds\t\n\t10\t0\t\n\t16\t2.5\t\n"), "{text}");
 }
 
+/// Selects the layer's properties at `paths` and copies them.
+fn copy_props(s: &mut Session, lid: LayerId, paths: &[&str]) -> String {
+    for (i, path) in paths.iter().enumerate() {
+        s.execute("prop.select", json!({"layer": lid.0, "path": path, "add": i > 0, "selectKeys": false})).unwrap();
+    }
+    s.execute("edit.copy", json!({})).unwrap();
+    s.state.keyframe_text.clone().unwrap()
+}
+
+#[test]
+fn effect_properties_are_written_as_after_effects_does() {
+    // The blocks After Effects 2019 wrote for the same effects and values.
+    let (mut s, l) = session();
+    for fx in ["Fill", "Checkbox Control", "Dropdown Menu Control", "Slider Control", "Point Control"] {
+        s.execute("effect.apply", json!({"layer": l.0, "effect": fx})).unwrap();
+    }
+    let t = frame(&s, 12);
+    add_key(&mut s, l, "effects/#1/color", Tick::ZERO, json!([1, 0.5, 0.25, 1]));
+    add_key(&mut s, l, "effects/#1/color", t, json!([0, 0, 1, 1]));
+    add_key(&mut s, l, "effects/#2/checkbox", Tick::ZERO, json!(true));
+    add_key(&mut s, l, "effects/#2/checkbox", t, json!(false));
+    s.execute("prop.set", json!({"layer": l.0, "path": "effects/#3/menu", "value": 1})).unwrap();
+    s.execute("prop.set", json!({"layer": l.0, "path": "effects/#4/slider", "value": 20.5})).unwrap();
+    s.execute("prop.set", json!({"layer": l.0, "path": "effects/#5/point", "value": [10, 20]})).unwrap();
+    // After Effects writes a renamed effect under the effect's own name.
+    let slider = s.active_comp().unwrap().layer(l).unwrap().props.group("effects/#4").unwrap().uid;
+    s.execute("prop.renameGroup", json!({"layer": l.0, "prop": slider, "name": "My Slider"})).unwrap();
+    let text = copy_props(&mut s, l, &["effects/#1/color", "effects/#2/checkbox", "effects/#3/menu", "effects/#4/slider", "effects/#5/point"]);
+    assert!(
+        text.contains(
+            "Layer\n\
+             Effects\tFill #1\tColor #4\n\tFrame\talpha \tred \tgreen \tblue \t\n\t0\t255\t255\t127.5\t63.75\t\n\t12\t255\t0\t0\t255\t\n\n\
+             Effects\tCheckbox Control #2\tCheckbox #2\n\tFrame\t\t\n\t0\t1\t\n\t12\t0\t\n\n\
+             Effects\tDropdown Menu Control #3\tMenu #2\n\tFrame\t\t\n\t\t2\t\n\n\
+             Effects\tSlider Control #4\tSlider #2\n\tFrame\t\t\n\t\t20.5\t\n\n\
+             Effects\tPoint Control #5\tPoint #2\n\tFrame\tX pixels\tY pixels\t\n\t\t10\t20\t\n\n"
+        ),
+        "{text}"
+    );
+}
+
 #[test]
 fn a_2d_layer_writes_the_z_it_shows() {
     // Keys pasted from a 3D layer keep their Z on a 2D one, which ignores it.
