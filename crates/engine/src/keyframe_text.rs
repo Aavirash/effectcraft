@@ -86,8 +86,10 @@ pub(crate) fn text(project: &Project, comp: &Comp, keys: &[KeyRef], statics: &[(
         },
         _ => comp.pixel_aspect,
     };
+    // After Effects starts the layer's properties with a `Layer` line; parsers such as
+    // ae-keyframes reject properties without one.
     Some(format!(
-        "Adobe After Effects 8.0 Keyframe Data\n\n\tUnits Per Second\t{}\n\tSource Width\t{w}\n\tSource Height\t{h}\n\tSource Pixel Aspect Ratio\t{}\n\tComp Pixel Aspect Ratio\t{}\n\n{blocks}End of Keyframe Data\n",
+        "Adobe After Effects 8.0 Keyframe Data\n\n\tUnits Per Second\t{}\n\tSource Width\t{w}\n\tSource Height\t{h}\n\tSource Pixel Aspect Ratio\t{}\n\tComp Pixel Aspect Ratio\t{}\n\nLayer\n{blocks}End of Keyframe Data\n",
         num(fps),
         num(par),
         num(comp.pixel_aspect)

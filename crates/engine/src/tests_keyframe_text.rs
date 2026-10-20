@@ -51,6 +51,7 @@ fn copied_keys_are_after_effects_text_in_comp_frames() {
         s.state.keyframe_text.as_deref(),
         Some(
             "Adobe After Effects 8.0 Keyframe Data\n\n\tUnits Per Second\t23.976\n\tSource Width\t200\n\tSource Height\t100\n\tSource Pixel Aspect Ratio\t1\n\tComp Pixel Aspect Ratio\t1\n\n\
+             Layer\n\
              Transform\tPosition\n\tFrame\tX pixels\tY pixels\tZ pixels\n\t12\t960\t540\t0\n\t19\t1100\t500\t0\n\n\
              Transform\tRotation\n\tFrame\tdegrees\n\t15\t-45\n\n\
              End of Keyframe Data\n"
