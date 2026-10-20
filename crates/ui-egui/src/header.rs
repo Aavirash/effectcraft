@@ -964,6 +964,32 @@ mod tests {
         assert!(!bare.ui.status.is_empty(), "no comp: a status message, not a crash");
     }
 
+    /// #1765: a double-click on the Ellipse tool with nothing selected makes its own shape layer
+    /// the size of the comp, as the Rectangle does.
+    #[test]
+    fn double_click_ellipse_with_no_selection_makes_a_layer() {
+        let mut s = effectcraft_engine::Session::default();
+        s.execute("comp.new", json!({"width": 640, "height": 360, "duration": 2})).unwrap();
+        let mut app = EffectcraftApp::new(s);
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx, &app.tokens, crate::i18n::language(&app));
+        frame(&mut app, &ctx, 0.0, vec![]);
+        frame(&mut app, &ctx, 0.1, vec![]);
+        app.ui.slot_tools[8] = Tool::Ellipse;
+        frame(&mut app, &ctx, 1.0, vec![]);
+        let pointer = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+        let e = app.auto.elements.iter().find(|w| w.id == "tools.Ellipse").unwrap_or_else(|| panic!("no tools.Ellipse"));
+        let at = egui::pos2(e.rect[0] + e.rect[2] / 2.0, e.rect[1] + e.rect[3] / 2.0);
+        frame(&mut app, &ctx, 1.1, vec![egui::Event::PointerMoved(at), pointer(at, true), pointer(at, false), pointer(at, true), pointer(at, false)]);
+        let comp = app.session.active_comp().unwrap();
+        assert_eq!(comp.layers.len(), 1, "the double-click made a layer");
+        let l = &comp.layers[0];
+        assert!(matches!(l.source, LayerSource::Shape), "a shape layer");
+        let size = l.props.prop("contents/Ellipse 1/contents/Ellipse Path 1/size").expect("Ellipse Path 1");
+        assert_eq!(size.value.as_vec2(), [640.0, 360.0], "the ellipse fills the comp");
+        assert!(app.ui.status.is_empty(), "{}", app.ui.status);
+    }
+
     /// Tool Creates Mask on (#1072): a double-click on a shape tool masks the selected shape
     /// layer instead of adding to its Contents.
     #[test]
