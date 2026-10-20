@@ -353,10 +353,14 @@ fn the_header_has_the_source_pixel_aspect() {
     let solid = LayerId(s.execute("layer.newSolid", json!({"width": 200, "height": 100, "pixelAspect": 1.5})).unwrap()["layer"].as_u64().unwrap());
     let text = copy_transform(&mut s, solid);
     assert!(text.contains("\tSource Pixel Aspect Ratio\t1.5\n\tComp Pixel Aspect Ratio\t1.2\n"), "{text}");
-    // A text layer has no source of its own: the comp's.
+    // A text layer: 1 × 1, as After Effects 2019 wrote it, with the comp's pixel aspect.
     let t = LayerId(s.execute("layer.newText", json!({"text": "Hi"})).unwrap()["layer"].as_u64().unwrap());
     let text = copy_transform(&mut s, t);
-    assert!(text.contains("\tSource Width\t1920\n\tSource Height\t1080\n\tSource Pixel Aspect Ratio\t1.2\n"), "{text}");
+    assert!(text.contains("\tSource Width\t1\n\tSource Height\t1\n\tSource Pixel Aspect Ratio\t1.2\n"), "{text}");
+    // A shape layer has no source of its own: the comp's size.
+    let shape = LayerId(s.execute("layer.newShape", json!({})).unwrap()["layer"].as_u64().unwrap());
+    let text = copy_transform(&mut s, shape);
+    assert!(text.contains("\tSource Width\t1920\n\tSource Height\t1080\n"), "{text}");
 }
 
 #[test]

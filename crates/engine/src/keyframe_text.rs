@@ -97,11 +97,12 @@ pub(crate) fn text(project: &Project, comp: &Comp, keys: &[KeyRef], statics: &[(
     if blocks.is_empty() {
         return None;
     }
-    // Layers without a source of their own (text, shapes, cameras) take the comp's size and
-    // pixel aspect.
-    let (w, h) = match effectcraft_render::eval::source_size(project, layer) {
-        (0, 0) => (comp.width, comp.height),
-        size => size,
+    // After Effects writes a text layer's source as 1 × 1. Other layers without a source of
+    // their own (shapes, cameras) take the comp's size, and all of them its pixel aspect.
+    let (w, h) = match (&layer.source, effectcraft_render::eval::source_size(project, layer)) {
+        (LayerSource::Text, _) => (1, 1),
+        (_, (0, 0)) => (comp.width, comp.height),
+        (_, size) => size,
     };
     let par = match layer.source {
         LayerSource::Footage { item } | LayerSource::Solid { item } | LayerSource::Comp { item } => match project.item(item).map(|i| &i.kind) {
