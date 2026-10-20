@@ -1828,7 +1828,16 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
     pick_whip_edge_scroll(app, g);
     let snap_project = app.session.project.clone();
     let snap_expr = app.session.expr.clone();
-    let ectx = EvalCtx { project: &snap_project, comp_id: cid, comp: &comp, time: g.time, expr: snap_expr.as_deref(), footage: None };
+    let ectx = EvalCtx {
+        project: &snap_project,
+        comp_id: cid,
+        comp: &comp,
+        time: g.time,
+        expr: snap_expr.as_deref(),
+        footage: None,
+        property_overrides: &[],
+        media_overrides: &[],
+    };
     let mut rw = begin_rows(app, ui, tl);
     let g = &mut rw;
     draw_rows(app, ui, g, &ectx);

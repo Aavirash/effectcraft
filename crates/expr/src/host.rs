@@ -299,7 +299,17 @@ impl<'a> Resolver<'a> {
     }
     fn ctx_at(&self, c: u64, t: f64) -> Option<EvalCtx<'a>> {
         let comp = self.comp(c)?;
-        Some(EvalCtx { project: self.ctx.project, comp_id: ItemId(c), comp, time: Tick::from_seconds_f64(t), expr: self.ctx.expr, footage: self.ctx.footage })
+        let same_comp = c == self.ctx.comp_id.0;
+        Some(EvalCtx {
+            project: self.ctx.project,
+            comp_id: ItemId(c),
+            comp,
+            time: Tick::from_seconds_f64(t),
+            expr: self.ctx.expr,
+            footage: self.ctx.footage,
+            property_overrides: if same_comp { self.ctx.property_overrides } else { &[] },
+            media_overrides: if same_comp { self.ctx.media_overrides } else { &[] },
+        })
     }
     fn prop(&self, c: u64, l: u64, path: &str) -> Option<(&'a Layer, &'a Property)> {
         let layer = self.layer(c, l)?;

@@ -76,6 +76,9 @@ impl Dependencies<'_> {
         // Include transforms/parents as well as pixels: selected-layer anchors and
         // continuously rasterized sources can depend on them.
         hash_debug(self.h, layer);
+        // A referenced layer's static values can be overridden by the collapsed instance without
+        // editing it (`hash_values` only sees animated ones), so the owner's key needs them too.
+        super::hash_overrides(self.h, ctx, layer.id);
         hash_values(self.h, ctx, layer, &layer.props);
         hash_debug(self.h, &ctx.world_matrix(layer));
         // A cached owner never runs this layer's effects, so the comp camera and lights its
@@ -88,6 +91,10 @@ impl Dependencies<'_> {
         }
         match layer.source {
             LayerSource::Solid { item } | LayerSource::Footage { item } | LayerSource::Comp { item } => {
+                let item = match layer.source {
+                    LayerSource::Footage { .. } => ctx.media_item(layer, item),
+                    _ => item,
+                };
                 let source = ctx.project.item(item);
                 hash_debug(self.h, &source);
                 if let Some(source) = source {

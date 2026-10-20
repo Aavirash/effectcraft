@@ -1114,7 +1114,16 @@ fn text_expression_selector_values() {
     let sel_of = |p: &Project| {
         let c = p.comp(cid).unwrap();
         let l = c.layer(lid).unwrap();
-        let ctx = EvalCtx { project: p, comp_id: cid, comp: c, time: Tick::ZERO, expr: Some(&Expressions), footage: None };
+        let ctx = EvalCtx {
+            project: p,
+            comp_id: cid,
+            comp: c,
+            time: Tick::ZERO,
+            expr: Some(&Expressions),
+            footage: None,
+            property_overrides: &[],
+            media_overrides: &[],
+        };
         let doc = effectcraft_render::text::source_text(&ctx, l).unwrap();
         let lay = effectcraft_text::layout_doc(&doc);
         let anim = l.props.group("text/animators/#1").unwrap();
