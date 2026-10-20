@@ -4,7 +4,7 @@
 //! (frame number in comp time, then the value) and static ones as a single row with no frame.
 //! Easing and tangents aren't part of the format; EffectCraft's own paste keeps them.
 
-use effectcraft_project::{Comp, LayerId, Project, Uid};
+use effectcraft_project::{AutoOrient, Comp, Layer, LayerId, Project, Uid};
 
 use crate::KeyRef;
 
@@ -33,7 +33,7 @@ pub(crate) fn text(project: &Project, comp: &Comp, keys: &[KeyRef], statics: &[(
     let mut blocks = String::new();
     for (id, unit) in CHANNELS {
         let Some(pr) = layer.props.prop(&format!("transform/{id}")) else { continue };
-        if pr.three_d_only && !layer.is_3d() {
+        if !active(layer, id) || (pr.three_d_only && !layer.is_3d()) {
             continue;
         }
         let mut times: Vec<_> = keys.iter().filter(|k| k.prop == pr.uid).map(|k| k.time).collect();
@@ -74,6 +74,17 @@ pub(crate) fn text(project: &Project, comp: &Comp, keys: &[KeyRef], statics: &[(
         num(fps),
         num(comp.pixel_aspect)
     ))
+}
+
+/// Whether the layer uses this Transform property: one-node cameras (and lights not aimed at
+/// it) have no Point of Interest, and Separate Dimensions replaces Position with X / Y / Z
+/// Position (which this text doesn't cover).
+fn active(layer: &Layer, id: &str) -> bool {
+    match id {
+        "poi" => !(layer.is_camera() || layer.is_light()) || layer.auto_orient == AutoOrient::TowardsPointOfInterest,
+        "position" => layer.transform().is_none_or(|tr| tr.get("positionX").is_none()),
+        _ => true,
+    }
 }
 
 /// A number with at most three decimals and no trailing zeros (`23.976`, `960`, `-0.5`).

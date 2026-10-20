@@ -109,6 +109,35 @@ fn a_copied_transform_group_lists_what_the_layer_shows() {
     assert!(text.contains("Transform\tOrientation\n\tFrame\tX degrees\n\t\t0\t0\t0\n"), "{text}");
 }
 
+fn copy_transform(s: &mut Session, lid: LayerId) -> String {
+    let transform = s.active_comp().unwrap().layer(lid).unwrap().props.sub("transform").unwrap().uid;
+    s.execute("prop.select", json!({"layer": lid.0, "prop": transform, "selectKeys": false})).unwrap();
+    s.execute("edit.copy", json!({})).unwrap();
+    s.state.keyframe_text.clone().unwrap()
+}
+
+fn names(text: &str) -> Vec<&str> {
+    text.lines().filter_map(|line| line.strip_prefix("Transform\t")).collect()
+}
+
+#[test]
+fn properties_the_layer_does_not_use_are_left_out() {
+    // Separate Dimensions: the old Position no longer moves the layer.
+    let (mut s, l) = session();
+    s.execute("prop.set", json!({"layer": l.0, "path": "transform/position", "value": [100, 200]})).unwrap();
+    s.execute("prop.separateDimensions", json!({"layer": l.0, "value": true})).unwrap();
+    s.execute("prop.set", json!({"layer": l.0, "path": "transform/positionX", "value": 321})).unwrap();
+    let text = copy_transform(&mut s, l);
+    assert!(!names(&text).contains(&"Position"), "{text}");
+    // A one-node camera has no Point of Interest; a two-node one does.
+    let cam = LayerId(s.execute("layer.newCamera", json!({"type": "oneNode"})).unwrap()["layer"].as_u64().unwrap());
+    let text = copy_transform(&mut s, cam);
+    assert!(!names(&text).contains(&"Point of Interest"), "{text}");
+    s.execute("layer.cameraSettings", json!({"layer": cam.0, "type": "twoNode"})).unwrap();
+    let text = copy_transform(&mut s, cam);
+    assert!(names(&text).contains(&"Point of Interest"), "{text}");
+}
+
 #[test]
 fn keys_from_two_layers_have_no_text() {
     let (mut s, a) = session();
