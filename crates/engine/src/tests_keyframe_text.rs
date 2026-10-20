@@ -50,10 +50,11 @@ fn copied_keys_are_after_effects_text_in_comp_frames() {
     assert_eq!(
         s.state.keyframe_text.as_deref(),
         Some(
-            "Adobe After Effects 8.0 Keyframe Data\n\n\tUnits Per Second\t23.976\n\tSource Width\t200\n\tSource Height\t100\n\tSource Pixel Aspect Ratio\t1\n\tComp Pixel Aspect Ratio\t1\n\n\
+            "Adobe After Effects 9.0 Keyframe Data\n\n\tUnits Per Second\t23.976\n\tSource Width\t200\n\tSource Height\t100\n\tSource Pixel Aspect Ratio\t1\n\tComp Pixel Aspect Ratio\t1\n\n\
              Layer\n\
-             Transform\tPosition\n\tFrame\tX pixels\tY pixels\tZ pixels\n\t12\t960\t540\t0\n\t19\t1100\t500\t0\n\n\
-             Transform\tRotation\n\tFrame\tdegrees\n\t15\t-45\n\n\
+             Transform\tPosition\n\tFrame\tX pixels\tY pixels\tZ pixels\t\n\t12\t960\t540\t0\t\n\t19\t1100\t500\t0\t\n\n\
+             Transform\tRotation\n\tFrame\tdegrees\t\n\t15\t-45\t\n\n\
+             \n\
              End of Keyframe Data\n"
         )
     );
@@ -72,7 +73,7 @@ fn a_stretched_layer_writes_the_frames_its_keys_show_at() {
     s.execute("prop.select", json!({"layer": l.0, "path": "transform/opacity"})).unwrap();
     s.execute("edit.copy", json!({})).unwrap();
     let text = s.state.keyframe_text.clone().unwrap();
-    assert!(text.contains("Transform\tOpacity\n\tFrame\tpercent\n\t0\t0\n\t12\t100\n\n"), "{text}");
+    assert!(text.contains("Transform\tOpacity\n\tFrame\tpercent\t\n\t0\t0\t\n\t12\t100\t\n\n"), "{text}");
 }
 
 #[test]
@@ -82,7 +83,7 @@ fn copied_static_values_have_no_frame() {
     s.execute("prop.select", json!({"layer": l.0, "path": "transform/position"})).unwrap();
     s.execute("edit.copy", json!({})).unwrap();
     let text = s.state.keyframe_text.clone().unwrap();
-    assert!(text.contains("Transform\tPosition\n\tFrame\tX pixels\tY pixels\tZ pixels\n\t\t100\t200\t0\n\n"), "{text}");
+    assert!(text.contains("Transform\tPosition\n\tFrame\tX pixels\tY pixels\tZ pixels\t\n\t\t100\t200\t0\t\n\n"), "{text}");
     assert_eq!(s.state.value_clipboard.len(), 1, "the internal clipboard keeps the value");
 }
 
@@ -98,7 +99,7 @@ fn a_copied_transform_group_lists_what_the_layer_shows() {
     let text = s.state.keyframe_text.clone().unwrap();
     let names: Vec<&str> = text.lines().filter_map(|line| line.strip_prefix("Transform\t")).collect();
     assert_eq!(names, ["Anchor Point", "Position", "Scale", "Rotation", "Opacity"], "a 2D layer has no Orientation or X / Y Rotation");
-    assert!(text.contains("\tFrame\tX percent\tY percent\tZ percent\n\t0\t50\t50\t100\n\t24\t150\t150\t100\n"), "{text}");
+    assert!(text.contains("\tFrame\tX percent\tY percent\tZ percent\t\n\t0\t50\t50\t100\t\n\t24\t150\t150\t100\t\n"), "{text}");
     // 3D: Orientation and X / Y Rotation. Z Rotation stays Rotation, and Orientation's three
     // values sit under one label, as After Effects writes them.
     edit_layer(&mut s, l, |l| l.switches.three_d = true);
@@ -107,7 +108,7 @@ fn a_copied_transform_group_lists_what_the_layer_shows() {
     let text = s.state.keyframe_text.clone().unwrap();
     let names: Vec<&str> = text.lines().filter_map(|line| line.strip_prefix("Transform\t")).collect();
     assert_eq!(names, ["Anchor Point", "Position", "Scale", "Orientation", "X Rotation", "Y Rotation", "Rotation", "Opacity"]);
-    assert!(text.contains("Transform\tOrientation\n\tFrame\tX degrees\n\t\t0\t0\t0\n"), "{text}");
+    assert!(text.contains("Transform\tOrientation\n\tFrame\tX degrees\t\n\t\t0\t0\t0\t\n"), "{text}");
 }
 
 fn copy_transform(s: &mut Session, lid: LayerId) -> String {
@@ -155,8 +156,8 @@ fn a_2d_layer_writes_the_z_it_shows() {
     s.state.selected_keys = ["transform/position", "transform/scale"].map(|p| KeyRef { layer: l, prop: uid(&s, l, p), time: Tick::ZERO }).to_vec();
     s.execute("keys.copy", json!({})).unwrap();
     let text = s.state.keyframe_text.clone().unwrap();
-    assert!(text.contains("Transform\tPosition\n\tFrame\tX pixels\tY pixels\tZ pixels\n\t0\t100\t200\t0\n"), "{text}");
-    assert!(text.contains("Transform\tScale\n\tFrame\tX percent\tY percent\tZ percent\n\t0\t50\t60\t100\n"), "{text}");
+    assert!(text.contains("Transform\tPosition\n\tFrame\tX pixels\tY pixels\tZ pixels\t\n\t0\t100\t200\t0\t\n"), "{text}");
+    assert!(text.contains("Transform\tScale\n\tFrame\tX percent\tY percent\tZ percent\t\n\t0\t50\t60\t100\t\n"), "{text}");
 }
 
 #[test]

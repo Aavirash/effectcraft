@@ -55,7 +55,7 @@ pub(crate) fn text(project: &Project, comp: &Comp, keys: &[KeyRef], statics: &[(
             _ if *id == "orientation" => vec![format!("X {unit}")],
             _ => ["X", "Y", "Z"].iter().take(dims).map(|axis| format!("{axis} {unit}")).collect(),
         };
-        blocks.push_str(&format!("Transform\t{}\n\tFrame\t{}\n", pr.name, columns.join("\t")));
+        blocks.push_str(&format!("Transform\t{}\n\tFrame\t{}\t\n", pr.name, columns.join("\t")));
         for (frame, mut values) in rows {
             // A 2D layer ignores the Z it may keep (from pasted 3D keys): write the one it shows.
             if !layer.is_3d()
@@ -64,7 +64,7 @@ pub(crate) fn text(project: &Project, comp: &Comp, keys: &[KeyRef], statics: &[(
                 *z = if *id == "scale" { 100.0 } else { 0.0 };
             }
             let values: Vec<String> = values.into_iter().map(num).collect();
-            blocks.push_str(&format!("\t{frame}\t{}\n", values.join("\t")));
+            blocks.push_str(&format!("\t{frame}\t{}\t\n", values.join("\t")));
         }
         blocks.push('\n');
     }
@@ -86,10 +86,10 @@ pub(crate) fn text(project: &Project, comp: &Comp, keys: &[KeyRef], statics: &[(
         },
         _ => comp.pixel_aspect,
     };
-    // After Effects starts the layer's properties with a `Layer` line; parsers such as
-    // ae-keyframes reject properties without one.
+    // The layout of current After Effects: a `Layer` line before the layer's properties (parsers
+    // such as ae-keyframes reject properties without one), and a tab after every column.
     Some(format!(
-        "Adobe After Effects 8.0 Keyframe Data\n\n\tUnits Per Second\t{}\n\tSource Width\t{w}\n\tSource Height\t{h}\n\tSource Pixel Aspect Ratio\t{}\n\tComp Pixel Aspect Ratio\t{}\n\nLayer\n{blocks}End of Keyframe Data\n",
+        "Adobe After Effects 9.0 Keyframe Data\n\n\tUnits Per Second\t{}\n\tSource Width\t{w}\n\tSource Height\t{h}\n\tSource Pixel Aspect Ratio\t{}\n\tComp Pixel Aspect Ratio\t{}\n\nLayer\n{blocks}\nEnd of Keyframe Data\n",
         num(fps),
         num(par),
         num(comp.pixel_aspect)

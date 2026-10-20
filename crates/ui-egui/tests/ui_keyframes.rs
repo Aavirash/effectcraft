@@ -108,8 +108,8 @@ fn ctrl_c_and_ctrl_v_copy_and_paste_keys_at_the_current_time() {
     // The system clipboard has the key as After Effects keyframe text (for other applications),
     // so it isn't empty and Ctrl+V sends a paste event.
     let [text] = copied.as_slice() else { panic!("one copy: {copied:?}") };
-    assert!(text.starts_with("Adobe After Effects 8.0 Keyframe Data\n"), "{text}");
-    assert!(text.contains("Transform\tOpacity\n\tFrame\tpercent\n\t30\t100\n"), "{text}");
+    assert!(text.starts_with("Adobe After Effects 9.0 Keyframe Data\n"), "{text}");
+    assert!(text.contains("Transform\tOpacity\n\tFrame\tpercent\t\n\t30\t100\t\n"), "{text}");
     assert!(h.state().session.state.clip_is_keys);
     // Move to 3 s, Ctrl+V: the key lands there.
     h.state_mut().session.set_time(effectcraft_engine::time::Tick::from_seconds_f64(3.0));
