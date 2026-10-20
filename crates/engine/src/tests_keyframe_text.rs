@@ -159,6 +159,19 @@ fn a_2d_layer_writes_the_z_it_shows() {
 }
 
 #[test]
+fn the_header_has_the_source_pixel_aspect() {
+    let mut s = Session::default();
+    s.execute("comp.new", json!({"width": 1920, "height": 1080, "frameRate": 24, "pixelAspect": 1.2})).unwrap();
+    let solid = LayerId(s.execute("layer.newSolid", json!({"width": 200, "height": 100, "pixelAspect": 1.5})).unwrap()["layer"].as_u64().unwrap());
+    let text = copy_transform(&mut s, solid);
+    assert!(text.contains("\tSource Pixel Aspect Ratio\t1.5\n\tComp Pixel Aspect Ratio\t1.2\n"), "{text}");
+    // A text layer has no source of its own: the comp's.
+    let t = LayerId(s.execute("layer.newText", json!({"text": "Hi"})).unwrap()["layer"].as_u64().unwrap());
+    let text = copy_transform(&mut s, t);
+    assert!(text.contains("\tSource Width\t1920\n\tSource Height\t1080\n\tSource Pixel Aspect Ratio\t1.2\n"), "{text}");
+}
+
+#[test]
 fn keys_from_two_layers_have_no_text() {
     let (mut s, a) = session();
     let b = LayerId(s.execute("layer.newSolid", json!({"color": "#00ff00", "width": 200, "height": 100})).unwrap()["layer"].as_u64().unwrap());

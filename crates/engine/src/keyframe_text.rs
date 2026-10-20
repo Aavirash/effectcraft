@@ -4,7 +4,7 @@
 //! (frame number in comp time, then the value) and static ones as a single row with no frame.
 //! Easing and tangents aren't part of the format; EffectCraft's own paste keeps them.
 
-use effectcraft_project::{AutoOrient, Comp, Layer, LayerId, Project, Uid};
+use effectcraft_project::{AutoOrient, Comp, ItemKind, Layer, LayerId, LayerSource, Project, Uid};
 
 use crate::KeyRef;
 
@@ -71,13 +71,25 @@ pub(crate) fn text(project: &Project, comp: &Comp, keys: &[KeyRef], statics: &[(
     if blocks.is_empty() {
         return None;
     }
+    // Layers without a source of their own (text, shapes, cameras) take the comp's size and
+    // pixel aspect.
     let (w, h) = match effectcraft_render::eval::source_size(project, layer) {
         (0, 0) => (comp.width, comp.height),
         size => size,
     };
+    let par = match layer.source {
+        LayerSource::Footage { item } | LayerSource::Solid { item } | LayerSource::Comp { item } => match project.item(item).map(|i| &i.kind) {
+            Some(ItemKind::Footage(f)) => f.pixel_aspect,
+            Some(ItemKind::Solid(s)) => s.pixel_aspect,
+            Some(ItemKind::Comp(c)) => c.pixel_aspect,
+            _ => comp.pixel_aspect,
+        },
+        _ => comp.pixel_aspect,
+    };
     Some(format!(
-        "Adobe After Effects 8.0 Keyframe Data\n\n\tUnits Per Second\t{}\n\tSource Width\t{w}\n\tSource Height\t{h}\n\tSource Pixel Aspect Ratio\t1\n\tComp Pixel Aspect Ratio\t{}\n\n{blocks}End of Keyframe Data\n",
+        "Adobe After Effects 8.0 Keyframe Data\n\n\tUnits Per Second\t{}\n\tSource Width\t{w}\n\tSource Height\t{h}\n\tSource Pixel Aspect Ratio\t{}\n\tComp Pixel Aspect Ratio\t{}\n\n{blocks}End of Keyframe Data\n",
         num(fps),
+        num(par),
         num(comp.pixel_aspect)
     ))
 }
