@@ -98,14 +98,15 @@ fn a_copied_transform_group_lists_what_the_layer_shows() {
     let names: Vec<&str> = text.lines().filter_map(|line| line.strip_prefix("Transform\t")).collect();
     assert_eq!(names, ["Anchor Point", "Position", "Scale", "Rotation", "Opacity"], "a 2D layer has no Orientation or X / Y Rotation");
     assert!(text.contains("\tFrame\tX percent\tY percent\tZ percent\n\t0\t50\t50\t100\n\t24\t150\t150\t100\n"), "{text}");
-    // 3D: Orientation, X / Y Rotation, and Rotation is Z Rotation.
+    // 3D: Orientation and X / Y Rotation. Z Rotation stays Rotation, and Orientation's three
+    // values sit under one label, as After Effects writes them.
     edit_layer(&mut s, l, |l| l.switches.three_d = true);
     s.execute("prop.select", json!({"layer": l.0, "prop": transform, "selectKeys": false})).unwrap();
     s.execute("edit.copy", json!({})).unwrap();
     let text = s.state.keyframe_text.clone().unwrap();
     let names: Vec<&str> = text.lines().filter_map(|line| line.strip_prefix("Transform\t")).collect();
-    assert_eq!(names, ["Anchor Point", "Position", "Scale", "Orientation", "X Rotation", "Y Rotation", "Z Rotation", "Opacity"]);
-    assert!(text.contains("Transform\tOrientation\n\tFrame\tX degrees\tY degrees\tZ degrees\n\t\t0\t0\t0\n"), "{text}");
+    assert_eq!(names, ["Anchor Point", "Position", "Scale", "Orientation", "X Rotation", "Y Rotation", "Rotation", "Opacity"]);
+    assert!(text.contains("Transform\tOrientation\n\tFrame\tX degrees\n\t\t0\t0\t0\n"), "{text}");
 }
 
 #[test]

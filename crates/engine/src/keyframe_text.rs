@@ -48,13 +48,14 @@ pub(crate) fn text(project: &Project, comp: &Comp, keys: &[KeyRef], statics: &[(
             continue;
         };
         let Some(dims) = rows.first().map(|(_, v)| v.len()).filter(|n| *n > 0) else { continue };
+        // After Effects labels only the first of Orientation's three columns, and names Z
+        // Rotation plain Rotation (as AE2Blend expects).
         let columns = match dims {
             1 => vec![unit.to_string()],
+            _ if *id == "orientation" => vec![format!("X {unit}")],
             _ => ["X", "Y", "Z"].iter().take(dims).map(|axis| format!("{axis} {unit}")).collect(),
         };
-        // 3D layers show Rotation as Z Rotation.
-        let name = if *id == "rotation" && layer.is_3d() { "Z Rotation" } else { pr.name.as_str() };
-        blocks.push_str(&format!("Transform\t{name}\n\tFrame\t{}\n", columns.join("\t")));
+        blocks.push_str(&format!("Transform\t{}\n\tFrame\t{}\n", pr.name, columns.join("\t")));
         for (frame, values) in rows {
             let values: Vec<String> = values.into_iter().map(num).collect();
             blocks.push_str(&format!("\t{frame}\t{}\n", values.join("\t")));
