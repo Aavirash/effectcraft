@@ -396,3 +396,62 @@ fn keys_from_two_layers_have_no_text() {
     s.execute("edit.copy", json!({"layers": [a.0]})).unwrap();
     assert_eq!(s.state.keyframe_text, None);
 }
+
+#[test]
+fn shape_contents_are_written_as_after_effects_does() {
+    // Headers and labels After Effects 2019 wrote for the same shape items: items go by kind and
+    // place in their group, and a Size has no unit (`X `).
+    let (mut s, _) = session();
+    let sh = LayerId(s.execute("layer.newShape", json!({"kind": "none"})).unwrap()["layer"].as_u64().unwrap());
+    for (kind, group) in [("group", None), ("rectangle", Some("contents/#1")), ("fill", Some("contents/#1")), ("star", None), ("repeater", None)] {
+        let mut p = json!({"layer": sh.0, "kind": kind});
+        if let Some(g) = group {
+            p["group"] = json!(g);
+        }
+        s.execute("layer.addShapeItem", p).unwrap();
+    }
+    let text = copy_props(
+        &mut s,
+        sh,
+        &[
+            "contents/#1/contents/#1/size",
+            "contents/#1/contents/#2/color",
+            "contents/#1/transform/position",
+            "contents/#2/points",
+            "contents/#3/transform/startOpacity",
+        ],
+    );
+    for block in [
+        "Contents\tGroup #1\tContents\tRectangle Path #1\tSize\n\tFrame\tX \tY \t\n",
+        "Contents\tGroup #1\tContents\tFill #2\tColor\n\tFrame\talpha \tred \tgreen \tblue \t\n",
+        "Contents\tGroup #1\tTransform\tPosition\n\tFrame\tX pixels\tY pixels\t\n",
+        "Contents\tPolystar Path #2\tPoints\n\tFrame\t\t\n",
+        "Contents\tRepeater #3\tTransform\tStart Opacity\n\tFrame\tpercent\t\n",
+    ] {
+        assert!(text.contains(block), "{block}in\n{text}");
+    }
+}
+
+#[test]
+fn camera_light_and_material_options_are_written_as_after_effects_does() {
+    // Blocks After Effects 2019 wrote for these options, defaults included: Zoom and Shadow
+    // Diffusion in pixels, Highlight Threshold on 0–1, and the material's shadow choices from 0.
+    let (mut s, l) = session();
+    let cam = LayerId(s.execute("layer.newCamera", json!({})).unwrap()["layer"].as_u64().unwrap());
+    let text = copy_props(&mut s, cam, &["cameraOptions/zoom", "cameraOptions/highlightThreshold"]);
+    assert!(text.contains("Camera Options\tZoom\n\tFrame\tpixels\t\n"), "{text}");
+    assert!(text.contains("Camera Options\tHighlight Threshold\n\tFrame\t\t\n\t\t1\t\n"), "{text}");
+    let light = LayerId(s.execute("layer.newLight", json!({"type": "spot"})).unwrap()["layer"].as_u64().unwrap());
+    let text = copy_props(&mut s, light, &["lightOptions/intensity", "lightOptions/shadowDiffusion"]);
+    assert!(text.contains("Light Options\tIntensity\n\tFrame\tpercent\t\n\t\t100\t\n"), "{text}");
+    assert!(text.contains("Light Options\tShadow Diffusion\n\tFrame\tpixels\t\n\t\t0\t\n"), "{text}");
+    edit_layer(&mut s, l, |l| l.switches.three_d = true);
+    let text = copy_props(&mut s, l, &["materialOptions/castsShadows", "materialOptions/acceptsShadows", "materialOptions/diffuse"]);
+    for block in [
+        "Material Options\tCasts Shadows\n\tFrame\t\t\n\t\t0\t\n",
+        "Material Options\tAccepts Shadows\n\tFrame\t\t\n\t\t1\t\n",
+        "Material Options\tDiffuse\n\tFrame\tpercent\t\n\t\t50\t\n",
+    ] {
+        assert!(text.contains(block), "{block}in\n{text}");
+    }
+}

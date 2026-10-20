@@ -43,6 +43,7 @@ enum Values {
     Argb,
     /// A popup's 0-based choice as After Effects' 1-based one.
     OneBased,
+    Scale(f64),
 }
 
 impl Values {
@@ -56,6 +57,7 @@ impl Values {
             }
             (Values::Argb, [r, g, b, a]) => [a, r, g, b].map(|c| c * 255.0).to_vec(),
             (Values::OneBased, _) => v.into_iter().map(|c| c + 1.0).collect(),
+            (Values::Scale(s), _) => v.into_iter().map(|c| c * s).collect(),
             _ => v,
         }
     }
@@ -131,31 +133,50 @@ fn channel(layer: &Layer, pr: &Property) -> Option<Channel> {
         None if pr.match_id == "timeRemap" => Some(Channel { header: "Time Remap".into(), labels: labels("seconds", 1), values: Values::Plain }),
         Some("transform") => transform(layer, pr),
         Some("effects") => effect(&chain, pr),
-        Some("masks") => mask(&chain, pr),
-        Some("text") => text_prop(&chain, pr),
+        Some("masks" | "text" | "contents" | "cameraOptions" | "lightOptions" | "materialOptions") => nested(&chain, pr),
         _ => None,
     }
 }
 
-/// Text animators and selectors by match id, with the kind After Effects names them by.
-const TEXT_INSTANCES: &[(&str, &str)] =
-    &[("animator", "Animator"), ("rangeSelector", "Range Selector"), ("wigglySelector", "Wiggly Selector"), ("expressionSelector", "Expression Selector")];
+/// Indexed groups by match id, with the kind After Effects names them by: it writes them by kind
+/// and place (`Mask #2`, `Group #1`), not by name.
+const INSTANCES: &[(&str, &str)] = &[
+    ("mask", "Mask"),
+    ("animator", "Animator"),
+    ("rangeSelector", "Range Selector"),
+    ("wigglySelector", "Wiggly Selector"),
+    ("expressionSelector", "Expression Selector"),
+    ("group", "Group"),
+    ("rect", "Rectangle Path"),
+    ("ellipse", "Ellipse Path"),
+    ("star", "Polystar Path"),
+    ("path", "Path"),
+    ("fill", "Fill"),
+    ("stroke", "Stroke"),
+    ("gfill", "Gradient Fill"),
+    ("gstroke", "Gradient Stroke"),
+    ("trim", "Trim Paths"),
+    ("repeater", "Repeater"),
+    ("round", "Round Corners"),
+    ("offset", "Offset Paths"),
+    ("pucker", "Pucker & Bloat"),
+    ("twist", "Twist"),
+    ("zigzag", "Zig Zag"),
+    ("wiggle", "Wiggle Paths"),
+    ("merge", "Merge Paths"),
+];
 
-/// A text property: `Text`, then each group down to the property. Animators and selectors go by
-/// kind and place (`Animator #1`), not name, and a selector's own properties carry their place
-/// too (`Start #1`). Source Text isn't a number, and After Effects leaves it out.
-fn text_prop(chain: &[&Node], pr: &Property) -> Option<Channel> {
+/// A property under Masks, Text, Contents or Camera / Light / Material Options: the group's
+/// name, then each group down to the property. Instances go by kind and place, and a text
+/// selector's own properties carry their place too (`Start #1`).
+fn nested(chain: &[&Node], pr: &Property) -> Option<Channel> {
     let groups: Vec<&PropGroup> = chain.iter().filter_map(|n| n.as_group()).collect();
     let parent = groups.last()?;
-    // Path Options' Path picks a mask: not a value the text carries.
-    if parent.match_id == "pathOptions" && pr.match_id == "path" {
-        return None;
-    }
-    let (labels, values) = by_ui(pr)?;
-    let mut header = String::from("Text");
+    let (labels, values) = columns(&parent.match_id, pr)?;
+    let mut header = groups.first()?.name.clone();
     for pair in groups.windows(2) {
         let [outer, g] = pair else { continue };
-        match TEXT_INSTANCES.iter().find(|(id, _)| *id == g.match_id) {
+        match INSTANCES.iter().find(|(id, _)| *id == g.match_id).filter(|_| g.is_instance()) {
             Some((_, kind)) => header.push_str(&format!("\t{kind} #{}", place(outer, g.uid)?)),
             None => header.push_str(&format!("\t{}", g.name)),
         }
@@ -168,19 +189,6 @@ fn text_prop(chain: &[&Node], pr: &Property) -> Option<Channel> {
     Some(Channel { header, labels, values })
 }
 
-/// A mask property: `Masks`, the mask by place (not name), then the property. Mask Path isn't a
-/// number, and After Effects leaves it out.
-fn mask(chain: &[&Node], pr: &Property) -> Option<Channel> {
-    let [Node::Group(masks), Node::Group(m), _] = chain else { return None };
-    let unit = match pr.match_id.as_str() {
-        "feather" | "expansion" => "pixels",
-        "opacity" => "percent",
-        _ => return None,
-    };
-    let header = format!("Masks\tMask #{}\t{}", place(masks, m.uid)?, pr.name);
-    Some(Channel { header, labels: labels(unit, pr.value.dims()), values: Values::Plain })
-}
-
 /// An effect property: `Effects`, the effect's name (not a custom one) and place on the layer,
 /// then the property's name and After Effects index. Properties in twirl-down groups are
 /// written without their group, as After Effects does.
@@ -188,7 +196,7 @@ fn effect(chain: &[&Node], pr: &Property) -> Option<Channel> {
     let [Node::Group(effects), Node::Group(fx), ..] = chain else { return None };
     let GroupKind::Effect { effect } = &fx.kind else { return None };
     let name = effectcraft_effects::find(effect).map_or(fx.name.as_str(), |spec| spec.name);
-    let (labels, values) = by_ui(pr)?;
+    let (labels, values) = columns(effect, pr)?;
     let header = format!("Effects\t{name} #{}\t{} #{}", place(effects, fx.uid)?, pr.name, effect_index(fx, pr.uid)?);
     Some(Channel { header, labels, values })
 }
@@ -231,6 +239,47 @@ fn place(group: &PropGroup, uid: Uid) -> Option<usize> {
     group.children.iter().position(|c| c.uid() == uid).map(|i| i + 1)
 }
 
+/// How After Effects writes a property differently from what its editor suggests ([`by_ui`]).
+#[derive(Clone, Copy)]
+enum Exception {
+    /// Not written.
+    Skip,
+    Unit(&'static str),
+    Values(Values),
+}
+
+/// Properties After Effects writes differently from what their editor suggests, by the effect
+/// or group they're directly in and their match id.
+const EXCEPTIONS: &[(&str, &str, Exception)] = &[
+    // Path Options' Path picks a mask, which After Effects doesn't write.
+    ("pathOptions", "path", Exception::Skip),
+    ("mask", "feather", Exception::Unit("pixels")),
+    ("mask", "expansion", Exception::Unit("pixels")),
+    ("cameraOptions", "zoom", Exception::Unit("pixels")),
+    ("cameraOptions", "focusDistance", Exception::Unit("pixels")),
+    ("cameraOptions", "aperture", Exception::Unit("pixels")),
+    ("cameraOptions", "highlightGain", Exception::Unit("")),
+    ("cameraOptions", "highlightSaturation", Exception::Unit("")),
+    // After Effects keeps the threshold as 0–1.
+    ("cameraOptions", "highlightThreshold", Exception::Values(Values::Scale(1.0 / 255.0))),
+    ("lightOptions", "shadowDiffusion", Exception::Unit("pixels")),
+    // Off, On, Only: written from 0.
+    ("materialOptions", "castsShadows", Exception::Values(Values::Plain)),
+    ("materialOptions", "acceptsShadows", Exception::Values(Values::Plain)),
+];
+
+/// Column labels and values for a property in `scope`, the effect (by id) or group (by match
+/// id) it's directly in: [`by_ui`] unless [`EXCEPTIONS`] says otherwise.
+fn columns(scope: &str, pr: &Property) -> Option<(Vec<String>, Values)> {
+    let (by_editor, values) = by_ui(pr)?;
+    Some(match EXCEPTIONS.iter().find(|(s, id, _)| *s == scope && *id == pr.match_id).map(|e| e.2) {
+        None => (by_editor, values),
+        Some(Exception::Skip) => return None,
+        Some(Exception::Unit(unit)) => (labels(unit, pr.value.dims()), values),
+        Some(Exception::Values(values)) => (by_editor, values),
+    })
+}
+
 /// Column labels and values for an effect or text property, by how it's edited. After Effects
 /// labels most 0–100 and ±100 sliders (opacities, selector amounts) as percent, and other
 /// sliders, checkboxes and popups with no unit.
@@ -263,12 +312,13 @@ fn transform(layer: &Layer, pr: &Property) -> Option<Channel> {
     Some(Channel { header: format!("Transform\t{}", pr.name), labels, values })
 }
 
-/// Column labels: the unit, or one per axis (`X pixels`, `Y pixels`).
+/// Column labels: the unit, or one per axis (`X pixels`, `Y pixels`; `X ` with no unit, as After
+/// Effects writes a shape's Size).
 fn labels(unit: &str, dims: usize) -> Vec<String> {
     match dims {
         0 => vec![],
         1 => vec![unit.to_string()],
-        _ => ["X", "Y", "Z"].iter().take(dims).map(|axis| format!("{axis} {unit}").trim_end().to_string()).collect(),
+        _ => ["X", "Y", "Z"].iter().take(dims).map(|axis| format!("{axis} {unit}")).collect(),
     }
 }
 
