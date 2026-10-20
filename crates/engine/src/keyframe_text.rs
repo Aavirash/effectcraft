@@ -172,7 +172,7 @@ const INSTANCES: &[(&str, &str)] = &[
 fn nested(chain: &[&Node], pr: &Property) -> Option<Channel> {
     let groups: Vec<&PropGroup> = chain.iter().filter_map(|n| n.as_group()).collect();
     let parent = groups.last()?;
-    let (labels, values) = columns(&parent.match_id, pr)?;
+    let (labels, values) = columns(&parent.match_id, pr, false)?;
     let mut header = groups.first()?.name.clone();
     for pair in groups.windows(2) {
         let [outer, g] = pair else { continue };
@@ -196,7 +196,7 @@ fn effect(chain: &[&Node], pr: &Property) -> Option<Channel> {
     let [Node::Group(effects), Node::Group(fx), ..] = chain else { return None };
     let GroupKind::Effect { effect } = &fx.kind else { return None };
     let name = effectcraft_effects::find(effect).map_or(fx.name.as_str(), |spec| spec.name);
-    let (labels, values) = columns(effect, pr)?;
+    let (labels, values) = columns(effect, pr, true)?;
     let header = format!("Effects\t{name} #{}\t{} #{}", place(effects, fx.uid)?, pr.name, effect_index(fx, pr.uid)?);
     Some(Channel { header, labels, values })
 }
@@ -270,8 +270,8 @@ const EXCEPTIONS: &[(&str, &str, Exception)] = &[
 
 /// Column labels and values for a property in `scope`, the effect (by id) or group (by match
 /// id) it's directly in: [`by_ui`] unless [`EXCEPTIONS`] says otherwise.
-fn columns(scope: &str, pr: &Property) -> Option<(Vec<String>, Values)> {
-    let (by_editor, values) = by_ui(pr)?;
+fn columns(scope: &str, pr: &Property, in_effect: bool) -> Option<(Vec<String>, Values)> {
+    let (by_editor, values) = by_ui(pr, in_effect)?;
     Some(match EXCEPTIONS.iter().find(|(s, id, _)| *s == scope && *id == pr.match_id).map(|e| e.2) {
         None => (by_editor, values),
         Some(Exception::Skip) => return None,
@@ -280,15 +280,16 @@ fn columns(scope: &str, pr: &Property) -> Option<(Vec<String>, Values)> {
     })
 }
 
-/// Column labels and values for an effect or text property, by how it's edited. After Effects
-/// labels most 0–100 and ±100 sliders (opacities, selector amounts) as percent, and other
-/// sliders, checkboxes and popups with no unit.
-fn by_ui(pr: &Property) -> Option<(Vec<String>, Values)> {
+/// Column labels and values for a property, by how it's edited. After Effects labels most 0–100
+/// sliders (opacities) as percent, and ±100 ones too outside effects (text selector amounts),
+/// and other sliders, checkboxes and popups with no unit. For the 1,390 effect parameters
+/// EffectCraft shares with After Effects 2019, these rules give After Effects' unit for 88%.
+fn by_ui(pr: &Property, in_effect: bool) -> Option<(Vec<String>, Values)> {
     let dims = pr.value.dims();
     Some(match &pr.ui {
         ParamUi::Color => (["alpha ", "red ", "green ", "blue "].map(String::from).to_vec(), Values::Argb),
         ParamUi::Popup { .. } => (labels("", dims), Values::OneBased),
-        ParamUi::Slider { min, max, .. } if *max == 100.0 && (*min == 0.0 || *min == -100.0) => (labels("percent", dims), Values::Plain),
+        ParamUi::Slider { min, max, .. } if *max == 100.0 && (*min == 0.0 || (*min == -100.0 && !in_effect)) => (labels("percent", dims), Values::Plain),
         ParamUi::Percent => (labels("percent", dims), Values::Plain),
         ParamUi::Angle => (labels("degrees", dims), Values::Plain),
         ParamUi::Point | ParamUi::Point3 => (labels("pixels", dims), Values::Plain),
