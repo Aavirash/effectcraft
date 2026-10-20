@@ -141,6 +141,41 @@ fn properties_the_layer_does_not_use_are_left_out() {
 }
 
 #[test]
+fn separated_position_writes_x_y_and_z_position() {
+    let (mut s, l) = session();
+    s.execute("prop.separateDimensions", json!({"layer": l.0, "value": true})).unwrap();
+    let t = frame(&s, 12);
+    add_key(&mut s, l, "transform/positionX", Tick::ZERO, json!(100));
+    add_key(&mut s, l, "transform/positionX", t, json!(321));
+    s.execute("prop.set", json!({"layer": l.0, "path": "transform/positionY", "value": 200})).unwrap();
+    let text = copy_transform(&mut s, l);
+    // After Effects labels their single column with no unit.
+    assert!(text.contains("Transform\tX Position\n\tFrame\t\t\n\t0\t100\t\n\t12\t321\t\n\nTransform\tY Position\n\tFrame\t\t\n\t\t200\t\n\n"), "{text}");
+    assert!(!names(&text).contains(&"Z Position"), "a 2D layer has no Z Position: {text}");
+    edit_layer(&mut s, l, |l| l.switches.three_d = true);
+    let text = copy_transform(&mut s, l);
+    assert!(text.contains("Transform\tZ Position\n\tFrame\t\t\n\t\t0\t\n"), "{text}");
+}
+
+#[test]
+fn time_remap_writes_source_seconds_at_comp_frames() {
+    let (mut s, l) = session();
+    let r = s.execute("layer.precompose", json!({"layers": [l.0], "name": "Inner"})).unwrap();
+    let l = LayerId(r["layer"].as_u64().unwrap());
+    s.execute("layer.select", json!({"layers": [l.0]})).unwrap();
+    s.execute("layer.enableTimeRemap", json!({})).unwrap();
+    let start = frame(&s, 10);
+    edit_layer(&mut s, l, |l| l.start_time = start);
+    let t = frame(&s, 6);
+    add_key(&mut s, l, "timeRemap", t, json!(2.5));
+    s.execute("prop.select", json!({"layer": l.0, "path": "timeRemap"})).unwrap();
+    s.execute("edit.copy", json!({})).unwrap();
+    let text = s.state.keyframe_text.clone().unwrap();
+    // As After Effects writes it: the key at layer frame 6 of a layer starting at frame 10 is at 16.
+    assert!(text.contains("Layer\nTime Remap\n\tFrame\tseconds\t\n\t10\t0\t\n\t16\t2.5\t\n"), "{text}");
+}
+
+#[test]
 fn a_2d_layer_writes_the_z_it_shows() {
     // Keys pasted from a 3D layer keep their Z on a 2D one, which ignores it.
     let (mut s, l) = session();
