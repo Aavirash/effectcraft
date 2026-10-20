@@ -56,7 +56,13 @@ pub(crate) fn text(project: &Project, comp: &Comp, keys: &[KeyRef], statics: &[(
             _ => ["X", "Y", "Z"].iter().take(dims).map(|axis| format!("{axis} {unit}")).collect(),
         };
         blocks.push_str(&format!("Transform\t{}\n\tFrame\t{}\n", pr.name, columns.join("\t")));
-        for (frame, values) in rows {
+        for (frame, mut values) in rows {
+            // A 2D layer ignores the Z it may keep (from pasted 3D keys): write the one it shows.
+            if !layer.is_3d()
+                && let Some(z) = values.get_mut(2)
+            {
+                *z = if *id == "scale" { 100.0 } else { 0.0 };
+            }
             let values: Vec<String> = values.into_iter().map(num).collect();
             blocks.push_str(&format!("\t{frame}\t{}\n", values.join("\t")));
         }

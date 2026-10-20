@@ -139,6 +139,26 @@ fn properties_the_layer_does_not_use_are_left_out() {
 }
 
 #[test]
+fn a_2d_layer_writes_the_z_it_shows() {
+    // Keys pasted from a 3D layer keep their Z on a 2D one, which ignores it.
+    let (mut s, l) = session();
+    let src = LayerId(s.execute("layer.newSolid", json!({"color": "#00ff00", "width": 200, "height": 100})).unwrap()["layer"].as_u64().unwrap());
+    edit_layer(&mut s, src, |l| l.switches.three_d = true);
+    add_key(&mut s, src, "transform/position", Tick::ZERO, json!([100, 200, 300]));
+    add_key(&mut s, src, "transform/scale", Tick::ZERO, json!([50, 60, 70]));
+    s.state.selected_keys = ["transform/position", "transform/scale"].map(|p| KeyRef { layer: src, prop: uid(&s, src, p), time: Tick::ZERO }).to_vec();
+    s.execute("keys.copy", json!({})).unwrap();
+    s.execute("keys.paste", json!({"layers": [l.0], "time": 0})).unwrap();
+    let pasted = s.active_comp().unwrap().layer(l).unwrap().props.prop("transform/position").unwrap().keys[0].value.components();
+    assert_eq!(pasted, [100.0, 200.0, 300.0], "the 2D layer keeps the pasted Z");
+    s.state.selected_keys = ["transform/position", "transform/scale"].map(|p| KeyRef { layer: l, prop: uid(&s, l, p), time: Tick::ZERO }).to_vec();
+    s.execute("keys.copy", json!({})).unwrap();
+    let text = s.state.keyframe_text.clone().unwrap();
+    assert!(text.contains("Transform\tPosition\n\tFrame\tX pixels\tY pixels\tZ pixels\n\t0\t100\t200\t0\n"), "{text}");
+    assert!(text.contains("Transform\tScale\n\tFrame\tX percent\tY percent\tZ percent\n\t0\t50\t60\t100\n"), "{text}");
+}
+
+#[test]
 fn keys_from_two_layers_have_no_text() {
     let (mut s, a) = session();
     let b = LayerId(s.execute("layer.newSolid", json!({"color": "#00ff00", "width": 200, "height": 100})).unwrap()["layer"].as_u64().unwrap());
