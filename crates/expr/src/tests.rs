@@ -343,6 +343,12 @@ fn cubic_bezier_short_form_arrays_and_fallbacks() {
     // A curve that is not four finite numbers falls back to linear instead of throwing.
     assert_close!(f.num("bezier(0.5, 0, 1, 0, 100, [1, 0])", 0.0), 50.0);
     assert_close!(f.num("bezier(0.5, 0, 1, 0, 100, 'ease')", 0.0), 50.0);
+    // A missing or unusable curve must not consume the last value: read the curve by position.
+    assert_close!(f.num("bezier(0.5, 0, 1, 0, 100)", 0.0), 50.0);
+    assert_close!(f.num("bezier(0.5, 0, 100)", 0.0), 50.0);
+    assert_close!(f.num("bezier(0.5, 0, 100, [1, 0])", 0.0), 50.0);
+    let v = f.ev(f.shape, "contents/#1/contents/fill/color", "bezier(0.5, 0, 1, [0, 0, 0, 1], [1, 1, 1, 1])", 0.0).unwrap();
+    assert_eq!(v, Value::Color([0.5, 0.5, 0.5, 1.0]));
     // Exactly four values are a curve; extra ones mean the curve is malformed, so linear.
     assert_close!(f.num("bezier(0.5, 0, 1, 0, 100, [0.42, 0, 0.58, 1, 0])", 0.0), 50.0);
     assert_close!(f.num("bezier(0.5, 0, 1, 0, 100, [0.42, 0, 0.58, 1, 2, 3])", 0.0), 50.0);

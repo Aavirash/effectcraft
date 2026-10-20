@@ -251,13 +251,14 @@ function __cubicBezier(curve) {
 }
 
 // bezier(t, tMin, tMax, value1, value2, curve), or bezier(t, value1, value2, curve): the curve is
-// the last argument; everything before it follows linear / ease.
+// the sixth / fourth argument. Read it by position, not from the end: when it is missing or
+// unusable, the interpolation falls back to linear without consuming the last value.
 function bezier() {
-  var curve = arguments[arguments.length - 1];
-  var shape = __cubicBezier(curve);
-  var args = [];
-  for (var i = 0; i < arguments.length - 1; i++) args.push(arguments[i]);
-  return __interp(shape, args);
+  var a = arguments, n = a.length;
+  if (n >= 6) return __interp(__cubicBezier(a[5]), [a[0], a[1], a[2], a[3], a[4]]);
+  if (n === 5) return __interp(__lin, [a[0], a[1], a[2], a[3], a[4]]);
+  if (n === 4) return __interp(__cubicBezier(a[3]), [a[0], a[1], a[2]]);
+  return __interp(__lin, [a[0], a[1], a[2]]);
 }
 
 // ---------------------------------------------------------------------------------------------
