@@ -22,6 +22,7 @@ pub mod guard;
 pub mod history;
 pub mod jobs;
 mod keyframe_text;
+mod keyframe_text_effects;
 pub mod learn;
 pub mod links;
 pub mod logging;

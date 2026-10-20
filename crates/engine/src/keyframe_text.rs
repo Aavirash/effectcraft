@@ -6,7 +6,7 @@
 
 use effectcraft_project::{AutoOrient, Comp, GroupKind, ItemKind, Layer, LayerId, LayerSource, Node, ParamUi, Project, PropGroup, Property, Uid};
 
-use crate::KeyRef;
+use crate::{KeyRef, keyframe_text_effects};
 
 /// Transform properties with the unit their columns are labelled with and, for vectors, the
 /// third component a 2D layer shows. X / Y / Z Position (Separate Dimensions) have no unit.
@@ -172,7 +172,7 @@ const INSTANCES: &[(&str, &str)] = &[
 fn nested(chain: &[&Node], pr: &Property) -> Option<Channel> {
     let groups: Vec<&PropGroup> = chain.iter().filter_map(|n| n.as_group()).collect();
     let parent = groups.last()?;
-    let (labels, values) = columns(&parent.match_id, pr, false)?;
+    let (labels, values) = columns(&parent.match_id, &pr.match_id, pr, false)?;
     let mut header = groups.first()?.name.clone();
     for pair in groups.windows(2) {
         let [outer, g] = pair else { continue };
@@ -196,28 +196,31 @@ fn effect(chain: &[&Node], pr: &Property) -> Option<Channel> {
     let [Node::Group(effects), Node::Group(fx), ..] = chain else { return None };
     let GroupKind::Effect { effect } = &fx.kind else { return None };
     let name = effectcraft_effects::find(effect).map_or(fx.name.as_str(), |spec| spec.name);
-    let (labels, values) = columns(effect, pr, true)?;
-    let header = format!("Effects\t{name} #{}\t{} #{}", place(effects, fx.uid)?, pr.name, effect_index(fx, pr.uid)?);
+    let path: String = chain.iter().skip(2).filter_map(|n| n.as_group()).map(|g| format!("{}/", g.match_id)).chain([pr.match_id.clone()]).collect();
+    let (labels, values) = columns(effect, &path, pr, true)?;
+    let header = format!("Effects\t{name} #{}\t{} #{}", place(effects, fx.uid)?, pr.name, effect_index(effect, fx, pr.uid)?);
     Some(Channel { header, labels, values })
 }
 
 /// After Effects' index of an effect property: the effect's hidden input layer is #1, and a
 /// twirl-down group takes an index where it opens and another where it closes. The hidden
-/// source choice EffectCraft keeps beside a layer parameter has none.
-fn effect_index(fx: &PropGroup, uid: Uid) -> Option<usize> {
-    fn count(g: &PropGroup, uid: Uid, n: &mut usize) -> bool {
+/// source choice EffectCraft keeps beside a layer parameter has none. Where After Effects
+/// numbers a parameter otherwise ([`keyframe_text_effects::INDICES`]), counting goes on from it.
+fn effect_index(effect: &str, fx: &PropGroup, uid: Uid) -> Option<usize> {
+    fn count(effect: &str, g: &PropGroup, prefix: &str, uid: Uid, n: &mut usize) -> bool {
         for c in &g.children {
             match c {
                 Node::Prop(p) if is_layer_source(g, p) => {}
                 Node::Prop(p) => {
-                    *n += 1;
+                    let path = format!("{prefix}{}", p.match_id);
+                    *n = keyframe_text_effects::INDICES.iter().find(|(e, q, _)| *e == effect && *q == path).map_or(*n + 1, |a| a.2);
                     if p.uid == uid {
                         return true;
                     }
                 }
                 Node::Group(sub) => {
                     *n += 1;
-                    if count(sub, uid, n) {
+                    if count(effect, sub, &format!("{prefix}{}/", sub.match_id), uid, n) {
                         return true;
                     }
                     *n += 1;
@@ -227,7 +230,7 @@ fn effect_index(fx: &PropGroup, uid: Uid) -> Option<usize> {
         false
     }
     let mut n = 1;
-    count(fx, uid, &mut n).then_some(n)
+    count(effect, fx, "", uid, &mut n).then_some(n)
 }
 
 fn is_layer_source(g: &PropGroup, p: &Property) -> bool {
@@ -269,10 +272,13 @@ const EXCEPTIONS: &[(&str, &str, Exception)] = &[
 ];
 
 /// Column labels and values for a property in `scope`, the effect (by id) or group (by match
-/// id) it's directly in: [`by_ui`] unless [`EXCEPTIONS`] says otherwise.
-fn columns(scope: &str, pr: &Property, in_effect: bool) -> Option<(Vec<String>, Values)> {
+/// id) it's directly in, at `path` there (an effect property's groups, then its match id): [`by_ui`]
+/// unless [`EXCEPTIONS`] or, in effects, [`keyframe_text_effects::UNITS`] say otherwise.
+fn columns(scope: &str, path: &str, pr: &Property, in_effect: bool) -> Option<(Vec<String>, Values)> {
     let (by_editor, values) = by_ui(pr, in_effect)?;
-    Some(match EXCEPTIONS.iter().find(|(s, id, _)| *s == scope && *id == pr.match_id).map(|e| e.2) {
+    let exception = EXCEPTIONS.iter().find(|(s, id, _)| *s == scope && *id == path).map(|e| e.2);
+    let effect_unit = || keyframe_text_effects::UNITS.iter().find(|(e, p, _)| in_effect && *e == scope && *p == path).map(|u| Exception::Unit(u.2));
+    Some(match exception.or_else(effect_unit) {
         None => (by_editor, values),
         Some(Exception::Skip) => return None,
         Some(Exception::Unit(unit)) => (labels(unit, pr.value.dims()), values),
@@ -282,8 +288,8 @@ fn columns(scope: &str, pr: &Property, in_effect: bool) -> Option<(Vec<String>, 
 
 /// Column labels and values for a property, by how it's edited. After Effects labels most 0–100
 /// sliders (opacities) as percent, and ±100 ones too outside effects (text selector amounts),
-/// and other sliders, checkboxes and popups with no unit. For the 1,390 effect parameters
-/// EffectCraft shares with After Effects 2019, these rules give After Effects' unit for 88%.
+/// and other sliders, checkboxes and popups with no unit. [`keyframe_text_effects::UNITS`] lists
+/// the effect parameters After Effects labels otherwise.
 fn by_ui(pr: &Property, in_effect: bool) -> Option<(Vec<String>, Values)> {
     let dims = pr.value.dims();
     Some(match &pr.ui {

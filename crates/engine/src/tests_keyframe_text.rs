@@ -253,6 +253,31 @@ fn effect_properties_have_after_effects_indices() {
 }
 
 #[test]
+fn effect_parameters_after_effects_numbers_or_labels_otherwise_follow_it() {
+    // After Effects 2019: Radial Blur counts a hidden parameter before Amount, which has no
+    // unit; 3D Channel Extract lists Anti-alias before Clamp Output; Selective Color's per-color
+    // sliders start at #10 and are percent.
+    let (mut s, l) = session();
+    for fx in ["Radial Blur", "3D Channel Extract", "Selective Color"] {
+        s.execute("effect.apply", json!({"layer": l.0, "effect": fx})).unwrap();
+    }
+    let text = copy_props(
+        &mut s,
+        l,
+        &["effects/#1/amount", "effects/#1/center", "effects/#2/antialias", "effects/#2/invertDepthMap", "effects/#3/details/reds/redsCyan"],
+    );
+    for block in [
+        "Effects\tRadial Blur #1\tAmount #3\n\tFrame\t\t\n",
+        "Effects\tRadial Blur #1\tCenter #4\n\tFrame\tX pixels\tY pixels\t\n",
+        "Effects\t3D Channel Extract #2\tAnti-alias #5\n\tFrame\t\t\n",
+        "Effects\t3D Channel Extract #2\tInvert Depth Map #7\n\tFrame\t\t\n",
+        "Effects\tSelective Color #3\tReds Cyan #10\n\tFrame\tpercent\t\n",
+    ] {
+        assert!(text.contains(block), "{block}in\n{text}");
+    }
+}
+
+#[test]
 fn mask_properties_are_written_as_after_effects_does() {
     // The blocks After Effects 2019 wrote for the same masks and values: masks go by place, not
     // name, and Mask Path is left out.
