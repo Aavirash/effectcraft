@@ -220,18 +220,32 @@ fn effect_properties_are_written_as_after_effects_does() {
 #[test]
 fn effect_properties_have_after_effects_indices() {
     // After Effects 2019 numbered Fractal Noise's Rotation (in the Transform group) #9,
-    // Complexity (after it) #17 and Evolution #25: a group takes an index where it opens and
-    // closes, and its properties are written without it. Set Matte's Use For Matte is #3: the
-    // layer parameter before it has no extra index for its source choice.
+    // Complexity (after it) #17, Evolution #25, and Opacity (after Evolution Options) #31: a
+    // group takes an index where it opens and closes, and its properties are written without
+    // it. Set Matte's Use For Matte is #3: the layer parameter before it has no extra index for
+    // its source choice.
     let (mut s, l) = session();
     for fx in ["Fractal Noise", "Set Matte"] {
         s.execute("effect.apply", json!({"layer": l.0, "effect": fx})).unwrap();
     }
-    let text = copy_props(&mut s, l, &["effects/#1/transform/rotation", "effects/#1/complexity", "effects/#1/evolution", "effects/#2/takeMatteFrom"]);
+    let text = copy_props(
+        &mut s,
+        l,
+        &[
+            "effects/#1/transform/rotation",
+            "effects/#1/complexity",
+            "effects/#1/evolution",
+            "effects/#1/opacity",
+            "effects/#1/blendingMode",
+            "effects/#2/takeMatteFrom",
+        ],
+    );
     for header in [
         "Effects\tFractal Noise #1\tRotation #9\n",
         "Effects\tFractal Noise #1\tComplexity #17\n",
         "Effects\tFractal Noise #1\tEvolution #25\n",
+        "Effects\tFractal Noise #1\tOpacity #31\n",
+        "Effects\tFractal Noise #1\tBlending Mode #32\n",
         "Effects\tSet Matte #2\tUse For Matte #3\n",
     ] {
         assert!(text.contains(header), "{header}in\n{text}");
