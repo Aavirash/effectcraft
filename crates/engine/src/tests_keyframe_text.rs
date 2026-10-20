@@ -217,6 +217,36 @@ fn effect_properties_are_written_as_after_effects_does() {
 }
 
 #[test]
+fn mask_properties_are_written_as_after_effects_does() {
+    // The blocks After Effects 2019 wrote for the same masks and values: masks go by place, not
+    // name, and Mask Path is left out.
+    let (mut s, l) = session();
+    for _ in 0..2 {
+        s.execute("mask.new", json!({"layer": l.0, "vertices": [[0, 0], [100, 0], [100, 100]], "closed": true})).unwrap();
+    }
+    let t = frame(&s, 12);
+    for (prop, a, b) in [("feather", json!([5, 5]), json!([10, 20])), ("opacity", json!(50), json!(75)), ("expansion", json!(3), json!(-4))] {
+        add_key(&mut s, l, &format!("masks/#1/{prop}"), Tick::ZERO, a);
+        add_key(&mut s, l, &format!("masks/#1/{prop}"), t, b);
+    }
+    s.execute("prop.set", json!({"layer": l.0, "path": "masks/#2/feather", "value": [7, 8]})).unwrap();
+    let second = s.active_comp().unwrap().layer(l).unwrap().props.group("masks/#2").unwrap().uid;
+    s.execute("prop.renameGroup", json!({"layer": l.0, "prop": second, "name": "Renamed Mask"})).unwrap();
+    let text = copy_props(&mut s, l, &["masks/#1/path", "masks/#1/feather", "masks/#1/opacity", "masks/#1/expansion", "masks/#2/feather"]);
+    assert!(
+        text.contains(
+            "Layer\n\
+             Masks\tMask #1\tMask Feather\n\tFrame\tX pixels\tY pixels\t\n\t0\t5\t5\t\n\t12\t10\t20\t\n\n\
+             Masks\tMask #1\tMask Opacity\n\tFrame\tpercent\t\n\t0\t50\t\n\t12\t75\t\n\n\
+             Masks\tMask #1\tMask Expansion\n\tFrame\tpixels\t\n\t0\t3\t\n\t12\t-4\t\n\n\
+             Masks\tMask #2\tMask Feather\n\tFrame\tX pixels\tY pixels\t\n\t\t7\t8\t\n\n\
+             \nEnd of Keyframe Data\n"
+        ),
+        "{text}"
+    );
+}
+
+#[test]
 fn a_2d_layer_writes_the_z_it_shows() {
     // Keys pasted from a 3D layer keep their Z on a 2D one, which ignores it.
     let (mut s, l) = session();

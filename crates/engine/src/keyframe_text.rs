@@ -130,8 +130,22 @@ fn channel(layer: &Layer, pr: &Property) -> Option<Channel> {
         None if pr.match_id == "timeRemap" => Some(Channel { header: "Time Remap".into(), labels: labels("seconds", 1), values: Values::Plain }),
         Some("transform") => transform(layer, pr),
         Some("effects") => effect(&chain, pr),
+        Some("masks") => mask(&chain, pr),
         _ => None,
     }
+}
+
+/// A mask property: `Masks`, the mask by place (not name), then the property. Mask Path isn't a
+/// number, and After Effects leaves it out.
+fn mask(chain: &[&Node], pr: &Property) -> Option<Channel> {
+    let [Node::Group(masks), Node::Group(m), _] = chain else { return None };
+    let unit = match pr.match_id.as_str() {
+        "feather" | "expansion" => "pixels",
+        "opacity" => "percent",
+        _ => return None,
+    };
+    let header = format!("Masks\tMask #{}\t{}", place(masks, m.uid)?, pr.name);
+    Some(Channel { header, labels: labels(unit, pr.value.dims()), values: Values::Plain })
 }
 
 /// An effect property: `Effects`, the effect's name (not a custom one) and place on the layer,
