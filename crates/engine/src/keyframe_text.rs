@@ -181,14 +181,48 @@ fn mask(chain: &[&Node], pr: &Property) -> Option<Channel> {
 }
 
 /// An effect property: `Effects`, the effect's name (not a custom one) and place on the layer,
-/// then the property's name and place, counting the effect's hidden input layer as the first.
+/// then the property's name and After Effects index. Properties in twirl-down groups are
+/// written without their group, as After Effects does.
 fn effect(chain: &[&Node], pr: &Property) -> Option<Channel> {
-    let [Node::Group(effects), Node::Group(fx), _] = chain else { return None };
+    let [Node::Group(effects), Node::Group(fx), ..] = chain else { return None };
     let GroupKind::Effect { effect } = &fx.kind else { return None };
     let name = effectcraft_effects::find(effect).map_or(fx.name.as_str(), |spec| spec.name);
     let (labels, values) = by_ui(pr)?;
-    let header = format!("Effects\t{name} #{}\t{} #{}", place(effects, fx.uid)?, pr.name, place(fx, pr.uid)? + 1);
+    let header = format!("Effects\t{name} #{}\t{} #{}", place(effects, fx.uid)?, pr.name, effect_index(fx, pr.uid)?);
     Some(Channel { header, labels, values })
+}
+
+/// After Effects' index of an effect property: the effect's hidden input layer is #1, and a
+/// twirl-down group takes an index where it opens and another where it closes. The hidden
+/// source choice EffectCraft keeps beside a layer parameter has none.
+fn effect_index(fx: &PropGroup, uid: Uid) -> Option<usize> {
+    fn count(g: &PropGroup, uid: Uid, n: &mut usize) -> bool {
+        for c in &g.children {
+            match c {
+                Node::Prop(p) if is_layer_source(g, p) => {}
+                Node::Prop(p) => {
+                    *n += 1;
+                    if p.uid == uid {
+                        return true;
+                    }
+                }
+                Node::Group(sub) => {
+                    *n += 1;
+                    if count(sub, uid, n) {
+                        return true;
+                    }
+                    *n += 1;
+                }
+            }
+        }
+        false
+    }
+    let mut n = 1;
+    count(fx, uid, &mut n).then_some(n)
+}
+
+fn is_layer_source(g: &PropGroup, p: &Property) -> bool {
+    p.ui == ParamUi::Hidden && g.props().any(|l| l.ui == ParamUi::Layer && effectcraft_effects::layer_source_id(&l.match_id) == p.match_id)
 }
 
 /// 1-based position of a child in its group.
