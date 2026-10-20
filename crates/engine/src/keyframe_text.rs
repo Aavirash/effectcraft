@@ -131,8 +131,40 @@ fn channel(layer: &Layer, pr: &Property) -> Option<Channel> {
         Some("transform") => transform(layer, pr),
         Some("effects") => effect(&chain, pr),
         Some("masks") => mask(&chain, pr),
+        Some("text") => text_prop(&chain, pr),
         _ => None,
     }
+}
+
+/// Text animators and selectors by match id, with the kind After Effects names them by.
+const TEXT_INSTANCES: &[(&str, &str)] =
+    &[("animator", "Animator"), ("rangeSelector", "Range Selector"), ("wigglySelector", "Wiggly Selector"), ("expressionSelector", "Expression Selector")];
+
+/// A text property: `Text`, then each group down to the property. Animators and selectors go by
+/// kind and place (`Animator #1`), not name, and a selector's own properties carry their place
+/// too (`Start #1`). Source Text isn't a number, and After Effects leaves it out.
+fn text_prop(chain: &[&Node], pr: &Property) -> Option<Channel> {
+    let groups: Vec<&PropGroup> = chain.iter().filter_map(|n| n.as_group()).collect();
+    let parent = groups.last()?;
+    // Path Options' Path picks a mask: not a value the text carries.
+    if parent.match_id == "pathOptions" && pr.match_id == "path" {
+        return None;
+    }
+    let (labels, values) = by_ui(pr)?;
+    let mut header = String::from("Text");
+    for pair in groups.windows(2) {
+        let [outer, g] = pair else { continue };
+        match TEXT_INSTANCES.iter().find(|(id, _)| *id == g.match_id) {
+            Some((_, kind)) => header.push_str(&format!("\t{kind} #{}", place(outer, g.uid)?)),
+            None => header.push_str(&format!("\t{}", g.name)),
+        }
+    }
+    if parent.match_id.ends_with("Selector") {
+        header.push_str(&format!("\t{} #{}", pr.name, place(parent, pr.uid)?));
+    } else {
+        header.push_str(&format!("\t{}", pr.name));
+    }
+    Some(Channel { header, labels, values })
 }
 
 /// A mask property: `Masks`, the mask by place (not name), then the property. Mask Path isn't a
@@ -164,13 +196,15 @@ fn place(group: &PropGroup, uid: Uid) -> Option<usize> {
     group.children.iter().position(|c| c.uid() == uid).map(|i| i + 1)
 }
 
-/// Column labels and values for an effect or text property, by how it's edited (After Effects
-/// labels sliders, checkboxes and popups with no unit).
+/// Column labels and values for an effect or text property, by how it's edited. After Effects
+/// labels most 0–100 and ±100 sliders (opacities, selector amounts) as percent, and other
+/// sliders, checkboxes and popups with no unit.
 fn by_ui(pr: &Property) -> Option<(Vec<String>, Values)> {
     let dims = pr.value.dims();
     Some(match &pr.ui {
         ParamUi::Color => (["alpha ", "red ", "green ", "blue "].map(String::from).to_vec(), Values::Argb),
         ParamUi::Popup { .. } => (labels("", dims), Values::OneBased),
+        ParamUi::Slider { min, max, .. } if *max == 100.0 && (*min == 0.0 || *min == -100.0) => (labels("percent", dims), Values::Plain),
         ParamUi::Percent => (labels("percent", dims), Values::Plain),
         ParamUi::Angle => (labels("degrees", dims), Values::Plain),
         ParamUi::Point | ParamUi::Point3 => (labels("pixels", dims), Values::Plain),

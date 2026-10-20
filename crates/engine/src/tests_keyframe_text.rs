@@ -247,6 +247,64 @@ fn mask_properties_are_written_as_after_effects_does() {
 }
 
 #[test]
+fn text_properties_are_written_as_after_effects_does() {
+    // The blocks After Effects 2019 wrote for the same text properties and values.
+    let mut s = Session::default();
+    s.execute("comp.new", json!({"width": 1920, "height": 1080, "frameRate": 23.976})).unwrap();
+    let l = LayerId(s.execute("layer.newText", json!({"text": "Hello"})).unwrap()["layer"].as_u64().unwrap());
+    s.execute("layer.addTextAnimator", json!({"properties": ["position", "fillColor"]})).unwrap();
+    s.execute("layer.addTextAnimator", json!({"properties": ["opacity"]})).unwrap();
+    let second = s.active_comp().unwrap().layer(l).unwrap().props.group("text/animators/#2").unwrap().uid;
+    s.execute("prop.renameGroup", json!({"layer": l.0, "prop": second, "name": "Fade"})).unwrap();
+    let t = frame(&s, 12);
+    add_key(&mut s, l, "text/sourceText", Tick::ZERO, json!("Hello"));
+    add_key(&mut s, l, "text/pathOptions/firstMargin", Tick::ZERO, json!(0));
+    add_key(&mut s, l, "text/pathOptions/firstMargin", t, json!(50));
+    add_key(&mut s, l, "text/animators/#1/selectors/#1/start", Tick::ZERO, json!(0));
+    add_key(&mut s, l, "text/animators/#1/selectors/#1/start", t, json!(100));
+    add_key(&mut s, l, "text/animators/#1/properties/position", Tick::ZERO, json!([0, 0, 0]));
+    add_key(&mut s, l, "text/animators/#1/properties/position", t, json!([10, -20, 0]));
+    for (path, v) in [
+        ("text/animators/#1/selectors/#1/end", json!(80)),
+        ("text/animators/#1/selectors/#1/offset", json!(-10)),
+        ("text/animators/#1/properties/fillColor", json!([1, 0, 0, 1])),
+        ("text/moreOptions/groupingAlignment", json!([10, -20])),
+    ] {
+        s.execute("prop.set", json!({"layer": l.0, "path": path, "value": v})).unwrap();
+    }
+    let text = copy_props(
+        &mut s,
+        l,
+        &[
+            "text/sourceText",
+            "text/pathOptions/firstMargin",
+            "text/animators/#1/selectors/#1/start",
+            "text/animators/#1/selectors/#1/end",
+            "text/animators/#1/selectors/#1/offset",
+            "text/animators/#1/selectors/#1/advanced/amount",
+            "text/animators/#1/properties/position",
+            "text/animators/#1/properties/fillColor",
+            "text/animators/#2/properties/opacity",
+            "text/moreOptions/groupingAlignment",
+        ],
+    );
+    for block in [
+        "Text\tPath Options\tFirst Margin\n\tFrame\t\t\n\t0\t0\t\n\t12\t50\t\n\n",
+        "Text\tAnimators\tAnimator #1\tSelectors\tRange Selector #1\tStart #1\n\tFrame\tpercent\t\n\t0\t0\t\n\t12\t100\t\n\n",
+        "Text\tAnimators\tAnimator #1\tSelectors\tRange Selector #1\tEnd #2\n\tFrame\tpercent\t\n\t\t80\t\n\n",
+        "Text\tAnimators\tAnimator #1\tSelectors\tRange Selector #1\tOffset #3\n\tFrame\tpercent\t\n\t\t-10\t\n\n",
+        "Text\tAnimators\tAnimator #1\tProperties\tPosition\n\tFrame\tX pixels\tY pixels\tZ pixels\t\n\t0\t0\t0\t0\t\n\t12\t10\t-20\t0\t\n\n",
+        "Text\tAnimators\tAnimator #1\tProperties\tFill Color\n\tFrame\talpha \tred \tgreen \tblue \t\n\t\t255\t255\t0\t0\t\n\n",
+        "Text\tAnimators\tAnimator #2\tProperties\tOpacity\n\tFrame\tpercent\t\n\t\t100\t\n\n",
+        "Text\tAnimators\tAnimator #1\tSelectors\tRange Selector #1\tAdvanced\tAmount\n\tFrame\tpercent\t\n\t\t100\t\n\n",
+        "Text\tMore Options\tGrouping Alignment\n\tFrame\tX percent\tY percent\t\n\t\t10\t-20\t\n\n",
+    ] {
+        assert!(text.contains(block), "{block}\nin\n{text}");
+    }
+    assert!(!text.contains("Source Text"), "{text}");
+}
+
+#[test]
 fn a_2d_layer_writes_the_z_it_shows() {
     // Keys pasted from a 3D layer keep their Z on a 2D one, which ignores it.
     let (mut s, l) = session();
