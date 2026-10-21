@@ -685,14 +685,28 @@ const JAPANESE_FAMILIES: &[&str] = &[
 ];
 /// Han ideograph families for Simplified Chinese, in the order the platforms' own fallback tables
 /// prefer them (Windows, macOS, then the Linux/Noto names). Missing ones cost one name lookup each.
-const SIMPLIFIED_CHINESE_FAMILIES: &[&str] =
-    &["Microsoft YaHei", "SimSun", "PingFang SC", "Noto Sans CJK SC", "Noto Sans SC", "Source Han Sans SC", "WenQuanYi Micro Hei"];
+/// `Hiragino Sans GB`, `Heiti SC` and `Songti SC` are the Simplified faces a macOS install without
+/// the on-demand PingFang has (macOS 27 on an English install ships them, not PingFang): without
+/// them Chinese Han text fell through to the Japanese face and drew Japanese glyph forms (#453).
+const SIMPLIFIED_CHINESE_FAMILIES: &[&str] = &[
+    "Microsoft YaHei",
+    "SimSun",
+    "PingFang SC",
+    "Hiragino Sans GB",
+    "Heiti SC",
+    "Songti SC",
+    "STSong",
+    "Noto Sans CJK SC",
+    "Noto Sans SC",
+    "Source Han Sans SC",
+    "WenQuanYi Micro Hei",
+];
 /// The same for Traditional Chinese. The two scripts share almost all of their code points but not
 /// the glyph forms (`东` against `東`'s neighbours, `直`, `骨`), so one list for both drew a
 /// Traditional interface with Simplified forms - the faces do not differ in *coverage*, which is
 /// what the fallback search checks, so the script has to pick the list.
 const TRADITIONAL_CHINESE_FAMILIES: &[&str] =
-    &["Microsoft JhengHei", "MingLiU", "PingFang TC", "Heiti TC", "Hiragino Sans CNS", "Noto Sans CJK TC", "Noto Sans TC", "Source Han Sans TC"];
+    &["Microsoft JhengHei", "MingLiU", "PingFang TC", "Heiti TC", "Hiragino Sans CNS", "Songti TC", "Noto Sans CJK TC", "Noto Sans TC", "Source Han Sans TC"];
 const KOREAN_FAMILIES: &[&str] = &["Malgun Gothic", "Gulim", "Apple SD Gothic Neo", "Noto Sans CJK KR", "Noto Sans KR", "Source Han Sans KR", "NanumGothic"];
 /// The platforms' plain text families for the other scripts the bundled fonts lack, in the same
 /// order (Windows, macOS, then the Linux/Noto names).
@@ -1305,6 +1319,34 @@ mod tests {
         assert_eq!(families_for(FallbackScript::Han), chinese_families_for(&active_cjk_locale()));
         // Han text is the only thing these lists serve; the Japanese order does not change.
         assert_eq!(han_order_for("ja_JP.UTF-8")[0], FallbackScript::Japanese);
+    }
+
+    /// macOS ships no Simplified Chinese PingFang on an English install (macOS 27 has the
+    /// on-demand PingFang instead): Hiragino Sans GB, Heiti SC and Songti SC are the installed
+    /// Chinese faces, so the Han list has to name them or Han text falls through to the Japanese
+    /// face and draws Japanese glyph forms (#453). The system check is skipped where none of them
+    /// is installed; the list itself is checked everywhere.
+    #[test]
+    fn macos_chinese_faces_are_tried_for_han_text() {
+        for face in ["Hiragino Sans GB", "Heiti SC", "Songti SC"] {
+            assert!(SIMPLIFIED_CHINESE_FAMILIES.iter().any(|l| l.eq_ignore_ascii_case(face)), "{face} missing from the Han list");
+        }
+        assert!(TRADITIONAL_CHINESE_FAMILIES.iter().any(|l| l.eq_ignore_ascii_case("Songti TC")), "Songti TC missing from the Traditional list");
+        scan_system();
+        let installed: Vec<&str> = ["Hiragino Sans GB", "Heiti SC", "Songti SC"].into_iter().filter(|f| resolve_in(f, "Regular").is_some()).collect();
+        if installed.is_empty() {
+            eprintln!("no macOS Simplified Chinese face installed; skipping the system check");
+            return;
+        }
+        // Walking the Han branch's own list finds a Chinese face before the Japanese face the
+        // exhaustive search would have found (Hiragino Sans), and it covers the shared ideographs.
+        let (family, resolved) =
+            SIMPLIFIED_CHINESE_FAMILIES.iter().find_map(|f| resolve_in(f, "Regular").map(|r| (*f, r))).expect("an installed Simplified Chinese family");
+        assert!(installed.iter().any(|i| i.eq_ignore_ascii_case(family)), "{family} is not a macOS Chinese face");
+        assert!(!JAPANESE_FAMILIES.iter().any(|j| j.eq_ignore_ascii_case(family)), "{family} is a Japanese family");
+        for c in ['骨', '直', '日'] {
+            assert!(face(resolved.face).has_char(c), "{family} cannot draw {c}");
+        }
     }
 
     #[test]
