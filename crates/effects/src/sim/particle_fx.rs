@@ -46,20 +46,29 @@ fn particle_world_textured(ctx: &EffectCtx) -> bool {
     ctx.params.e("particle/particleType") == PW_TEXTURED_SQUARE && ctx.params.get(PW_TEXTURE_LAYER).and_then(Value::as_layer).is_some()
 }
 
-pub(super) fn particle_world(ctx: &EffectCtx, mut b: Buf) -> Buf {
+pub(super) fn particle_world(ctx: &EffectCtx, b: Buf) -> Buf {
+    // The texture at the current comp time, shared by every shutter sample. A layer the host
+    // can't give (the effect's own layer with its effects, a reference cycle) leaves the
+    // squares in the particle colour.
+    let tex = particle_world_textured(ctx).then(|| ctx.layer_param(PW_TEXTURE_LAYER, true)).flatten();
+    let (w, h) = (b.img.width, b.img.height);
+    let draw = |plan: &SpritePlan| match &tex {
+        Some(t) => splat_textured(w, h, &plan.sprites, plan.acc, t),
+        None => splat(w, h, &plan.sprites, plan.acc),
+    };
     // #1195: with the comp's motion-blur shutter open, particles draw as motion trails: the
     // sprite fields of samples across the shutter are averaged, as Transform averages its
     // matrix samples. (The GPU compositor runs this case on the CPU: catalog::gpu_supported.)
     if let Some((angle, phase, n)) = ctx.env.shutter.filter(|(a, _, _)| *a > 0.0) {
         let n = (n.clamp(2, 64) as usize).max(2);
         let fd = 1.0 / ctx.fps().max(0.001);
-        let mut acc = Image::new(b.img.width, b.img.height);
+        let mut acc = Image::new(w, h);
         let mut post: Option<Post> = None;
         for k in 0..n {
             let t = ctx.time + (phase + angle * k as f64 / (n - 1) as f64) / 360.0 * fd;
             let sub = EffectCtx { params: ctx.params, time: t, layer_size: ctx.layer_size, seed: ctx.seed, adjustment: ctx.adjustment, env: ctx.env };
             if let Some(plan) = particle_world_plan(&sub, &b) {
-                let fx = splat(b.img.width, b.img.height, &plan.sprites, plan.acc);
+                let fx = draw(&plan);
                 acc.data.iter_mut().zip(&fx.data).for_each(|(a, o)| (0..4).for_each(|c| a[c] += o[c]));
                 post.get_or_insert(plan.post);
             }
@@ -70,16 +79,12 @@ pub(super) fn particle_world(ctx: &EffectCtx, mut b: Buf) -> Buf {
             None => b,
         };
     }
-    let Some(plan) = particle_world_plan(ctx, &b) else { return b };
-    // The texture at the current comp time. A layer the host can't give (the effect's own
-    // layer with its effects, a reference cycle) leaves the squares in the particle colour.
-    match particle_world_textured(ctx).then(|| ctx.layer_param(PW_TEXTURE_LAYER, true)).flatten() {
-        // The particles replace the layer ([`particle_sprites`]).
-        Some(tex) => {
-            b.img = splat_textured(b.img.width, b.img.height, &plan.sprites, plan.acc, &tex);
-            b
+    match particle_world_plan(ctx, &b) {
+        Some(plan) => {
+            let fx = draw(&plan);
+            plan.finish_with(b, fx)
         }
-        None => plan.finish(b),
+        None => b,
     }
 }
 
