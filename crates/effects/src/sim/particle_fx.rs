@@ -41,8 +41,8 @@ const PW_TEXTURED_SQUARE: u32 = 8;
 pub(super) const PW_TEXTURE_LAYER: &str = "particle/texture/textureLayer";
 
 /// Whether CC Particle World draws its Texture Layer on the particles (Textured Square with a
-/// layer chosen). Only the CPU does: the Texture Layer is a CPU-only control in `catalog`.
-fn particle_world_textured(ctx: &EffectCtx) -> bool {
+/// layer chosen). Only the CPU does: `catalog::gpu_supported` keeps this case off the GPU.
+pub(crate) fn particle_world_textured(ctx: &EffectCtx) -> bool {
     ctx.params.e("particle/particleType") == PW_TEXTURED_SQUARE && ctx.params.get(PW_TEXTURE_LAYER).and_then(Value::as_layer).is_some()
 }
 
