@@ -398,6 +398,41 @@ fn particle_world_textured_square_motion_trails_draw_the_texture_layer() {
     assert!(seen.iter().any(|p| p[1] > 2.0 * p[2]) && seen.iter().any(|p| p[2] > 2.0 * p[1]), "both texture halves");
 }
 
+/// A host whose every layer is `0` as given (a buffer that may span only its content).
+struct PixelsHost(crate::LayerPixels);
+impl crate::EffectHost for PixelsHost {
+    fn layer(&self, _: u64, _: bool) -> Option<crate::LayerPixels> {
+        Some(self.0.clone())
+    }
+    fn audio(&self, _: u64, _: f64, _: usize, _: u32) -> Option<Vec<f32>> {
+        None
+    }
+}
+
+/// #1465: a Texture Layer whose buffer spans only its content (text, shapes) is mapped as
+/// the whole layer, transparent around the content, not with its edge pixels stretched.
+#[test]
+fn particle_world_texture_layer_with_a_content_sized_buffer() {
+    // An 8×8 layer with a green 4×4 square in the middle: once as the full layer, once as
+    // just the square's pixels.
+    let mut full = Image::new(8, 8);
+    for y in 2..6 {
+        for x in 2..6 {
+            full.set(x, y, [0.0, 1.0, 0.0, 1.0]);
+        }
+    }
+    let content = Image::filled(4, 4, [0.0, 1.0, 0.0, 1.0]);
+    let render = |buf: Buf| {
+        let host = PixelsHost(crate::LayerPixels { buf, size: [8.0, 8.0] });
+        let env = EffectEnv { host: Some(&host), ..Default::default() };
+        run_fx("ec.sim.ccparticleworld", &pw_textured_vals(Some(1)), Image::new(48, 48), 1.0, env).img
+    };
+    let want = render(Buf { img: full, offset: [0.0; 2], scale: 1.0 });
+    let got = render(Buf { img: content, offset: [-2.0, -2.0], scale: 1.0 });
+    assert!(want.data.iter().any(|p| p[3] > 0.05), "particles drawn");
+    assert_eq!(want.data, got.data, "the content-sized buffer draws as the full layer");
+}
+
 #[test]
 fn particle_systems2_seek_and_direction() {
     let v = vec![

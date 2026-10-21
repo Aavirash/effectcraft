@@ -49,8 +49,12 @@ pub(crate) fn particle_world_textured(ctx: &EffectCtx) -> bool {
 pub(super) fn particle_world(ctx: &EffectCtx, b: Buf) -> Buf {
     // The texture at the current comp time, shared by every shutter sample. A layer the host
     // can't give (the effect's own layer with its effects, a reference cycle) leaves the
-    // squares in the particle colour.
-    let tex = particle_world_textured(ctx).then(|| ctx.layer_param(PW_TEXTURE_LAYER, true)).flatten();
+    // squares in the particle colour. Authored buffers (text, shapes) span only their content:
+    // covering the whole layer keeps the clamped sampling from stretching their edge pixels.
+    let tex = particle_world_textured(ctx).then(|| ctx.layer_param(PW_TEXTURE_LAYER, true)).flatten().map(|mut t| {
+        t.buf.cover(t.size);
+        t
+    });
     let (w, h) = (b.img.width, b.img.height);
     let draw = |plan: &SpritePlan| match &tex {
         Some(t) => splat_textured(w, h, &plan.sprites, plan.acc, t),
