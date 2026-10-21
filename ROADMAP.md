@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~30 points of "ready for real work" and ~350–620 h away
 
-> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-12 · **Change:** minor (open-issue count, crash list and localization share re-audited against `upstream/main` 470ea7a3) · **Target:** Adobe After Effects 2026 (26.5.0.89)
+> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-22 · **Change:** minor (localization: 300 more panel/dialog rows in Japanese and the Chinese catalogs; Japanese 27% → 39%) · **Target:** Adobe After Effects 2026 (26.5.0.89)
 
 EffectCraft aims to do what After Effects does, with the same panels, menus and behaviour, written
 from scratch in Rust. This page is the one-page summary; the evidence is in
@@ -80,24 +80,24 @@ Weights and evidence per row: [target-app-parity.md](docs/target-app-parity.md#b
 
 ## Languages
 
-UI strings translated out of ≈ 3,900 (detail: [localization-parity.md](docs/localization-parity.md)).
+UI strings translated out of ≈ 4,200 (detail: [localization-parity.md](docs/localization-parity.md)).
 
 | Language | Status | % |
 |---|---|---:|
 | English | full | 100% |
-| Simplified Chinese | partial (menus, part of the panels) | 29% |
-| Spanish | menus only | 16% |
+| Simplified Chinese | partial (menus, most of the panels) | 39% |
+| Spanish | menus only | 15% |
 | Hindi | none | 0% |
 | Arabic | none | 0% |
-| French | menus only | 16% |
-| Portuguese (Brazil) | partial (menus, part of the panels) | 26% |
+| French | menus only | 15% |
+| Portuguese (Brazil) | partial (menus, part of the panels) | 25% |
 | Indonesian | none | 0% |
-| Japanese | partial (menus, part of the panels) | 27% |
-| German | menus only | 16% |
+| Japanese | partial (menus, most of the panels) | 39% |
+| German | menus only | 15% |
 | Korean | none | 0% |
 | Vietnamese | none | 0% |
 
-Also shipped: Traditional Chinese (partial, 29%), Ukrainian (partial, 29%), Czech (partial, 29%) and Russian (menus only, 16%). No language has had
+Also shipped: Traditional Chinese (partial, 39%), Ukrainian (partial, 27%), Czech (partial, 27%) and Russian (menus only, 15%). No language has had
 native-speaker review.
 
 ## Upcoming
@@ -117,6 +117,10 @@ Come tell us what matters most to you on [Discord](https://discord.gg/artcraft).
 
 ## Progress log
 
+- 2026-10-22: Localization: the panel/dialog catalogs gain 300 rows in Japanese, Simplified
+  Chinese and Traditional Chinese — panel tabs, form and dialog labels, panel context menus,
+  tracker/graph/text-panel controls, File-panel footers and credits. Japanese is 1,621 of
+  ≈ 4,200 interface strings (39%), Simplified and Traditional Chinese 1,623 (39%).
 - 2026-10-16: Convert To Bezier Path turns a shape layer's Rectangle, Ellipse or Polystar
   path into an editable Path 1 with the same geometry, as After Effects does; it used to
   apply to mask RotoBezier only, so a parametric shape path could not be converted at all
@@ -154,6 +158,7 @@ Come tell us what matters most to you on [Discord](https://discord.gg/artcraft).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-22 | minor | Localization: 300 more panel/dialog rows in Japanese and the Chinese catalogs (panel tabs, form and dialog labels, context menus, tracker/graph/text-panel controls, File-panel footers, credits); language shares recounted (Japanese 27% → 39%, Chinese 29% → 39%, overall 18% → 27%) |
 | 2026-10-12 | minor | Open-issue count (134 to 216), crash list and localization share (12% to 18%) updated to match docs/gaps.md |
 | 2026-10-12 | patch | Roto Brush span validation after trimming; command regressions for both layer edges |
 | 2026-10-10 | minor | Hours to ≈ 95% for each audience |

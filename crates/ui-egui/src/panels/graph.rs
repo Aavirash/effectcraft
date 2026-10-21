@@ -245,6 +245,7 @@ fn text_button(
     tip: &str,
 ) -> bool {
     let t = app.tokens;
+    let (label, tip) = (crate::i18n::tr(label), crate::i18n::tr(tip));
     let w = p.layout_no_wrap(label.to_string(), Tokens::ui(11.0), t.text).size().x + 14.0;
     // Once one button overflows, the rest follow it into the menu (they keep their order).
     if !bar.hidden.is_empty() || bar.x + w > bar.limit {
