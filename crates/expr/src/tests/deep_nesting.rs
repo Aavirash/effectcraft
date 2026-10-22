@@ -50,10 +50,9 @@ fn eval_and_function_constructors_check_nesting() {
         format!("Object.getPrototypeOf(function* () {{}}).constructor({deep})"),
         format!("Object.getPrototypeOf(async function () {{}}).constructor({deep})"),
         format!("Object.getPrototypeOf(async function* () {{}}).constructor({deep})"),
-        format!("Reflect.construct(Function, [{deep}])"),
     ] {
         let e = eval_small_stack(&call).expect_err(&call);
-        assert!(!e.is_empty(), "{call}");
+        assert!(e.contains("nested too deeply"), "{call}: {e}");
     }
 }
 
@@ -77,7 +76,8 @@ fn deep_array_result_is_an_error_or_text_not_a_crash() {
     // Explicit conversions inside the script.
     for tail in ["a.join()", "a.toString()", "String(a)", "a + ''", "`${a}`", "a.toLocaleString()", "JSON.stringify(a)", "JSON.stringify({ a: a })"] {
         let text = format!("{DEEP_ARRAY} {tail}");
-        assert!(eval_small_stack(&text).is_err(), "{text}");
+        let e = eval_small_stack(&text).expect_err(&text);
+        assert!(e.contains("nested too deeply"), "{text}: {e}");
     }
     // A deep array as a text style value goes through JSON.stringify in the prelude.
     let _ = eval_small_stack(&format!("{DEEP_ARRAY} text.sourceText.style.setFontSize(a)"));
@@ -86,7 +86,8 @@ fn deep_array_result_is_an_error_or_text_not_a_crash() {
 #[test]
 fn deep_proxy_chain_is_an_error_not_a_crash() {
     let text = "var p = {}; for (var i = 0; i < 100000; i++) p = new Proxy(p, {}); p.x";
-    assert!(eval_small_stack(text).is_err(), "{text}");
+    let e = eval_small_stack(text).expect_err(text);
+    assert!(e.contains("Proxy") && e.contains("not defined"), "{text}: {e}");
     // Neither is available to expressions; the object model's own proxies still work.
     let f = fx();
     assert_eq!(f.text("typeof Proxy + ' ' + typeof Reflect", 0.0), "undefined undefined");
@@ -114,7 +115,8 @@ fn nested_values_still_convert() {
 fn nested_values_are_an_error_on_half_the_main_thread() {
     for tail in ["a.join()", "String([a])", "JSON.stringify(a)", "a.toLocaleString()"] {
         let text = format!("{DEEP_ARRAY} {tail}");
-        assert!(eval_on_stack(&text, 512 << 10).is_err(), "{tail}");
+        let e = eval_on_stack(&text, 512 << 10).expect_err(&text);
+        assert!(e.contains("nested too deeply"), "{tail}: {e}");
     }
 }
 
