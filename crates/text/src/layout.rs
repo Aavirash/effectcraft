@@ -1289,6 +1289,8 @@ mod tests {
     /// (#453). Skipped where no CJK face is installed, like the font-fallback tests.
     #[test]
     fn cjk_text_falls_back_to_a_face_with_the_glyph() {
+        // The CJK locale is process-global; keep a font test from changing it while this lays out.
+        let _locale = crate::fonts::TEST_CJK_LOCALE.lock().unwrap_or_else(|e| e.into_inner());
         let primary = fonts::resolve("Inter", "Regular").face;
         if !fonts::face(fonts::fallback_for('日', primary)).has_char('日') {
             eprintln!("no Japanese face installed; skipping");

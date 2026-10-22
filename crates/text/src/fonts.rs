@@ -744,6 +744,12 @@ const THAI_FAMILIES: &[&str] = &["Leelawadee UI", "Tahoma", "Thonburi", "Noto Sa
 /// The CJK locale the host asked fallbacks to prefer, when it has one (see [`set_cjk_locale`]).
 static REQUESTED_CJK_LOCALE: RwLock<Option<String>> = RwLock::new(None);
 
+/// Serialises the tests that change the process-global CJK locale with the tests that read it
+/// through [`fallback_for`] (the layout tests), which would otherwise cache the other order's
+/// families.
+#[cfg(test)]
+pub(crate) static TEST_CJK_LOCALE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Ask CJK font fallbacks to prefer `tag`'s language for Han ideographs instead of the locale
 /// environment, so a Chinese interface is drawn with a Chinese face on a machine whose locale is
 /// Japanese (and the other way round). The interface sets this from its language setting; an empty
@@ -989,6 +995,15 @@ fn system_fallback(c: char, style: &str) -> Option<FaceId> {
 mod tests {
     use super::*;
 
+    /// Clears the requested CJK locale when a test that set it ends, panic or not.
+    struct LocaleReset;
+
+    impl Drop for LocaleReset {
+        fn drop(&mut self) {
+            set_cjk_locale("");
+        }
+    }
+
     #[test]
     fn extra_font_dirs_come_from_a_path_list() {
         assert!(extra_dirs(None).is_empty());
@@ -1164,6 +1179,7 @@ mod tests {
     /// loaded a CJK font first. Skipped where no family from the list is installed.
     #[test]
     fn cjk_falls_back_to_a_system_family() {
+        let _locale = TEST_CJK_LOCALE.lock().unwrap_or_else(|e| e.into_inner());
         scan_system();
         let inter = resolve("Inter", "Bold").face;
         let installed = JAPANESE_FAMILIES.iter().any(|f| resolve_in(f, "Regular").is_some());
@@ -1284,6 +1300,7 @@ mod tests {
 
     #[test]
     fn the_han_order_follows_the_cjk_locale() {
+        let _locale = TEST_CJK_LOCALE.lock().unwrap_or_else(|e| e.into_inner());
         // Chinese first for any Chinese tag, whether or not it names a script.
         for tag in ["zh", "zh-CN", "zh_Hans", "ZH-Hant-TW.UTF-8", "zh_MO"] {
             assert_eq!(han_order_for(tag)[0], FallbackScript::Han, "{tag}");
@@ -1301,6 +1318,7 @@ mod tests {
 
     #[test]
     fn the_chinese_family_list_follows_the_script_the_locale_asks_for() {
+        let _locale = TEST_CJK_LOCALE.lock().unwrap_or_else(|e| e.into_inner());
         for tag in ["zh", "zh-CN", "zh_Hans", "zh_CN.UTF-8", "zh-SG"] {
             assert_eq!(chinese_families_for(tag), SIMPLIFIED_CHINESE_FAMILIES, "{tag}");
         }
@@ -1342,10 +1360,47 @@ mod tests {
         // exhaustive search would have found (Hiragino Sans), and it covers the shared ideographs.
         let (family, resolved) =
             SIMPLIFIED_CHINESE_FAMILIES.iter().find_map(|f| resolve_in(f, "Regular").map(|r| (*f, r))).expect("an installed Simplified Chinese family");
-        assert!(installed.iter().any(|i| i.eq_ignore_ascii_case(family)), "{family} is not a macOS Chinese face");
+        // An earlier name can win the walk when this Mac has it as well (`PingFang SC` on an older
+        // install, or Microsoft YaHei / Noto Sans CJK SC through Office or Homebrew). That is just
+        // as valid a Chinese fallback as the macOS trio; only the Japanese face would be a
+        // regression. Each installed macOS face is on the list (checked above) and covers the
+        // shared ideographs.
         assert!(!JAPANESE_FAMILIES.iter().any(|j| j.eq_ignore_ascii_case(family)), "{family} is a Japanese family");
         for c in ['骨', '直', '日'] {
             assert!(face(resolved.face).has_char(c), "{family} cannot draw {c}");
+        }
+        for name in installed {
+            let resolved = resolve_in(name, "Regular").expect("installed above");
+            for c in ['骨', '直', '日'] {
+                assert!(face(resolved.face).has_char(c), "{name} cannot draw {c}");
+            }
+        }
+    }
+
+    /// #453 under a Chinese interface: Han text in a Latin-only family falls back through the Han
+    /// list, in the locale's order, to an installed Simplified Chinese family; it must not reach the
+    /// Japanese face the exhaustive search would pick. The direct family lookup above would not
+    /// catch a `fallback_for` that skipped `han_order`. Skipped where no Simplified family is
+    /// installed.
+    #[test]
+    fn chinese_han_text_falls_back_to_a_simplified_chinese_family() {
+        let _locale = TEST_CJK_LOCALE.lock().unwrap_or_else(|e| e.into_inner());
+        scan_system();
+        if !SIMPLIFIED_CHINESE_FAMILIES.iter().any(|f| resolve_in(f, "Regular").is_some()) {
+            eprintln!("no Simplified Chinese family installed; skipping");
+            return;
+        }
+        set_cjk_locale("zh-CN");
+        let _reset = LocaleReset;
+        let inter = resolve("Inter", "Regular").face;
+        for c in ['骨', '直', '日', '真'] {
+            let f = face(fallback_for(c, inter));
+            assert!(f.has_char(c), "{c}: {} {} lacks it", f.info.family, f.info.style);
+            assert!(
+                SIMPLIFIED_CHINESE_FAMILIES.iter().any(|n| n.eq_ignore_ascii_case(&f.info.family)),
+                "{c} → {} is not a Simplified Chinese family",
+                f.info.family
+            );
         }
     }
 
