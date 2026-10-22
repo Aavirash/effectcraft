@@ -1179,7 +1179,11 @@ mod tests {
     /// loaded a CJK font first. Skipped where no family from the list is installed.
     #[test]
     fn cjk_falls_back_to_a_system_family() {
+        // Japanese text must reach the Japanese list even on a Chinese-language host, where the
+        // ambient locale puts the Chinese families first for the shared ideographs.
         let _locale = TEST_CJK_LOCALE.lock().unwrap_or_else(|e| e.into_inner());
+        set_cjk_locale("ja-JP");
+        let _reset = LocaleReset;
         scan_system();
         let inter = resolve("Inter", "Bold").face;
         let installed = JAPANESE_FAMILIES.iter().any(|f| resolve_in(f, "Regular").is_some());
