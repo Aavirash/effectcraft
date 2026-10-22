@@ -235,12 +235,17 @@ fn native_random(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<J
 }
 
 /// Stack a script run may use below [`run`] for natives that recurse once per level of a nested
-/// value (`join`, `JSON.stringify`, …; the prelude calls [`native_stack`] per level). Render
-/// threads have 2 MiB; the parser's own nesting limit ([`crate::rewrite::MAX_NESTING`]) needs
-/// most of the rest.
+/// value (`join`, `JSON.stringify`, …; the prelude calls [`native_stack`] per level). It is the
+/// same on every thread, so a value converts or fails alike in preview, export and commands.
+/// Expressions run on render, export and diagnostics threads (2 MiB, std and rayon's default)
+/// and on the main thread for commands and syntax checks (1 MiB on Windows). A debug build
+/// stops the nested-value tests within a fresh 512 KiB thread, which leaves the main thread
+/// 512 KiB for its callers. The parser's limit ([`crate::rewrite::MAX_NESTING`]) is the tighter
+/// one there: 30 levels need about 1 MiB in debug builds. On wasm32 the address of a local is on
+/// the shadow stack, not the engine's call stack, so this measures nothing useful there.
 const NATIVE_STACK: usize = 256 << 10;
 
-/// An address on the current stack.
+/// An address on the current stack (on wasm32, the shadow stack).
 fn stack_here() -> usize {
     let marker = 0u8;
     std::hint::black_box(&marker) as *const u8 as usize

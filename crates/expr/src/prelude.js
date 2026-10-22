@@ -1096,6 +1096,9 @@ function nearestKey(t) { return thisProperty.nearestKey(t); }
     replace(obj, name, function () { stack(); return apply(f, this, arguments); });
   }
 
+  // Indirect on purpose: a wrapper can't make a direct eval, so `eval` sees globals and `var`s
+  // but not `let`/`const` locals of the expression. Keeping direct eval would mean leaving it
+  // unchecked; expressions practically never need their locals inside eval.
   var evalJs = eval;
   eval = function (x) {
     if (typeof x === 'string') {
@@ -1135,10 +1138,12 @@ function nearestKey(t) { return thisProperty.nearestKey(t); }
 
   // A replacer function sees every value before it is serialized: the per-level check. An array
   // replacer (a list of keys) becomes one that copies each object's listed keys, in list order.
-  var stringify = JSON.stringify;
+  // Each source object gets one copy per call, so a cycle in the source is a cycle of copies and
+  // the native check reports it (TypeError); an object shared without a cycle is still fine.
+  var stringify = JSON.stringify, MapJs = Map;
   replace(JSON, 'stringify', function (value, replacer, space) {
     var fn = typeof replacer === 'function' ? replacer : null;
-    var keys = null;
+    var keys = null, copies = new MapJs();
     if (Array.isArray(replacer)) {
       keys = [];
       for (var i = 0; i < replacer.length; i++) {
@@ -1152,8 +1157,12 @@ function nearestKey(t) { return thisProperty.nearestKey(t); }
       if (fn !== null) v = apply(fn, this, [key, v]);
       if (keys !== null && v !== null && typeof v === 'object' && !Array.isArray(v) &&
           !(v instanceof Number || v instanceof String || v instanceof Boolean)) {
-        var o = {};
-        for (var j = 0; j < keys.length; j++) if (keys[j] in v) o[keys[j]] = v[keys[j]];
+        var o = copies.get(v);
+        if (o === undefined) {
+          o = {};
+          for (var j = 0; j < keys.length; j++) if (keys[j] in v) o[keys[j]] = v[keys[j]];
+          copies.set(v, o);
+        }
         v = o;
       }
       return v;

@@ -10,9 +10,14 @@ const RENDER_STACK: usize = 2 << 20;
 
 /// Evaluate `text` on the title's source text (any result converts) on a render-sized stack.
 fn eval_small_stack(text: &str) -> Result<Value, String> {
+    eval_on_stack(text, RENDER_STACK)
+}
+
+/// Evaluate `text` on the title's source text on a thread with `size` bytes of stack.
+fn eval_on_stack(text: &str, size: usize) -> Result<Value, String> {
     let text = text.to_string();
     std::thread::Builder::new()
-        .stack_size(RENDER_STACK)
+        .stack_size(size)
         .spawn(move || {
             let f = fx();
             f.ev(f.title, "text/sourceText", &text, 0.0)
@@ -101,4 +106,23 @@ fn nested_values_still_convert() {
     assert_eq!(text_of(eval_small_stack("[[[[[[1, 2]]]]]]")), "");
     assert_eq!(f.text("String([[[[[[[[1]]]]]]]])", 0.0), "1");
     assert_eq!(f.num("[1, [2, [3, [4]]]].flat(Infinity).length", 0.0), 4.0);
+}
+
+/// The main thread runs commands and syntax checks: 1 MiB on Windows. Half of it, for the
+/// callers above the evaluation, must still turn the nested-value triggers into errors.
+#[test]
+fn nested_values_are_an_error_on_half_the_main_thread() {
+    for tail in ["a.join()", "String([a])", "JSON.stringify(a)", "a.toLocaleString()"] {
+        let text = format!("{DEEP_ARRAY} {tail}");
+        assert!(eval_on_stack(&text, 512 << 10).is_err(), "{tail}");
+    }
+}
+
+#[test]
+fn stringify_with_a_key_list_reports_cycles_and_allows_shared_objects() {
+    let f = fx();
+    let cyclic = f.text("var o = {a: 1}; o.self = o; try { JSON.stringify(o, ['a', 'self']) } catch (e) { e.name }", 0.0);
+    assert_eq!(cyclic, "TypeError");
+    let shared = f.text("var x = {a: 1, b: 2}; JSON.stringify({p: x, q: x}, ['p', 'q', 'a'])", 0.0);
+    assert_eq!(shared, r#"{"p":{"a":1},"q":{"a":1}}"#);
 }
