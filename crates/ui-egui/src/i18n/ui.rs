@@ -120,6 +120,7 @@ const JAPANESE: &[(&str, &str)] = &[
     ("Add:", "追加:"),
     ("Adjust Exposure (stops)", "露出を調整（段単位）"),
     ("Adjust composition duration to the time span of the selected layers", "コンポジションのデュレーションを、選択したレイヤーの時間範囲に合わせる"),
+    ("Advanced", "詳細"),
     ("Advanced 3D", "アドバンスド3D"),
     ("Align Layers to:", "レイヤーの整列基準:"),
     ("All six face cameras turn together; the scene is not changed.", "6つの面のカメラがすべて一緒に回転します。シーンは変更されません。"),
@@ -392,6 +393,7 @@ const JAPANESE: &[(&str, &str)] = &[
     ("Parameter Name:", "パラメーター名:"),
     ("Parent pick whip: drag onto a layer", "親ピックウィップ：レイヤー上にドラッグ"),
     ("Pixel Aspect Ratio:", "ピクセルアスペクト比:"),
+    ("Play/Stop", "再生/停止"),
     ("Playing on Video Preview", "ビデオプレビューで再生中"),
     ("Post-Render Action: {}", "レンダリング後の処理：{}"),
     ("Preserve frame rate when nested or in render queue", "ネスト時またはレンダーキュー内でフレームレートを保持"),
@@ -1003,6 +1005,7 @@ const JAPANESE: &[(&str, &str)] = &[
     ("Lock Aspect Ratio", "縦横比を固定"),
     ("Frame Rate presets", "フレームレートのプリセット"),
     ("Background Color", "背景色"),
+    ("Basic", "基本"),
     ("Shutter Angle", "シャッター角度"),
     ("Shutter Phase", "シャッター位相"),
     ("Samples Per Frame", "フレームあたりのサンプル数"),
@@ -1164,6 +1167,7 @@ const SIMPLIFIED_CHINESE: &[(&str, &str)] = &[
     ("Add:", "添加："),
     ("Adjust Exposure (stops)", "调整曝光（光圈级数）"),
     ("Adjust composition duration to the time span of the selected layers", "将合成时长调整为所选图层的时间范围"),
+    ("Advanced", "高级"),
     ("Advanced 3D", "高级 3D"),
     ("Align Layers to:", "将图层对齐到："),
     ("All six face cameras turn together; the scene is not changed.", "六个面摄像机一起旋转；场景不会改变。"),
@@ -1427,6 +1431,7 @@ const SIMPLIFIED_CHINESE: &[(&str, &str)] = &[
     ("Parameter Name:", "参数名称："),
     ("Parent pick whip: drag onto a layer", "父级拾取器：拖到图层上"),
     ("Pixel Aspect Ratio:", "像素长宽比："),
+    ("Play/Stop", "播放/停止"),
     ("Playing on Video Preview", "在视频预览中播放"),
     ("Post-Render Action: {}", "渲染后动作：{}"),
     ("Preserve frame rate when nested or in render queue", "嵌套或在渲染队列中时保留帧速率"),
@@ -1557,7 +1562,7 @@ const SIMPLIFIED_CHINESE: &[(&str, &str)] = &[
     ("Transparency grid", "透明网格"),
     ("Tutorial complete", "教程完成"),
     ("Two-Node Camera", "双节点摄像机"),
-    ("Type", "文字"),
+    ("Type", "类型"),
     ("Type a command or effect…", "输入命令或效果…"),
     ("URL:", "URL："),
     ("Undock Panel", "取消停靠面板"),
@@ -2046,6 +2051,7 @@ const SIMPLIFIED_CHINESE: &[(&str, &str)] = &[
     ("Lock Aspect Ratio", "锁定长宽比"),
     ("Frame Rate presets", "帧速率预设"),
     ("Background Color", "背景颜色"),
+    ("Basic", "基本"),
     ("Shutter Angle", "快门角度"),
     ("Shutter Phase", "快门相位"),
     ("Samples Per Frame", "每帧采样数"),
@@ -2204,6 +2210,7 @@ const TRADITIONAL_CHINESE: &[(&str, &str)] = &[
     ("Add:", "添加："),
     ("Adjust Exposure (stops)", "調整曝光（光圈級數）"),
     ("Adjust composition duration to the time span of the selected layers", "將合成時長調整為所選圖層的時間範圍"),
+    ("Advanced", "進階"),
     ("Advanced 3D", "高級 3D"),
     ("Align Layers to:", "將圖層對齊到："),
     ("All six face cameras turn together; the scene is not changed.", "六個面攝影機一起旋轉；場景不會改變。"),
@@ -2467,6 +2474,7 @@ const TRADITIONAL_CHINESE: &[(&str, &str)] = &[
     ("Parameter Name:", "參數名稱："),
     ("Parent pick whip: drag onto a layer", "上層拾取線：拖到圖層上"),
     ("Pixel Aspect Ratio:", "像素長寬比例："),
+    ("Play/Stop", "播放/停止"),
     ("Playing on Video Preview", "在視訊預覽中播放"),
     ("Post-Render Action: {}", "算圖後動作：{}"),
     ("Preserve frame rate when nested or in render queue", "嵌套或在算圖佇列中時保留影格速率"),
@@ -2597,7 +2605,7 @@ const TRADITIONAL_CHINESE: &[(&str, &str)] = &[
     ("Transparency grid", "透明格點"),
     ("Tutorial complete", "教學完成"),
     ("Two-Node Camera", "雙節點攝影機"),
-    ("Type", "文字"),
+    ("Type", "類型"),
     ("Type a command or effect…", "輸入命令或效果…"),
     ("URL:", "URL："),
     ("Undock Panel", "取消停靠面板"),
@@ -3081,6 +3089,7 @@ const TRADITIONAL_CHINESE: &[(&str, &str)] = &[
     ("Lock Aspect Ratio", "鎖定長寬比"),
     ("Frame Rate presets", "幀率預設集"),
     ("Background Color", "背景顏色"),
+    ("Basic", "基本"),
     ("Shutter Angle", "快門角度"),
     ("Shutter Phase", "快門相位"),
     ("Samples Per Frame", "每幀取樣數"),
@@ -5571,6 +5580,11 @@ mod tests {
         assert_eq!(tr("All Transform Properties"), "すべてのトランスフォームプロパティ");
         assert_eq!(tr("Fill Color: RGB"), "塗りの色: RGB");
         assert_eq!(tr("Lines added"), "追加行数");
+        // The composition-settings tabs and the Preview transport pass these through `tr` as
+        // variables, so a missing row would fall back to English unnoticed.
+        assert_eq!(tr("Basic"), "基本");
+        assert_eq!(tr("Advanced"), "詳細");
+        assert_eq!(tr("Play/Stop"), "再生/停止");
         assert_eq!(tr("my layer.mp4"), "my layer.mp4");
         assert_eq!(tr_args("Proxy Use: {}", &[&"Best"]), "プロキシの使用：Best");
         assert_eq!(tr_args("Step {} of {}: {}", &[&1, &3, &"Colour"]), "ステップ1/3：Colour");
