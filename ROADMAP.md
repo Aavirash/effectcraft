@@ -120,7 +120,7 @@ Come tell us what matters most to you on [Discord](https://discord.gg/artcraft).
 - 2026-10-22: Localization: the panel/dialog catalogs gain 303 rows in Japanese, Simplified
   Chinese and Traditional Chinese — panel tabs, form and dialog labels, panel context menus,
   tracker/graph/text-panel controls, File-panel footers and credits. Japanese is 1,624 of
-  ≈ 4,200 interface strings (39%); the Chinese panel catalogs hold 1,626 rows each, and
+  ≈ 4,200 interface strings (39%); the Chinese panel catalogs hold 998 rows each, and
   Simplified Chinese is 46% with its 306 effect names.
 - 2026-10-16: Convert To Bezier Path turns a shape layer's Rectangle, Ellipse or Polystar
   path into an editable Path 1 with the same geometry, as After Effects does; it used to
