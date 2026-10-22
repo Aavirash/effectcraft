@@ -104,7 +104,8 @@ fn bundled_families_and_resolution() {
         let candidates: Vec<_> = faces.iter().filter(|f| f.info.family.eq_ignore_ascii_case(family)).collect();
         let exact = candidates
             .iter()
-            .find(|f| f.info.style.eq_ignore_ascii_case("Bold Italic") || f.info.instances.iter().any(|i| i.style.eq_ignore_ascii_case("Bold Italic")));
+            .find(|f| f.info.style.eq_ignore_ascii_case("Bold Italic"))
+            .or_else(|| candidates.iter().find(|f| f.info.instances.iter().any(|i| i.style.eq_ignore_ascii_case("Bold Italic"))));
         if let Some(exact) = exact {
             assert_eq!(resolved.face, exact.id, "real style wins for {family}");
             assert!(!resolved.synth_bold && !resolved.synth_italic);
