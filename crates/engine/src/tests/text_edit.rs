@@ -930,7 +930,12 @@ fn fonts_lists_bundled_and_installed_families() {
     // The bundled face is Regular; the OS can also provide Bold, Italic, or other faces.
     // Compare against the independent directory inventory rather than assuming an empty OS.
     let mut expected_styles = std::collections::BTreeSet::from(["Regular".to_string()]);
-    expected_styles.extend(installed.iter().filter(|face| face.family.eq_ignore_ascii_case("Noto Serif")).map(|face| face.style.clone()));
+    expected_styles.extend(
+        installed
+            .iter()
+            .filter(|face| face.family.eq_ignore_ascii_case("Noto Serif"))
+            .flat_map(|face| std::iter::once(face.style.clone()).chain(face.instances.iter().map(|i| i.style.clone()))),
+    );
     let styles: Vec<String> = r["families"][0]["styles"].as_array().unwrap().iter().map(|style| style.as_str().unwrap().to_string()).collect();
     assert_eq!(styles.iter().cloned().collect::<std::collections::BTreeSet<_>>(), expected_styles);
     assert_eq!(styles.len(), expected_styles.len(), "style menu has no duplicates");
