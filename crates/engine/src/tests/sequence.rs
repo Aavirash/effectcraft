@@ -190,6 +190,10 @@ fn replace_footage_keeps_a_still_a_still() {
     s.execute("file.replaceFootage", json!({"path": at(&dir, "shot_0004.png")})).unwrap();
     let (name, f) = footage(&s, &item);
     assert_eq!((name.as_str(), f.kind), ("shot_0004.png", FootageKind::Still));
+    // JSON null is unspecified, not "on": the still stays a still.
+    s.execute("file.replaceFootage", json!({"path": at(&dir, "shot_0004.png"), "sequence": null})).unwrap();
+    let (name, f) = footage(&s, &item);
+    assert_eq!((name.as_str(), f.kind), ("shot_0004.png", FootageKind::Still));
     // Asking for the run still brings it.
     s.execute("file.replaceFootage", json!({"path": at(&dir, "shot_0004.png"), "sequence": true})).unwrap();
     let (name, f) = footage(&s, &item);

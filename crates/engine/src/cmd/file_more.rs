@@ -885,7 +885,7 @@ fn replace_footage(s: &mut Session, p: &Value) -> Result<Value> {
         _ => (false, false, false),
     };
     let mut opts = SequenceOptions::from_params(p);
-    if p.get("sequence").is_none() && p.get("alphabetical").is_none() {
+    if b_p(p, "sequence").is_none() && b_p(p, "alphabetical").is_none() {
         (opts.sequence, opts.folders, opts.alphabetical) = previous;
     }
     let src = crate::sequence::source_of(s.services.as_ref(), &path, opts);
