@@ -409,12 +409,19 @@ fn create_on_double_click(app: &EffectcraftApp, tool: Tool) -> Option<(&'static 
             // itself), or a shape layer while Tool Creates Mask is on — as dragging does.
             let sel = app.session.state.selected_layers.first().copied().and_then(|id| comp.layer(id));
             if let Some(l) = sel.filter(|l| l.source.is_av() && (app.session.state.shape_tool.creates_mask || !matches!(l.source, LayerSource::Shape))) {
-                // The box in layer space, so a moved or scaled layer still gets a comp-filling mask.
+                // The box in layer space, so a moved, scaled or rotated layer still gets a
+                // comp-filling mask: all four corners are mapped, and their bounds are the
+                // smallest axis-aligned box around the comp box.
                 let ctx = effectcraft_engine::render::EvalCtx::new(&app.session.project, app.session.active_comp_id()?, comp, app.session.time());
                 let inv = ctx.layer_to_comp(l).0.inverse().unwrap_or(effectcraft_engine::geom::Mat3::IDENTITY);
-                let p0 = inv.apply(gv2(cw / 2.0 - w / 2.0, ch / 2.0 - h / 2.0));
-                let p1 = inv.apply(gv2(cw / 2.0 + w / 2.0, ch / 2.0 + h / 2.0));
-                let rect = [p0.x.min(p1.x), p0.y.min(p1.y), (p1.x - p0.x).abs(), (p1.y - p0.y).abs()];
+                let (x0, y0, x1, y1) = (cw / 2.0 - w / 2.0, ch / 2.0 - h / 2.0, cw / 2.0 + w / 2.0, ch / 2.0 + h / 2.0);
+                let pts = [gv2(x0, y0), gv2(x1, y0), gv2(x1, y1), gv2(x0, y1)].map(|p| inv.apply(p));
+                let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
+                for p in pts {
+                    lo = [lo[0].min(p.x), lo[1].min(p.y)];
+                    hi = [hi[0].max(p.x), hi[1].max(p.y)];
+                }
+                let rect = [lo[0], lo[1], hi[0] - lo[0], hi[1] - lo[1]];
                 return Some(("layer.addMask", json!({"layer": l.id.0, "shape": kind, "rect": rect})));
             }
             // Into the selected shape layer's Contents, else a new shape layer (the engine's own
