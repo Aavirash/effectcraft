@@ -749,7 +749,7 @@ const JAPANESE_CATEGORIES: &[(&str, &str)] = &[
     ("Channel", "チャンネル"),
     ("Color Correction", "カラー補正"),
     ("Distort", "ディストーション"),
-    ("Expression Controls", "エクスプレッション制御"),
+    ("Expression Controls", "式制御"),
     ("Immersive Video", "イマーシブビデオ"),
     ("Keying", "キーイング"),
     ("Matte", "マット"),
