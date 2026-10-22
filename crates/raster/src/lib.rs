@@ -138,9 +138,11 @@ impl Image {
         }
         o
     }
-    /// Copy with `pad` transparent pixels on every side.
+    /// Copy with `pad` transparent pixels on every side. Sizes saturate rather than wrap around,
+    /// but a saturated size can't be allocated: callers bound `pad`.
     pub fn padded(&self, pad: u32) -> Image {
-        let mut out = Image::new(self.width + 2 * pad, self.height + 2 * pad);
+        let (w, h) = (self.width.saturating_add(pad.saturating_mul(2)), self.height.saturating_add(pad.saturating_mul(2)));
+        let mut out = Image::new(w, h);
         let ow = out.width as usize;
         for y in 0..self.height as usize {
             let src = &self.data[y * self.width as usize..(y + 1) * self.width as usize];
