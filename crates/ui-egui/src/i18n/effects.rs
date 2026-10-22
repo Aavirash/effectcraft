@@ -436,9 +436,9 @@ const TRADITIONAL_CHINESE: &[Row] = &[];
 /// Japanese (`ja`): reserved for the Japanese data point on #821, so both languages share this
 /// one catalog instead of inventing a second mechanism. A translator fills one row per effect,
 /// ids from [`SIMPLIFIED_CHINESE`]; the names Adobe's Japanese interface leaves in English (the
-/// `CC` series, the `VR` set, the `OCIO` set, `Cryptomatte`, `EXtractoR`, `IDentifier`,
-/// `Key Light`, `Unmult`, `Twirl (Legacy)` and the two EffectCraft-only effects) repeat that
-/// English name here rather than being left out.
+/// `CC` series, `Cryptomatte`, `EXtractoR`, `IDentifier` and `Key Light`) repeat that English name
+/// here rather than being left out. An effect with no row draws its English name anyway, which is
+/// what the `OCIO` set, `Unmult`, `Twirl (Legacy)` and the two EffectCraft-only effects do.
 ///
 /// The rows below come from AE 2026's Japanese interface where it was read directly (its Effect menu
 /// and its Effects & Presets panel) and from Adobe's own Japanese help where the panel was not to
@@ -599,7 +599,7 @@ const JAPANESE_EFFECTS: &[Row] = &[
     ("ec.generate.stroke", "Stroke", "線"),
     ("ec.generate.vegas", "Vegas", "ベガス"),
     ("ec.generate.writeon", "Write-on", "ブラシアニメーション"),
-    ("ec.key.advancedspill", "Advanced Spill Suppressor", "Advanced Spill Suppressor"),
+    ("ec.key.advancedspill", "Advanced Spill Suppressor", "高度なスピルサプレッション"),
     ("ec.key.ccsimplewireremoval", "CC Simple Wire Removal", "CC Simple Wire Removal"),
     ("ec.key.colordifference", "Color Difference Key", "カラー差キー"),
     ("ec.key.colorkey", "Color Key", "カラーキー"),
@@ -607,7 +607,7 @@ const JAPANESE_EFFECTS: &[Row] = &[
     ("ec.key.differencematte", "Difference Matte", "異なるマット"),
     ("ec.key.extract", "Extract", "抽出"),
     ("ec.key.innerouter", "Inner/Outer Key", "インナー／アウターキー"),
-    ("ec.key.keycleaner", "Key Cleaner", "Key Cleaner"),
+    ("ec.key.keycleaner", "Key Cleaner", "キークリーナー"),
     ("ec.key.linearcolor", "Linear Color Key", "リニアカラーキー"),
     ("ec.key.luma", "Luma Key", "ルミナンスキー"),
     ("ec.key.spill", "Spill Suppressor", "スピルサプレッション"),
@@ -744,7 +744,7 @@ const JAPANESE_CATEGORIES: &[(&str, &str)] = &[
     ("Channel", "チャンネル"),
     ("Color Correction", "カラー補正"),
     ("Distort", "ディストーション"),
-    ("Expression Controls", "式制御"),
+    ("Expression Controls", "エクスプレッション制御"),
     ("Immersive Video", "イマーシブビデオ"),
     ("Keying", "キーイング"),
     ("Matte", "マット"),
