@@ -47,19 +47,32 @@ fn shown(h: &Harness<'_, EffectcraftApp>, label: &str) -> bool {
 }
 
 #[test]
-fn browse_presets_opens_the_animation_presets_list() {
+fn browse_presets_clears_search_and_scrolls_to_the_visible_presets_list() {
     use effectcraft_ui_egui::dock::PanelKind;
 
-    let mut app = EffectcraftApp::new(Session::default());
-    app.ui.effects_view.presets = false;
-    app.ui.effects_open.clear();
+    let mut h = harness();
+    let ctx = h.ctx.clone();
 
-    let result = effectcraft_ui_egui::menus::invoke(&mut app, &egui::Context::default(), "anim.browsePresets", json!({}));
+    let managed = effectcraft_ui_egui::menus::invoke(h.state_mut(), &ctx, "effect.manage", json!({}));
+    assert!(managed.is_ok(), "{managed:?}");
+    assert_eq!(h.state().ui.focused, PanelKind::EffectsPresets);
 
-    assert!(result.is_ok());
-    assert_eq!(app.ui.focused, PanelKind::EffectsPresets);
-    assert!(app.ui.effects_view.presets);
-    assert!(app.ui.effects_open.contains("presets"));
+    h.state_mut().ui.effects_search = "no matching animation preset".into();
+    let scroll_id = egui::Id::new("fx-scroll");
+    h.ctx.data_mut(|data| data.insert_temp(scroll_id, (480.0_f32, 960.0_f32)));
+    assert_eq!(h.ctx.data(|data| data.get_temp::<(f32, f32)>(scroll_id)), Some((480.0, 960.0)));
+
+    let result = effectcraft_ui_egui::menus::invoke(h.state_mut(), &ctx, "anim.browsePresets", json!({}));
+
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(h.state().ui.focused, PanelKind::EffectsPresets);
+    assert!(h.state().ui.effects_search.is_empty());
+    assert!(h.state().ui.effects_view.presets);
+    assert!(h.state().ui.effects_open.contains("presets"));
+    assert!(h.ctx.data(|data| data.get_temp::<(f32, f32)>(scroll_id)).is_none());
+
+    h.run_steps(3);
+    assert!(h.state().auto.find("effects.category.presets").is_some(), "Animation Presets must be visible after Browse Presets");
 }
 
 /// Space (or any shortcut) while a menu is open goes to the menu, not the app: it started the

@@ -1322,8 +1322,10 @@ pub fn frontend(app: &mut EffectcraftApp, ctx: &egui::Context, id: &str, p: Valu
             Value::Null
         }
         "anim.browsePresets" => {
+            app.ui.effects_search.clear();
             app.ui.effects_view.presets = true;
             app.ui.effects_open.insert("presets".into());
+            let _ = ctx.data_mut(|data| data.remove_temp::<(f32, f32)>(egui::Id::new("fx-scroll")));
             app.show_panel(PanelKind::EffectsPresets);
             Value::Null
         }
