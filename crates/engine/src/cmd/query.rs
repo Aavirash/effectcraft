@@ -129,8 +129,8 @@ fn group_json(g: &PropGroup, path: &str, l: &Layer, t: effectcraft_time::Tick, d
                         if let Some(e) = &p.expr {
                             o["expression"] = json!(e.text);
                         }
-                        if let Some(opts) = super::popup_options(&p.ui) {
-                            o["options"] = opts;
+                        if let Some(opts) = l.popup_options(p) {
+                            o["options"] = super::popup_options(&opts);
                         }
                         o
                     }

@@ -629,7 +629,7 @@ static TOOLS: &[ToolDef] = &[
     },
     ToolDef {
         name: "get_layer",
-        description: "A layer's property tree (transform, masks, effects, text, shape contents, ...): leaf properties have a `path` usable with get_property/set_property/add_keyframe, plus uid, match id, name, type, value at `time`, keyframes and expression; enum properties add `options` ([{value, label}]). Groups contain children; inspect them here, then select a leaf path. `flat: true` returns just a list of {path, type, value, keys, expression, options} (compact).",
+        description: "A layer's property tree (transform, masks, effects, text, shape contents, ...): leaf properties have a `path` usable with get_property/set_property/add_keyframe, plus uid, match id, name, type, value at `time`, keyframes and expression; popup (enum) properties add `options` ([{value, label}]). Groups contain children; inspect them here, then select a leaf path. `flat: true` returns just a list of {path, type, value, keys, expression, options} (compact).",
         bridge_only: false,
         schema: || {
             schema(
@@ -646,7 +646,7 @@ static TOOLS: &[ToolDef] = &[
     },
     ToolDef {
         name: "get_property",
-        description: "Read one property: type, value at `time` (comp seconds; default the current time), whether it is animated, its keyframes (time, value, in/out interpolation) and expression. Enum properties add `options`: [{value, label}], the values set_property takes.",
+        description: "Read one property: type, value at `time` (comp seconds; default the current time), whether it is animated, its keyframes (time, value, in/out interpolation) and expression. Popup (enum) properties add `options`: [{value, label}], the values set_property takes.",
         bridge_only: false,
         schema: || {
             schema(

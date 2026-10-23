@@ -999,8 +999,8 @@ fn list(_: &mut Session, p: &Value) -> Result<Value> {
             json!({"id": e.id, "name": e.name, "category": e.category, "gpu": e.gpu, "float": e.float, "params": e.params.iter().map(|p| {
                 let mut out = json!({"id": p.id, "name": p.name, "type": p.default.kind_name(), "default": p.default.to_json()});
                 match &p.ui {
-                    effectcraft_project::ParamUi::Popup { .. } => {
-                        out["options"] = super::popup_options(&p.ui).unwrap_or_default();
+                    effectcraft_project::ParamUi::Popup { options } => {
+                        out["options"] = super::popup_options(options);
                     }
                     effectcraft_project::ParamUi::Slider { min, max, slider_min, slider_max, decimals } => {
                         out["min"] = json!(min);

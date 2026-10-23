@@ -89,6 +89,16 @@ fn enum_properties_list_their_options() {
     let props = flat["properties"].as_array().unwrap();
     assert_eq!(props.iter().find(|p| p["path"] == path).unwrap()["options"], expected);
     assert!(props.iter().find(|p| p["path"] == "transform/opacity").unwrap().get("options").is_none());
+
+    // Path Options ▸ Path offers None and the layer's masks, as the Timeline does.
+    for _ in 0..2 {
+        call_json(&mut s, "execute_command", json!({"command": "mask.new", "params": {"layer": "T", "vertices": [[0, 0], [40, 0], [40, 40]], "closed": true}}));
+    }
+    let masks = json!([{"value": 0, "label": "None"}, {"value": 1, "label": "Mask 1"}, {"value": 2, "label": "Mask 2"}]);
+    let p = call_json(&mut s, "get_property", json!({"layer": "T", "path": "text/pathOptions/path"}));
+    assert_eq!(p["options"], masks, "{p}");
+    let tree = call_json(&mut s, "get_layer", json!({"layer": "T"}));
+    assert_eq!(find(&tree["properties"], "text/pathOptions/path").unwrap_or_else(|| panic!("{tree}"))["options"], masks);
 }
 
 #[test]
