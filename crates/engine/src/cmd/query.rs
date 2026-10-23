@@ -129,6 +129,9 @@ fn group_json(g: &PropGroup, path: &str, l: &Layer, t: effectcraft_time::Tick, d
                         if let Some(e) = &p.expr {
                             o["expression"] = json!(e.text);
                         }
+                        if let Some(opts) = super::popup_options(&p.ui) {
+                            o["options"] = opts;
+                        }
                         o
                     }
                     Node::Group(g) => group_json(g, &cpath, l, t, depth + 1, max_depth),

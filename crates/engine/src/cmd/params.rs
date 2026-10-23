@@ -58,6 +58,13 @@ pub(crate) fn selected_leaf_props(s: &Session) -> Vec<(LayerId, effectcraft_proj
     out
 }
 
+/// A popup property's `[{value, label}]`, as `effect.list`, `prop.get` and `layer.tree` report it.
+/// Engine/MCP popup values are zero-based; JSX exposes one-based values.
+pub(crate) fn popup_options(ui: &effectcraft_project::ParamUi) -> Option<Value> {
+    let effectcraft_project::ParamUi::Popup { options } = ui else { return None };
+    Some(serde_json::json!(options.iter().enumerate().map(|(value, label)| serde_json::json!({"value": value, "label": label})).collect::<Vec<_>>()))
+}
+
 // ---------- params ----------
 
 pub(crate) fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
