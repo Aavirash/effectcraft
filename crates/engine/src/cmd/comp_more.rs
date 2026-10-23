@@ -91,19 +91,48 @@ fn scale_prop(pr: &mut effectcraft_project::Property, f: f64) {
     }
 }
 
-/// Multiply only the Z of a 3D value (and of its keys and spatial tangents) by `f`.
+/// Multiply only the Z of a 3D value (and of its keys and spatial tangents) by `f`. Speeds follow:
+/// a spatial side's speed by how much the path's direction there stretches, so the ease keeps
+/// its shape; a per-dimension one (Scale) by `f` for Z only.
 fn scale_prop_z(pr: &mut effectcraft_project::Property, f: f64) {
     use effectcraft_keyframe::Value as KV;
+    let stretch = |v: [f64; 3]| {
+        let n = v[0].hypot(v[1]).hypot(v[2]);
+        if n > 1e-12 && n.is_finite() { v[0].hypot(v[1]).hypot(v[2] * f) / n } else { 1.0 }
+    };
+    let pos = |k: &effectcraft_project::Keyframe| k.value.as_vec3();
+    let sub = |a: [f64; 3], b: [f64; 3]| [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+    let is_zero = |v: [f64; 3]| v.iter().all(|x| x.abs() <= 1e-12);
+    // Read every side's direction before anything changes (auto tangents come from the neighbours).
+    let sides: Vec<(f64, f64)> = (0..pr.keys.len())
+        .map(|i| {
+            let (tin, tout) = effectcraft_keyframe::spatial_tangents(&pr.keys, i);
+            let here = pr.keys.get(i).map(pos).unwrap_or_default();
+            let chord = |j: Option<usize>| j.and_then(|j| pr.keys.get(j)).map(|k| sub(pos(k), here)).unwrap_or_default();
+            let tin = if is_zero(tin) { chord(i.checked_sub(1)) } else { tin };
+            let tout = if is_zero(tout) { chord(Some(i + 1)) } else { tout };
+            (stretch(tin), stretch(tout))
+        })
+        .collect();
+    let spatial = pr.spatial;
     let mul = |v: &mut KV| {
         if let KV::Vec3(a) = v {
             a[2] *= f;
         }
     };
     mul(&mut pr.value);
-    for k in &mut pr.keys {
+    for (k, (s_in, s_out)) in pr.keys.iter_mut().zip(sides) {
         mul(&mut k.value);
         k.spatial_in[2] *= f;
         k.spatial_out[2] *= f;
+        if spatial {
+            k.in_ease.iter_mut().for_each(|e| e.speed *= s_in);
+            k.out_ease.iter_mut().for_each(|e| e.speed *= s_out);
+        } else {
+            for e in [k.in_ease.get_mut(2), k.out_ease.get_mut(2)].into_iter().flatten() {
+                e.speed *= f;
+            }
+        }
     }
 }
 
@@ -136,10 +165,22 @@ fn scale_comp(s: &mut Session, p: &Value) -> Result<Value> {
         // A parent's Scale carries its children (X and Y only when the parent is 2D); a camera or
         // light parent has none.
         let scaling_parents: std::collections::HashMap<_, _> =
-            c.layers.iter().filter(|l| l.transform().is_some_and(|tr| tr.get("scale").is_some())).map(|l| (l.id, l.is_3d())).collect();
+            c.layers.iter().filter(|l| l.transform().is_some_and(|tr| tr.get("scale").is_some())).map(|l| (l.id, (l.is_3d(), l.parent))).collect();
+        // A 3D ancestor's Scale carries depth through any 2D layers between (bounded: parent
+        // chains in a file can loop).
+        let depth_carried = |mut cur: Option<effectcraft_project::LayerId>| {
+            for _ in 0..64 {
+                let Some((three_d, up)) = cur.and_then(|id| scaling_parents.get(&id)) else { return false };
+                if *three_d {
+                    return true;
+                }
+                cur = *up;
+            }
+            false
+        };
         for l in &mut c.layers {
-            let parent_3d = l.parent.and_then(|id| scaling_parents.get(&id).copied());
-            let flat_parent = parent_3d == Some(false) && l.is_3d();
+            let parent_3d = l.parent.and_then(|id| scaling_parents.get(&id).map(|p| p.0));
+            let flat_parent = parent_3d == Some(false) && l.is_3d() && !depth_carried(l.parent);
             let Some(tr) = l.transform_mut() else { continue };
             match parent_3d {
                 None => {

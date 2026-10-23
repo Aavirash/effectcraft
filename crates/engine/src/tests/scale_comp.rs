@@ -148,6 +148,54 @@ fn scale_comp_scales_depth_under_a_2d_parent_and_children_of_a_camera() {
 }
 
 #[test]
+fn scale_comp_keeps_the_ease_of_depth_moves_under_a_2d_parent() {
+    let mut s = comp(200, 100);
+    let card = solid(&mut s, "#ff0000", 20, 10);
+    let rig = s.execute("layer.newNull", json!({})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("layer.setSwitch", json!({"layers": [card], "switch": "threeD", "value": true})).unwrap();
+    s.execute("layer.setParent", json!({"layers": [card], "parent": rig})).unwrap();
+    s.execute("prop.addKey", json!({"layer": card, "path": "transform/position", "time": 0, "value": [0, 0, 0]})).unwrap();
+    s.execute("prop.addKey", json!({"layer": card, "path": "transform/position", "time": 1, "value": [0, 0, 100]})).unwrap();
+    s.execute("keys.setEase", json!({"layer": card, "path": "transform/position", "time": 0, "side": "out", "speed": 100, "influence": 50})).unwrap();
+    s.execute("prop.addKey", json!({"layer": card, "path": "transform/scale", "time": 0, "value": [100, 100, 100]})).unwrap();
+    s.execute("prop.addKey", json!({"layer": card, "path": "transform/scale", "time": 1, "value": [100, 100, 300]})).unwrap();
+    s.execute("keys.setEase", json!({"layer": card, "path": "transform/scale", "time": 0, "side": "out", "speed": 300, "influence": 50})).unwrap();
+    let (pos0, scale0) = (v3(&s, card, "transform/position", 0.25), v3(&s, card, "transform/scale", 0.25));
+
+    s.execute("comp.scale", json!({"factor": 2})).unwrap();
+    // Twice the distance in the same time: the same ease, every frame twice as deep.
+    let (pos, scale) = (v3(&s, card, "transform/position", 0.25), v3(&s, card, "transform/scale", 0.25));
+    assert!((pos[2] - pos0[2] * 2.0).abs() < 1e-6, "{pos0:?} → {pos:?}");
+    assert!((scale[2] - scale0[2] * 2.0).abs() < 1e-6, "{scale0:?} → {scale:?}");
+    assert_eq!(scale[..2], scale0[..2]);
+}
+
+#[test]
+fn scale_comp_scales_depth_once_through_a_3d_grandparent() {
+    let mut s = comp(200, 100);
+    s.execute("layer.newCamera", json!({})).unwrap();
+    // card (3D) → A (2D null) → B (3D null): B's Scale already carries the depth.
+    let card = solid(&mut s, "#ff0000", 20, 10);
+    let a = s.execute("layer.newNull", json!({"name": "A"})).unwrap()["layer"].as_u64().unwrap();
+    let b = s.execute("layer.newNull", json!({"name": "B"})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("layer.setSwitch", json!({"layers": [card, b], "switch": "threeD", "value": true})).unwrap();
+    s.execute("prop.set", json!({"layer": b, "path": "transform/position", "value": [100, 50, 0]})).unwrap();
+    s.execute("layer.setParent", json!({"layers": [a], "parent": b})).unwrap();
+    s.execute("prop.set", json!({"layer": a, "path": "transform/position", "value": [0, 0]})).unwrap();
+    s.execute("layer.setParent", json!({"layers": [card], "parent": a})).unwrap();
+    s.execute("prop.set", json!({"layer": card, "path": "transform/position", "value": [-40, 0, 500]})).unwrap();
+    let card0 = bounds(&s, 0.0, 0);
+    assert!(card0.4 > 0, "the card is in view");
+
+    s.execute("comp.scale", json!({"factor": 2})).unwrap();
+    assert_eq!(v3(&s, card, "transform/position", 0.0), [-40.0, 0.0, 500.0]);
+    let card1 = bounds(&s, 0.0, 0);
+    let near =
+        [(card1.0, card0.0 * 2), (card1.1, card0.1 * 2), (card1.2, card0.2 * 2 + 1), (card1.3, card0.3 * 2 + 1)].iter().all(|&(x, y)| (x - y).abs() <= 2);
+    assert!(near, "{card0:?} → {card1:?}");
+}
+
+#[test]
 fn scale_comp_refuses_a_bad_factor_and_changes_nothing() {
     let mut s = comp(640, 360);
     solid(&mut s, "#ff0000", 100, 100);
