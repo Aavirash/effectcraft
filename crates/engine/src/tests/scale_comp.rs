@@ -244,6 +244,21 @@ fn scale_comp_scales_once_through_a_camera_under_a_scaled_null() {
 }
 
 #[test]
+fn scale_comp_scales_the_point_of_interest_depth_of_a_camera_under_a_2d_null() {
+    let mut s = comp(200, 100);
+    let cam = s.execute("layer.newCamera", json!({})).unwrap()["layer"].as_u64().unwrap();
+    let rig = s.execute("layer.newNull", json!({})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("layer.setParent", json!({"layers": [cam], "parent": rig})).unwrap();
+    s.execute("prop.set", json!({"layer": cam, "path": "transform/position", "value": [10, 20, -1000]})).unwrap();
+    s.execute("prop.set", json!({"layer": cam, "path": "transform/poi", "value": [10, 20, 200]})).unwrap();
+
+    s.execute("comp.scale", json!({"factor": 2})).unwrap();
+    // The 2D null carries X and Y; the camera's own Z doubles at both ends, so it looks the same way.
+    assert_eq!(v3(&s, cam, "transform/position", 0.0), [10.0, 20.0, -2000.0]);
+    assert_eq!(v3(&s, cam, "transform/poi", 0.0), [10.0, 20.0, 400.0]);
+}
+
+#[test]
 fn scale_comp_refuses_a_bad_factor_and_changes_nothing() {
     let mut s = comp(640, 360);
     solid(&mut s, "#ff0000", 100, 100);

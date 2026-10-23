@@ -197,7 +197,7 @@ fn scale_comp(s: &mut Session, p: &Value) -> Result<Value> {
                 if let Some(pr) = tr.get_mut("positionZ") {
                     scale_prop(pr, f);
                 }
-                for name in ["position", "scale"] {
+                for name in ["position", "poi", "scale"] {
                     if let Some(pr) = tr.get_mut(name) {
                         scale_prop_z(pr, f);
                     }
