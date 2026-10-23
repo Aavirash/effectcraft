@@ -129,8 +129,14 @@ fn scale_prop_z(pr: &mut effectcraft_project::Property, f: f64) {
             k.in_ease.iter_mut().for_each(|e| e.speed *= s_in);
             k.out_ease.iter_mut().for_each(|e| e.speed *= s_out);
         } else {
-            for e in [k.in_ease.get_mut(2), k.out_ease.get_mut(2)].into_iter().flatten() {
-                e.speed *= f;
+            // A shorter list lends its first ease to Z (`effective_ease`): give Z its own.
+            for list in [&mut k.in_ease, &mut k.out_ease] {
+                if let Some(&first) = list.first() {
+                    list.resize(list.len().max(3), first);
+                }
+                if let Some(e) = list.get_mut(2) {
+                    e.speed *= f;
+                }
             }
         }
     }
@@ -162,45 +168,40 @@ fn scale_comp(s: &mut Session, p: &Value) -> Result<Value> {
     let active = s.active_comp_id() == Some(cid);
     s.edit("Scale Composition", None, |proj, st| {
         let c = proj.comp_mut(cid).ok_or(EngineError::NoComp)?;
-        // A parent's Scale carries its children (X and Y only when the parent is 2D); a camera or
-        // light parent has none.
-        let scaling_parents: std::collections::HashMap<_, _> =
-            c.layers.iter().filter(|l| l.transform().is_some_and(|tr| tr.get("scale").is_some())).map(|l| (l.id, (l.is_3d(), l.parent))).collect();
-        // A 3D ancestor's Scale carries depth through any 2D layers between (bounded: parent
-        // chains in a file can loop).
-        let depth_carried = |mut cur: Option<effectcraft_project::LayerId>| {
+        // An ancestor's Scale carries its descendants (X and Y only when that ancestor is 2D),
+        // through cameras and lights too: the renderer applies every ancestor's transform.
+        let chain: std::collections::HashMap<_, _> =
+            c.layers.iter().map(|l| (l.id, (l.transform().is_some_and(|tr| tr.get("scale").is_some()), l.is_3d(), l.parent))).collect();
+        // (X and Y carried, Z carried); bounded, as parent chains in a file can loop.
+        let carried = |mut cur: Option<effectcraft_project::LayerId>| {
+            let (mut xy, mut z) = (false, false);
             for _ in 0..64 {
-                let Some((three_d, up)) = cur.and_then(|id| scaling_parents.get(&id)) else { return false };
-                if *three_d {
-                    return true;
-                }
-                cur = *up;
+                let Some(&(has_scale, three_d, up)) = cur.and_then(|id| chain.get(&id)) else { break };
+                xy |= has_scale;
+                z |= has_scale && three_d;
+                cur = up;
             }
-            false
+            (xy, z)
         };
         for l in &mut c.layers {
-            let parent_3d = l.parent.and_then(|id| scaling_parents.get(&id).map(|p| p.0));
-            let flat_parent = parent_3d == Some(false) && l.is_3d() && !depth_carried(l.parent);
+            let (xy_carried, z_carried) = carried(l.parent);
+            let three_d = l.is_3d();
             let Some(tr) = l.transform_mut() else { continue };
-            match parent_3d {
-                None => {
-                    for name in ["position", "positionX", "positionY", "positionZ", "poi", "scale"] {
-                        if let Some(pr) = tr.get_mut(name) {
-                            scale_prop(pr, f);
-                        }
-                    }
-                }
-                Some(_) if flat_parent => {
-                    if let Some(pr) = tr.get_mut("positionZ") {
+            if !xy_carried {
+                for name in ["position", "positionX", "positionY", "positionZ", "poi", "scale"] {
+                    if let Some(pr) = tr.get_mut(name) {
                         scale_prop(pr, f);
                     }
-                    for name in ["position", "scale"] {
-                        if let Some(pr) = tr.get_mut(name) {
-                            scale_prop_z(pr, f);
-                        }
+                }
+            } else if three_d && !z_carried {
+                if let Some(pr) = tr.get_mut("positionZ") {
+                    scale_prop(pr, f);
+                }
+                for name in ["position", "scale"] {
+                    if let Some(pr) = tr.get_mut(name) {
+                        scale_prop_z(pr, f);
                     }
                 }
-                Some(_) => {}
             }
             if let Some(cam) = l.props.sub_mut("cameraOptions") {
                 for name in ["zoom", "focusDistance", "aperture"] {

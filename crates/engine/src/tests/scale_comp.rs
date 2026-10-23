@@ -171,6 +171,30 @@ fn scale_comp_keeps_the_ease_of_depth_moves_under_a_2d_parent() {
 }
 
 #[test]
+fn scale_comp_gives_z_its_own_speed_when_a_scale_key_has_one_ease() {
+    let mut s = comp(200, 100);
+    let card = solid(&mut s, "#ff0000", 20, 10);
+    let rig = s.execute("layer.newNull", json!({})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("layer.setSwitch", json!({"layers": [card], "switch": "threeD", "value": true})).unwrap();
+    s.execute("layer.setParent", json!({"layers": [card], "parent": rig})).unwrap();
+    s.execute("prop.addKey", json!({"layer": card, "path": "transform/scale", "time": 0, "value": [100, 100, 100]})).unwrap();
+    s.execute("prop.addKey", json!({"layer": card, "path": "transform/scale", "time": 1, "value": [100, 100, 300]})).unwrap();
+    s.execute("keys.setEase", json!({"layer": card, "path": "transform/scale", "time": 0, "side": "out", "speed": 300, "influence": 50})).unwrap();
+    // One ease for every dimension, as a project file may store it.
+    let cid = s.active_comp_id().unwrap();
+    let key =
+        &mut std::sync::Arc::make_mut(&mut s.project).comp_mut(cid).unwrap().layer_mut(LayerId(card)).unwrap().props.prop_mut("transform/scale").unwrap().keys
+            [0];
+    key.out_ease.truncate(1);
+    let scale0 = v3(&s, card, "transform/scale", 0.25);
+
+    s.execute("comp.scale", json!({"factor": 2})).unwrap();
+    let scale = v3(&s, card, "transform/scale", 0.25);
+    assert!((scale[2] - scale0[2] * 2.0).abs() < 1e-6, "{scale0:?} → {scale:?}");
+    assert_eq!(scale[..2], scale0[..2], "X and Y keep the shared ease");
+}
+
+#[test]
 fn scale_comp_scales_depth_once_through_a_3d_grandparent() {
     let mut s = comp(200, 100);
     s.execute("layer.newCamera", json!({})).unwrap();
@@ -193,6 +217,30 @@ fn scale_comp_scales_depth_once_through_a_3d_grandparent() {
     let near =
         [(card1.0, card0.0 * 2), (card1.1, card0.1 * 2), (card1.2, card0.2 * 2 + 1), (card1.3, card0.3 * 2 + 1)].iter().all(|&(x, y)| (x - y).abs() <= 2);
     assert!(near, "{card0:?} → {card1:?}");
+}
+
+#[test]
+fn scale_comp_scales_once_through_a_camera_under_a_scaled_null() {
+    let mut s = comp(200, 100);
+    // solid → camera → B (3D null): B's Scale reaches the solid through the camera.
+    let cam = s.execute("layer.newCamera", json!({})).unwrap()["layer"].as_u64().unwrap();
+    let b = s.execute("layer.newNull", json!({"name": "B"})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("layer.setSwitch", json!({"layers": [b], "switch": "threeD", "value": true})).unwrap();
+    s.execute("layer.setParent", json!({"layers": [cam], "parent": b})).unwrap();
+    let held = solid(&mut s, "#00ff00", 10, 10);
+    s.execute("layer.setSwitch", json!({"layers": [held], "switch": "threeD", "value": true})).unwrap();
+    s.execute("layer.setParent", json!({"layers": [held], "parent": cam})).unwrap();
+    s.execute("prop.set", json!({"layer": held, "path": "transform/position", "value": [30, 0, 500]})).unwrap();
+    let held0 = bounds(&s, 0.0, 1);
+    assert!(held0.4 > 0, "the solid is in view: {held0:?}");
+
+    s.execute("comp.scale", json!({"factor": 2})).unwrap();
+    assert_eq!(v3(&s, held, "transform/position", 0.0), [30.0, 0.0, 500.0]);
+    assert_eq!(v3(&s, held, "transform/scale", 0.0), [100.0; 3]);
+    let held1 = bounds(&s, 0.0, 1);
+    let near =
+        [(held1.0, held0.0 * 2), (held1.1, held0.1 * 2), (held1.2, held0.2 * 2 + 1), (held1.3, held0.3 * 2 + 1)].iter().all(|&(x, y)| (x - y).abs() <= 2);
+    assert!(near, "{held0:?} → {held1:?}");
 }
 
 #[test]
