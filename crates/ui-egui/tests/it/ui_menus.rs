@@ -46,6 +46,22 @@ fn shown(h: &Harness<'_, EffectcraftApp>, label: &str) -> bool {
     h.query_by_label_contains(label).is_some()
 }
 
+#[test]
+fn browse_presets_opens_the_animation_presets_list() {
+    use effectcraft_ui_egui::dock::PanelKind;
+
+    let mut app = EffectcraftApp::new(Session::default());
+    app.ui.effects_view.presets = false;
+    app.ui.effects_open.clear();
+
+    let result = effectcraft_ui_egui::menus::invoke(&mut app, &egui::Context::default(), "anim.browsePresets", json!({}));
+
+    assert!(result.is_ok());
+    assert_eq!(app.ui.focused, PanelKind::EffectsPresets);
+    assert!(app.ui.effects_view.presets);
+    assert!(app.ui.effects_open.contains("presets"));
+}
+
 /// Space (or any shortcut) while a menu is open goes to the menu, not the app: it started the
 /// preview behind the open menu.
 #[test]
