@@ -5,7 +5,7 @@ use effectcraft_project::{Layer, LayerId};
 use effectcraft_time::Tick;
 use serde_json::json;
 
-use crate::Session;
+use crate::{EngineError, Session};
 
 fn comp(w: u32, h: u32) -> Session {
     let mut s = Session::default();
@@ -92,6 +92,7 @@ fn scale_comp_to_a_width_keeps_the_aspect_and_scales_cameras_3d_and_guides() {
     let zoom = |s: &Session| layer(s, cam).props.prop("cameraOptions/zoom").unwrap().value.as_f64();
     let (zoom0, cam0, poi0) = (zoom(&s), v3(&s, cam, "transform/position", 0.0), v3(&s, cam, "transform/poi", 0.0));
     let seen0 = bounds(&s, 0.0, 0);
+    s.execute("view.setRegionOfInterest", json!({"rect": [10, 20, 70, 70]})).unwrap();
 
     let r = s.execute("comp.scale", json!({"width": 960})).unwrap();
     assert_eq!((r["width"].as_u64(), r["height"].as_u64(), r["factor"].as_f64()), (Some(960), Some(540), Some(1.5)));
@@ -107,6 +108,7 @@ fn scale_comp_to_a_width_keeps_the_aspect_and_scales_cameras_3d_and_guides() {
     let c = s.active_comp().unwrap();
     assert_eq!(c.guides[0].px(c.width, c.height), 240.0);
     assert_eq!(c.guides[1].position, 25.0, "a percentage guide keeps its percent");
+    assert_eq!(s.state.region_of_interest, Some([15.0, 30.0, 105.0, 105.0]), "the region of interest covers the same part");
 
     // A height alone works the same way.
     let r = s.execute("comp.scale", json!({"height": 270})).unwrap();
@@ -114,12 +116,56 @@ fn scale_comp_to_a_width_keeps_the_aspect_and_scales_cameras_3d_and_guides() {
 }
 
 #[test]
+fn scale_comp_scales_depth_under_a_2d_parent_and_children_of_a_camera() {
+    let mut s = comp(200, 100);
+    let cam = s.execute("layer.newCamera", json!({})).unwrap()["layer"].as_u64().unwrap();
+    // A 3D card under a 2D null: the null's Scale carries X and Y but not Z.
+    let card = solid(&mut s, "#ff0000", 20, 10);
+    let rig = s.execute("layer.newNull", json!({})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("prop.set", json!({"layer": rig, "path": "transform/position", "value": [100, 50]})).unwrap();
+    s.execute("layer.setSwitch", json!({"layers": [card], "switch": "threeD", "value": true})).unwrap();
+    s.execute("layer.setParent", json!({"layers": [card], "parent": rig})).unwrap();
+    s.execute("prop.set", json!({"layer": card, "path": "transform/position", "value": [-40, 0, 500]})).unwrap();
+    // A 3D card parented to the camera, in front of it.
+    let held = solid(&mut s, "#00ff00", 10, 10);
+    s.execute("layer.setSwitch", json!({"layers": [held], "switch": "threeD", "value": true})).unwrap();
+    s.execute("layer.setParent", json!({"layers": [held], "parent": cam})).unwrap();
+    s.execute("prop.set", json!({"layer": held, "path": "transform/position", "value": [30, 0, 500]})).unwrap();
+    let (card0, held0) = (bounds(&s, 0.0, 0), bounds(&s, 0.0, 1));
+    let (held_pos0, held_scale0) = (v3(&s, held, "transform/position", 0.0), v3(&s, held, "transform/scale", 0.0));
+    assert!(card0.4 > 0 && held0.4 > 0, "both cards are in view: {card0:?} {held0:?}");
+
+    s.execute("comp.scale", json!({"factor": 2})).unwrap();
+    let near = |a: (i64, i64, i64, i64, u32), b: (i64, i64, i64, i64, u32)| {
+        [(a.0, b.0 * 2), (a.1, b.1 * 2), (a.2, b.2 * 2 + 1), (a.3, b.3 * 2 + 1)].iter().all(|&(x, y)| (x - y).abs() <= 2)
+    };
+    let (card1, held1) = (bounds(&s, 0.0, 0), bounds(&s, 0.0, 1));
+    assert!(near(card1, card0), "the card under the 2D null doubles: {card0:?} → {card1:?}");
+    assert_eq!(v3(&s, card, "transform/position", 0.0), [-40.0, 0.0, 1000.0]);
+    assert!(near(held1, held0), "the card held by the camera doubles: {held0:?} → {held1:?}");
+    assert_eq!(v3(&s, held, "transform/position", 0.0), held_pos0.map(|v| v * 2.0));
+    assert_eq!(v3(&s, held, "transform/scale", 0.0), held_scale0.map(|v| v * 2.0));
+}
+
+#[test]
 fn scale_comp_refuses_a_bad_factor_and_changes_nothing() {
     let mut s = comp(640, 360);
     solid(&mut s, "#ff0000", 100, 100);
     let before = s.project.clone();
-    for p in [json!({}), json!({"factor": 0}), json!({"factor": -2}), json!({"width": 0}), json!({"factor": 100}), json!({"factor": 0.001})] {
-        assert!(s.execute("comp.scale", p.clone()).is_err(), "{p} is refused");
+    let cases = [
+        (json!({}), "pass `factor`"),
+        (json!({"factor": 0}), "4 to 30,000 px"),
+        (json!({"factor": -2}), "4 to 30,000 px"),
+        (json!({"width": 0}), "4 to 30,000 px"),
+        (json!({"factor": 100}), "4 to 30,000 px"),
+        (json!({"factor": 0.001}), "4 to 30,000 px"),
+    ];
+    for (p, why) in cases {
+        match s.execute("comp.scale", p.clone()) {
+            Err(EngineError::BadParams { cmd, msg }) => assert!(cmd == "comp.scale" && msg.contains(why), "{p}: {msg}"),
+            other => panic!("{p} is refused as bad parameters, got {other:?}"),
+        }
         assert!(s.project == before, "{p} leaves the project alone");
     }
+    s.execute("comp.scale", json!({"factor": 1})).unwrap();
 }

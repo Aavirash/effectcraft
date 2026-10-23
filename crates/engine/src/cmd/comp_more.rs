@@ -91,11 +91,28 @@ fn scale_prop(pr: &mut effectcraft_project::Property, f: f64) {
     }
 }
 
+/// Multiply only the Z of a 3D value (and of its keys and spatial tangents) by `f`.
+fn scale_prop_z(pr: &mut effectcraft_project::Property, f: f64) {
+    use effectcraft_keyframe::Value as KV;
+    let mul = |v: &mut KV| {
+        if let KV::Vec3(a) = v {
+            a[2] *= f;
+        }
+    };
+    mul(&mut pr.value);
+    for k in &mut pr.keys {
+        mul(&mut k.value);
+        k.spatial_in[2] *= f;
+        k.spatial_out[2] *= f;
+    }
+}
+
 /// Scale Composition (After Effects ships it as File ▸ Scripts ▸ Scale Composition.jsx): the comp
 /// and its contents grow or shrink by one factor, keys included, in one undo step. Layers whose
 /// parent has a Scale follow that parent; everything else scales its Position (and Point of
 /// Interest) and Scale. Anchor Point, masks, shapes and effects live in layer space and follow the
-/// layer's Scale. Cameras scale their Zoom so 3D layers keep their place in the frame.
+/// layer's Scale. Cameras scale their Zoom so 3D layers keep their place in the frame; a 2D parent
+/// carries no depth, so its 3D children scale their Z themselves.
 fn scale_comp(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "comp.scale";
     let cid = comp_id(s, p)?;
@@ -113,19 +130,36 @@ fn scale_comp(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(C, format!("the composition would be {w}×{h}: width and height run from 4 to 30,000 px")));
     }
     let (w, h) = (w as u32, h as u32);
-    s.edit("Scale Composition", None, |proj, _| {
+    let active = s.active_comp_id() == Some(cid);
+    s.edit("Scale Composition", None, |proj, st| {
         let c = proj.comp_mut(cid).ok_or(EngineError::NoComp)?;
-        // A parent's Scale carries its children; a camera or light parent has none.
-        let scaling_parents: std::collections::HashSet<_> =
-            c.layers.iter().filter(|l| l.transform().is_some_and(|tr| tr.get("scale").is_some())).map(|l| l.id).collect();
+        // A parent's Scale carries its children (X and Y only when the parent is 2D); a camera or
+        // light parent has none.
+        let scaling_parents: std::collections::HashMap<_, _> =
+            c.layers.iter().filter(|l| l.transform().is_some_and(|tr| tr.get("scale").is_some())).map(|l| (l.id, l.is_3d())).collect();
         for l in &mut c.layers {
-            let follows_parent = l.parent.is_some_and(|id| scaling_parents.contains(&id));
-            if !follows_parent && let Some(tr) = l.transform_mut() {
-                for name in ["position", "positionX", "positionY", "positionZ", "poi", "scale"] {
-                    if let Some(pr) = tr.get_mut(name) {
-                        scale_prop(pr, f);
+            let parent_3d = l.parent.and_then(|id| scaling_parents.get(&id).copied());
+            let flat_parent = parent_3d == Some(false) && l.is_3d();
+            let Some(tr) = l.transform_mut() else { continue };
+            match parent_3d {
+                None => {
+                    for name in ["position", "positionX", "positionY", "positionZ", "poi", "scale"] {
+                        if let Some(pr) = tr.get_mut(name) {
+                            scale_prop(pr, f);
+                        }
                     }
                 }
+                Some(_) if flat_parent => {
+                    if let Some(pr) = tr.get_mut("positionZ") {
+                        scale_prop(pr, f);
+                    }
+                    for name in ["position", "scale"] {
+                        if let Some(pr) = tr.get_mut(name) {
+                            scale_prop_z(pr, f);
+                        }
+                    }
+                }
+                Some(_) => {}
             }
             if let Some(cam) = l.props.sub_mut("cameraOptions") {
                 for name in ["zoom", "focusDistance", "aperture"] {
@@ -135,13 +169,15 @@ fn scale_comp(s: &mut Session, p: &Value) -> Result<Value> {
                 }
             }
         }
-        let (old_w, old_h) = (c.width, c.height);
-        for g in &mut c.guides {
-            let px = g.px(old_w, old_h) * f;
-            g.set_px(px, w, h);
+        // Percentage guides keep their percent.
+        for g in c.guides.iter_mut().filter(|g| !g.percent) {
+            g.position *= f;
         }
         c.width = w;
         c.height = h;
+        if active && let Some(r) = &mut st.region_of_interest {
+            *r = r.map(|v| v * f);
+        }
         Ok(())
     })?;
     Ok(json!({"width": w, "height": h, "factor": f}))
