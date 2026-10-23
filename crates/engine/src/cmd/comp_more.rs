@@ -1,5 +1,5 @@
-//! Composition menu, part two: crop to region of interest / layer bounds, Save Frame As ▸ File,
-//! Copy Frame to Clipboard, Responsive Design — Time.
+//! Composition menu, part two: crop to region of interest / layer bounds, Scale Composition, Save
+//! Frame As ▸ File, Copy Frame to Clipboard, Responsive Design — Time.
 
 use effectcraft_project::Marker;
 use effectcraft_time::Tick;
@@ -69,6 +69,82 @@ fn crop_to_layers(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let (x0, y0) = (b[0].floor(), b[1].floor());
     crop(s, cid, [x0, y0, b[2].ceil() - x0, b[3].ceil() - y0], "Crop Comp to Selected Layer(s) Bounds")
+}
+
+/// Multiply a property's value, every key, its spatial tangents and its speeds by `f`.
+fn scale_prop(pr: &mut effectcraft_project::Property, f: f64) {
+    use effectcraft_keyframe::Value as KV;
+    let mul = |v: &KV| match v {
+        KV::Scalar(x) => KV::Scalar(x * f),
+        KV::Vec2(a) => KV::Vec2(a.map(|x| x * f)),
+        KV::Vec3(a) => KV::Vec3(a.map(|x| x * f)),
+        other => other.clone(),
+    };
+    pr.value = mul(&pr.value);
+    for k in &mut pr.keys {
+        k.value = mul(&k.value);
+        k.spatial_in = k.spatial_in.map(|x| x * f);
+        k.spatial_out = k.spatial_out.map(|x| x * f);
+        for e in k.in_ease.iter_mut().chain(&mut k.out_ease) {
+            e.speed *= f;
+        }
+    }
+}
+
+/// Scale Composition (After Effects ships it as File ▸ Scripts ▸ Scale Composition.jsx): the comp
+/// and its contents grow or shrink by one factor, keys included, in one undo step. Layers whose
+/// parent has a Scale follow that parent; everything else scales its Position (and Point of
+/// Interest) and Scale. Anchor Point, masks, shapes and effects live in layer space and follow the
+/// layer's Scale. Cameras scale their Zoom so 3D layers keep their place in the frame.
+fn scale_comp(s: &mut Session, p: &Value) -> Result<Value> {
+    const C: &str = "comp.scale";
+    let cid = comp_id(s, p)?;
+    let comp = s.project.comp(cid).ok_or(EngineError::NoComp)?;
+    let (ow, oh) = (f64::from(comp.width), f64::from(comp.height));
+    let f = match (f_p(p, "factor"), f_p(p, "width"), f_p(p, "height")) {
+        (Some(f), ..) => f,
+        (None, Some(w), _) => w / ow,
+        (None, None, Some(h)) => h / oh,
+        _ => return Err(bad(C, "pass `factor`, `width` or `height`")),
+    };
+    let (w, h) = ((ow * f).round(), (oh * f).round());
+    let max = f64::from(effectcraft_project::limits::MAX_SIZE);
+    if !f.is_finite() || f <= 0.0 || !(4.0..=max).contains(&w) || !(4.0..=max).contains(&h) {
+        return Err(bad(C, format!("the composition would be {w}×{h}: width and height run from 4 to 30,000 px")));
+    }
+    let (w, h) = (w as u32, h as u32);
+    s.edit("Scale Composition", None, |proj, _| {
+        let c = proj.comp_mut(cid).ok_or(EngineError::NoComp)?;
+        // A parent's Scale carries its children; a camera or light parent has none.
+        let scaling_parents: std::collections::HashSet<_> =
+            c.layers.iter().filter(|l| l.transform().is_some_and(|tr| tr.get("scale").is_some())).map(|l| l.id).collect();
+        for l in &mut c.layers {
+            let follows_parent = l.parent.is_some_and(|id| scaling_parents.contains(&id));
+            if !follows_parent && let Some(tr) = l.transform_mut() {
+                for name in ["position", "positionX", "positionY", "positionZ", "poi", "scale"] {
+                    if let Some(pr) = tr.get_mut(name) {
+                        scale_prop(pr, f);
+                    }
+                }
+            }
+            if let Some(cam) = l.props.sub_mut("cameraOptions") {
+                for name in ["zoom", "focusDistance", "aperture"] {
+                    if let Some(pr) = cam.get_mut(name) {
+                        scale_prop(pr, f);
+                    }
+                }
+            }
+        }
+        let (old_w, old_h) = (c.width, c.height);
+        for g in &mut c.guides {
+            let px = g.px(old_w, old_h) * f;
+            g.set_px(px, w, h);
+        }
+        c.width = w;
+        c.height = h;
+        Ok(())
+    })?;
+    Ok(json!({"width": w, "height": h, "factor": f}))
 }
 
 /// Encode straight 8-bit RGBA as PNG.
@@ -233,6 +309,15 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!("comp.cropToRegionOfInterest", "Crop Comp to Region of Interest", ["Composition"], None, "{comp?}", has_roi, crop_to_roi),
         cmd!("comp.cropToLayerBounds", "Crop Comp to Selected Layer(s) Bounds", ["Composition"], None, "{layers?}", has_layers, crop_to_layers),
+        cmd!(
+            "comp.scale",
+            "Scale Composition",
+            [],
+            None,
+            "{comp?, factor? (2 = twice the size) | width? | height? (the other side keeps the aspect ratio)}",
+            has_comp,
+            scale_comp
+        ),
         cmd!(
             "comp.saveFrameAs",
             "File...",
