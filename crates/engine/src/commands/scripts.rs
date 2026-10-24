@@ -236,6 +236,11 @@ fn uninstall(s: &mut Session, p: &Value) -> Result<Value> {
     if !is_script(name) || !is_script_name(name) {
         return Err(bad(c, format!("`{name}` is not a script file name")));
     }
+    // A subfolder can be a link to files outside the settings folder (an extension's own
+    // folder), so only what Install puts at the top is removed, never a file through a folder.
+    if name.contains('/') {
+        return Err(bad(c, format!("`{name}` is in a subfolder: delete it there yourself (only scripts at the top of the Scripts folders are uninstalled)")));
+    }
     let cfg = s.config.clone().ok_or_else(|| bad(c, "no settings folder"))?;
     let mut removed = false;
     for dir in [SCRIPTS_DIR, PANELS_DIR] {
@@ -369,7 +374,15 @@ pub fn specs() -> Vec<CommandSpec> {
             always,
             |s, p| install(s, p, true)
         ),
-        cmd!("file.uninstallScript", "Uninstall Script", [], None, "{name}", always, uninstall),
+        cmd!(
+            "file.uninstallScript",
+            "Uninstall Script",
+            [],
+            None,
+            "{name (a script at the top of a Scripts folder, not `Folder/File.jsx`)}",
+            always,
+            uninstall
+        ),
         crate::query!("file.scripts.list", "List Scripts", "{} → [{name (`Folder/File.jsx` in a subfolder), panel, source: installed|sample|extension}]", list),
         cmd!(
             "window.scriptPanel",
@@ -563,7 +576,7 @@ mod tests {
     }
 
     #[test]
-    fn scripts_in_a_subfolder_are_listed_run_opened_and_uninstalled_as_folder_and_file() {
+    fn scripts_in_a_subfolder_are_listed_run_and_opened_as_folder_and_file() {
         let (mut s, root) = session_in_tmp("folders");
         put(&root, "Scripts/Tools/Hello.jsx", "hello");
         put(&root, "Scripts/ScriptUI Panels/Motion Kit/Animate.jsx", "animate");
@@ -590,10 +603,29 @@ mod tests {
         }
         assert!(["Scripts/a/b/c.jsx", "Scripts/ScriptUI Panels/Top.jsx"].iter().all(|p| root.join("settings").join(p).is_file()));
         assert!(root.join("outside.jsx").is_file());
+        // Uninstall removes only scripts at the top; one in a folder is deleted there by hand.
         for name in ["Tools/Hello.jsx", "Motion Kit/Animate.jsx"] {
-            s.execute("file.uninstallScript", json!({"name": name})).unwrap();
+            assert!(bad_params(&s.execute("file.uninstallScript", json!({"name": name}))), "{name}");
         }
-        assert!(["Scripts/Tools/Hello.jsx", "Scripts/ScriptUI Panels/Motion Kit/Animate.jsx"].iter().all(|p| !root.join("settings").join(p).exists()));
+        assert!(["Scripts/Tools/Hello.jsx", "Scripts/ScriptUI Panels/Motion Kit/Animate.jsx"].iter().all(|p| root.join("settings").join(p).is_file()));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A subfolder can be a link to an extension's own folder, outside the settings folder: its
+    /// scripts are listed and run from there, but uninstall never deletes through it.
+    #[cfg(unix)]
+    #[test]
+    fn uninstall_never_deletes_through_a_linked_subfolder() {
+        let (mut s, root) = session_in_tmp("linked");
+        std::fs::create_dir_all(root.join("extension")).unwrap();
+        std::fs::write(root.join("extension").join("Animate.jsx"), "animate").unwrap();
+        std::os::unix::fs::symlink(root.join("extension"), root.join("settings").join(PANELS_DIR).join("Motion Kit")).unwrap();
+        let list = s.execute("file.scripts.list", json!({})).unwrap();
+        assert!(list.as_array().unwrap().iter().any(|e| e["name"] == "Motion Kit/Animate.jsx" && e["panel"] == true), "{list}");
+        assert_eq!(script_code(&s, "Motion Kit/Animate.jsx", Some(true)), Some((true, "animate".to_string())));
+        let r = s.execute("file.uninstallScript", json!({"name": "Motion Kit/Animate.jsx"}));
+        assert!(bad_params(&r), "{r:?}");
+        assert!(root.join("extension").join("Animate.jsx").is_file(), "the extension's own file was deleted");
         let _ = std::fs::remove_dir_all(&root);
     }
 

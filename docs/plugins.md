@@ -41,8 +41,10 @@ journaled and the same as the UI's action. The `effectcraft-script` crate's docs
 * `file.scripts.list` lists installed and bundled scripts and panels; `file.runScript {name}` runs
   one; `file.uninstallScript {name}` removes an installed one.
 * A subfolder of `Scripts/` is a submenu of File ▸ Scripts named after the folder, and its scripts
-  are named `Folder/File.jsx` in these commands. One level of folders is listed; deeper folders
-  are not.
+  are named `Folder/File.jsx` in `file.scripts.list` and `file.runScript`. One level of folders is
+  listed; deeper folders are not. `file.uninstallScript` removes only scripts at the top of the
+  Scripts folders: delete a script in a subfolder yourself. A subfolder may be a link to another
+  folder (an extension's own), and uninstall never deletes a file through it.
 
 ## ScriptUI panels
 
@@ -59,7 +61,7 @@ To group panels, for example the several panels of one extension, make a subfold
 listed as Window ▸ My Tools ▸ Animate.jsx, its tab is titled Animate, and commands name it
 `My Tools/Animate.jsx` (`window.scriptPanel {name}`). One level of folders is listed. Install
 ScriptUI Panel… copies a panel to the top of the folder; make the subfolder and move panels into it
-yourself.
+yourself, and delete them from it yourself too.
 
 Run from File ▸ Scripts instead, the same script gets no panel, so it should make a floating
 palette itself. A minimal panel:
