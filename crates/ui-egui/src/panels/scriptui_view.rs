@@ -608,4 +608,33 @@ mod tests {
         assert_eq!(draw_color(&Some(orange), Color32::RED), Color32::from_rgb(242, 140, 40));
         assert_eq!(draw_color(&None, Color32::RED), Color32::RED, "no colour is the theme colour");
     }
+
+    /// fillPath, strokePath and drawString all paint the script's colour as sRGB.
+    #[test]
+    fn paint_draw_paints_srgb_colours() {
+        let v = 43.0 / 255.0;
+        let color = Some([v, v, v, 1.0]);
+        let path = vec![PathSeg::R { x: 0.0, y: 0.0, w: 10.0, h: 10.0 }];
+        let ops = [
+            DrawOp::Fill { color, path: path.clone() },
+            DrawOp::Stroke { color, width: 1.0, path },
+            DrawOp::Text { text: "Hi".into(), color, x: 0.0, y: 0.0, size: 12.0, style: String::new() },
+        ];
+        let t = Tokens::for_kind(crate::theme::ThemeKind::Dark);
+        let mut out = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
+            paint_draw(ui, Rect::from_min_size(pos2(0.0, 0.0), vec2(50.0, 50.0)), &ops, &t, &effectcraft_engine::FsServices);
+        });
+        out.textures_delta.clear();
+        let want = Color32::from_rgb(43, 43, 43);
+        let (mut fill, mut stroke, mut text) = (false, false, false);
+        for s in out.shapes {
+            match s.shape {
+                egui::Shape::Mesh(m) => fill |= m.vertices.iter().all(|v| v.color == want),
+                egui::Shape::Path(p) => stroke |= matches!(p.stroke.color, egui::epaint::ColorMode::Solid(c) if c == want),
+                egui::Shape::Text(t) => text |= t.fallback_color == want,
+                _ => {}
+            }
+        }
+        assert!(fill && stroke && text, "fill {fill}, stroke {stroke}, text {text}");
+    }
 }
