@@ -385,3 +385,32 @@ fn cineon_settings_convert_dpx_code_values() {
     s.execute_checked("file.interpretProxy", json!({"items": [inner.0], "logConversion": true, "highlightRolloff": 0})).unwrap();
     assert!(near(proxied(&s, 0), 0.0) && near(proxied(&s, 1), 1.0), "{} {}", proxied(&s, 0), proxied(&s, 1));
 }
+
+/// The Footage panel, the Project panel thumbnail and the tracker's source frames show DPX
+/// footage with its Cineon Settings, as a composition renders it.
+#[test]
+fn cineon_settings_apply_to_footage_panel_thumbnail_and_tracking() {
+    let mut s = session();
+    let d = import(&mut s, "/m/scan.dpx");
+    s.execute("comp.new", json!({"name": "C", "width": 4, "height": 4, "frameRate": 10, "duration": 1})).unwrap();
+    let c = s.active_comp_id().unwrap();
+    s.execute("layer.addItem", json!({"item": d.0})).unwrap();
+    s.execute("file.interpretFootage", json!({"item": d.0, "logConversion": true, "highlightRolloff": 0})).unwrap();
+    let near = |a: f32, b: f32| (a - b).abs() < 1.5 / 255.0;
+    let rendered = px(&s, c, 0.0, RenderOpts::default(), 2, 0)[0];
+    assert!(near(rendered, 0.26190), "code 400 at gamma 1.7: {rendered}");
+    let f = match &s.project.item(d).unwrap().kind {
+        ItemKind::Footage(f) => f.clone(),
+        _ => panic!("not footage"),
+    };
+    let panel = crate::commands::footage_panel::frame(&s, d, &f, Tick::ZERO).unwrap().get(2, 0)[0];
+    assert!(near(panel, rendered), "Footage panel: {panel}");
+    let (w, _, rgba) = (s.thumbnail_job(d, Tick::ZERO, 64).unwrap())().unwrap();
+    assert_eq!(w, 4);
+    let thumb = rgba[8] as f32 / 255.0;
+    assert!(near(thumb, rendered), "Project panel thumbnail: {thumb}");
+    let comp = s.project.comp(c).unwrap();
+    let r = crate::render::Renderer::new(&s.project, s.footage.as_ref(), RenderOpts::default());
+    let (img, _) = crate::tracking::source_frame(&r, &s.project, c, comp, &comp.layers[0], Tick::ZERO, None).unwrap();
+    assert!(near(img.get(2, 0)[0], rendered), "tracker source frame: {}", img.get(2, 0)[0]);
+}
