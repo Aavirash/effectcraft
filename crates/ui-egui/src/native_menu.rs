@@ -128,6 +128,7 @@ impl NativeMenu {
 
 /// Build the native menu spec for the app's current state.
 pub fn build(app: &EffectcraftApp) -> NativeMenu {
+    /// Append the native nodes of `nodes` to `out`; item ids start with `path`.
     fn rec(app: &EffectcraftApp, nodes: &[MenuNode], path: &str, out: &mut Vec<NativeNode>) {
         let mut services_added = false;
         for (i, n) in nodes.iter().enumerate() {

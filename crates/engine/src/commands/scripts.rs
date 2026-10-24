@@ -122,6 +122,7 @@ pub struct ScriptEntry {
     pub source: &'static str,
 }
 
+/// Whether `name` ends in `.jsx` or `.js` (any letter case).
 fn is_script(name: &str) -> bool {
     let l = name.to_ascii_lowercase();
     l.ends_with(".jsx") || l.ends_with(".js")
@@ -230,6 +231,8 @@ fn list(s: &mut Session, _: &Value) -> Result<Value> {
     Ok(json!(scripts(s)))
 }
 
+/// `file.uninstallScript {name}`: delete an installed script or panel at the top of the Scripts
+/// folders.
 fn uninstall(s: &mut Session, p: &Value) -> Result<Value> {
     let c = "file.uninstallScript";
     let name = str_p(p, "name").ok_or_else(|| bad(c, "missing `name`"))?;
@@ -354,6 +357,7 @@ fn open_panel(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"window": id, "result": out}))
 }
 
+/// The commands of File ▸ Scripts, ScriptUI panels and windows, and script settings.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(
@@ -528,6 +532,7 @@ mod tests {
         }
     }
 
+    /// Bundled and ordinary script file names are accepted; paths are not.
     #[test]
     fn script_names_are_bare_file_names() {
         let more = ["..jsx", "a..b.js", "Äpfel ✓.jsx", "console.jsx", "Concert.jsx", "NULL.jsx", "COM10.jsx", "LPT.jsx"];
@@ -553,6 +558,7 @@ mod tests {
         }
     }
 
+    /// `Folder/File.jsx` is accepted; deeper, upward, absolute and `\` names are not.
     #[test]
     fn script_names_may_have_one_folder() {
         for name in ["Motion Kit/Animate.jsx", "a/b.jsx", "Äpfel/✓.js", "..jsx/x.jsx"] {
@@ -575,6 +581,7 @@ mod tests {
         std::fs::write(p, code).unwrap();
     }
 
+    /// Every script command takes `Folder/File.jsx` names and refuses names outside one folder level.
     #[test]
     fn scripts_in_a_subfolder_are_listed_run_and_opened_as_folder_and_file() {
         let (mut s, root) = session_in_tmp("folders");

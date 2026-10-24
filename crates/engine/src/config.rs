@@ -24,7 +24,9 @@ pub trait ConfigStore: Send + Sync {
         }
         Ok(text)
     }
+    /// Write entry `name`, replacing any earlier text.
     fn write(&self, name: &str, data: &str) -> std::io::Result<()>;
+    /// Remove entry `name`; a missing entry is no error.
     fn remove(&self, name: &str) -> std::io::Result<()>;
     /// Names of the entries directly in `dir` (a `/`-separated name prefix such as `Scripts`),
     /// sorted. Stores that can't list return nothing.
@@ -112,6 +114,7 @@ impl ConfigStore for MemoryConfig {
         let Ok(m) = self.files.lock() else { return vec![] };
         m.keys().filter_map(|k| k.strip_prefix(&pre)).filter(|n| !n.is_empty() && !n.contains('/')).map(str::to_string).collect()
     }
+    /// The first name part of the keys under `dir/`.
     fn list_dirs(&self, dir: &str) -> Vec<String> {
         let pre = format!("{}/", dir.trim_end_matches('/'));
         let Ok(m) = self.files.lock() else { return vec![] };
@@ -166,6 +169,7 @@ impl ConfigStore for DirConfig {
         v.sort();
         v
     }
+    /// The folders in `dir`, following links like [`ConfigStore::list`] does for files.
     fn list_dirs(&self, dir: &str) -> Vec<String> {
         let Ok(rd) = std::fs::read_dir(self.dir.join(dir)) else { return vec![] };
         let mut v: Vec<String> = rd.flatten().filter(|e| e.path().is_dir()).map(|e| e.file_name().to_string_lossy().to_string()).collect();
