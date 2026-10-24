@@ -22,6 +22,11 @@ pub use warp::{Sampling, WarpOpts, accumulate_warp, composite_warp, composite_wa
 
 pub type Px = [f32; 4];
 
+/// Maximum padded side in pixels — mirrors the project crate's `limits::MAX_SIZE` (30 000;
+/// raster sits below it in the layering and may not depend on it, so the two must stay equal).
+/// A padded side beyond the largest supported comp side has no render use.
+pub const MAX_PADDED_SIDE: u32 = 30_000;
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Image {
     pub width: u32,
@@ -138,15 +143,21 @@ impl Image {
         }
         o
     }
-    /// Copy with `pad` transparent pixels on every side. Sizes saturate rather than wrap around,
-    /// but a saturated size can't be allocated: callers bound `pad`.
+    /// Copy with `pad` transparent pixels on every side.
+    ///
+    /// `pad` is clamped so neither output side exceeds [`MAX_PADDED_SIDE`]: the never-crash bound
+    /// lives here rather than in each caller. The effective pad is at most
+    /// `(MAX_PADDED_SIDE - side) / 2`, so `side + 2 · pad ≤ MAX_PADDED_SIDE` and overflow is
+    /// unreachable by construction (a side already past the cap gets pad 0 — still no panic).
+    /// Callers that must *reject* rather than clamp an oversized pad pre-check it (see
+    /// `padded_size` in render's `three_d/compose.rs`); legitimate bounded pads are byte-identical.
     pub fn padded(&self, pad: u32) -> Image {
-        let (w, h) = (self.width.saturating_add(pad.saturating_mul(2)), self.height.saturating_add(pad.saturating_mul(2)));
-        let mut out = Image::new(w, h);
+        let eff = pad.min(MAX_PADDED_SIDE.saturating_sub(self.width) / 2).min(MAX_PADDED_SIDE.saturating_sub(self.height) / 2);
+        let mut out = Image::new(self.width + 2 * eff, self.height + 2 * eff);
         let ow = out.width as usize;
         for y in 0..self.height as usize {
             let src = &self.data[y * self.width as usize..(y + 1) * self.width as usize];
-            let o = (y + pad as usize) * ow + pad as usize;
+            let o = (y + eff as usize) * ow + eff as usize;
             out.data[o..o + self.width as usize].copy_from_slice(src);
         }
         out
@@ -355,5 +366,30 @@ mod tests {
             let n = hash_noise(i, i * 7, 3);
             assert!((0.0..1.0).contains(&n));
         }
+    }
+
+    #[test]
+    fn padded_bounds_hostile_pad_at_the_api() {
+        // Fail-before (#2092 class): before the clamp, a caller passing a hostile pad sized an
+        // oversized buffer here — the very OOM this guard exists to stop, now caught in padded().
+        // (Wide-flat source so the clamped-to-cap output stays a test-sized allocation.)
+        let mut img = Image::new(29_990, 2);
+        img.set(29_989, 1, [1.0, 0.0, 0.0, 1.0]);
+        let out = img.padded(u32::MAX);
+        // Width binds first: eff = (MAX_PADDED_SIDE - 29 990) / 2 = 5.
+        assert_eq!((out.width, out.height), (MAX_PADDED_SIDE, 12));
+        // The source lands intact at the clamped offset, not the requested one.
+        assert_eq!(out.get(29_994, 6), [1.0, 0.0, 0.0, 1.0]);
+        assert_eq!(out.get(0, 0), [0.0; 4]); // clamped pad region stays transparent
+    }
+
+    #[test]
+    fn padded_leaves_legit_pads_untouched() {
+        // Anti-over-clamp: an ordinary pad must round exactly, byte for byte.
+        let mut img = Image::new(8, 6);
+        img.set(3, 2, [1.0, 0.0, 0.0, 1.0]);
+        let out = img.padded(4);
+        assert_eq!((out.width, out.height), (16, 14));
+        assert_eq!(out.get(7, 6), [1.0, 0.0, 0.0, 1.0]); // (3+4, 2+4)
     }
 }
