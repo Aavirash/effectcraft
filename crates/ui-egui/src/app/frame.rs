@@ -524,33 +524,40 @@ impl EffectcraftApp {
             }
             ctx.request_repaint_after(std::time::Duration::from_secs(10));
         }
-        self.tick_footage_reload(ctx, now);
+        self.tick_footage_reload(ctx);
     }
 
-    /// Settings ▸ Import ▸ Reload Footage Changed on Disk: every two seconds, and as soon as the
-    /// window comes back to the front (after saving in another app), stamp the footage files on a
-    /// worker thread and reload the ones that changed.
-    fn tick_footage_reload(&mut self, ctx: &egui::Context, now: f64) {
+    /// Settings ▸ Import ▸ Reload Footage Changed on Disk: a worker thread stamps the footage
+    /// files (every two seconds while the window is in front, and as soon as it comes back to
+    /// the front after saving in another app) and wakes this frame only when a stamp changed;
+    /// the changed files are reloaded here. Nothing here asks for a repaint: an idle app with
+    /// unchanged footage stays asleep.
+    fn tick_footage_reload(&mut self, ctx: &egui::Context) {
         use effectcraft_engine::footage_reload;
-        if let Some(Err(e)) = footage_reload::poll_scan(&mut self.session) {
+        if let Some(stamps) = self.footage_watcher.as_ref().and_then(footage_reload::Watcher::take)
+            && let Err(e) = footage_reload::apply_stamps(&mut self.session, stamps)
+        {
             self.ui.status = e.to_string();
         }
-        let (last_key, focus_key) = (egui::Id::unique("footageReload.lastScan"), egui::Id::unique("footageReload.focused"));
-        let focused = self.focused;
-        let was_focused: bool = ctx.data(|d| d.get_temp(focus_key)).unwrap_or(focused);
-        ctx.data_mut(|d| d.insert_temp(focus_key, focused));
-        if self.session.prefs.import.auto_reload_footage == "off" || self.session.project.items.is_empty() {
+        let off = self.session.prefs.import.auto_reload_footage == "off" || self.session.project.items.is_empty();
+        if off {
+            if let Some(w) = &mut self.footage_watcher {
+                w.set_watched(Default::default());
+            }
+            self.footage_watch_key = None;
             return;
         }
-        let last: f64 = ctx.data(|d| d.get_temp(last_key)).unwrap_or(0.0);
-        if now - last >= 2.0 || (focused && !was_focused) {
-            ctx.data_mut(|d| d.insert_temp(last_key, now));
-            footage_reload::start_scan(&mut self.session);
+        if self.footage_watcher.is_none() {
+            let wake = ctx.clone();
+            self.footage_watcher = footage_reload::Watcher::start(self.session.services.clone(), move || wake.request_repaint());
         }
-        if self.session.footage_scan.is_some() {
-            ctx.request_repaint_after(std::time::Duration::from_millis(100));
-        } else {
-            ctx.request_repaint_after(std::time::Duration::from_secs(2));
+        let Some(watcher) = &mut self.footage_watcher else { return };
+        watcher.set_focused(self.focused);
+        // Which files are watched follows the project and the preference, not the frame.
+        let key = (self.session.revision, self.session.prefs.import.auto_reload_footage.clone());
+        if self.footage_watch_key.as_ref() != Some(&key) {
+            self.footage_watch_key = Some(key);
+            watcher.set_watched(footage_reload::watched(&self.session));
         }
     }
 }

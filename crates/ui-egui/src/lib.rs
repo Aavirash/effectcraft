@@ -312,6 +312,11 @@ pub struct EffectcraftApp {
     gpu_checked: bool,
     gpu_failures: Option<gpu_failure::GpuFailureBridge>,
     gpu_failure_applied: Option<bool>,
+    /// Settings ▸ Import ▸ Reload Footage Changed on Disk: the worker that stamps the footage
+    /// files, started with the first project that has items ([`Self::tick_footage_reload`]).
+    footage_watcher: Option<effectcraft_engine::footage_reload::Watcher>,
+    /// The project revision and preference the watched set was last computed for.
+    footage_watch_key: Option<(u64, String)>,
     /// The graphics device was lost and the window is closing (see `close_after_device_loss`);
     /// `true` keeps crash recovery for the next launch.
     device_lost_close: Option<bool>,
