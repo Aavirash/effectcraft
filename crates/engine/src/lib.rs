@@ -30,6 +30,7 @@ pub mod media_cache;
 pub mod menus;
 pub mod models;
 pub mod offload;
+mod output_guard;
 pub mod perf;
 pub mod prefs;
 pub mod preview;
@@ -1332,6 +1333,8 @@ mod tests_project_items;
 mod tests_proxy;
 #[cfg(test)]
 mod tests_quick_offset;
+#[cfg(test)]
+mod tests_render_overwrite;
 #[cfg(test)]
 mod tests_replace_source;
 #[cfg(test)]

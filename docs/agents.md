@@ -4,6 +4,10 @@ Everything in EffectCraft is an engine command with a stable id and JSON params.
 panel gestures, the CLI, the control channel and MCP all go through the same commands, so anything a
 user can do, an agent can do too. There are three ways in:
 
+Render-queue outputs cannot replace footage, proxies or the project file. See
+[render source protection](render-source-protection.md) for aliases, default names and sequence
+limits. This guard does not change ordinary-file overwrite defaults or add another confirmation API.
+
 | Interface | Best for | Needs a window |
 |---|---|---|
 | **MCP** (`effectcraft-cli mcp`) | Claude Code and other MCP clients | no (headless), or yes with `--bridge` |

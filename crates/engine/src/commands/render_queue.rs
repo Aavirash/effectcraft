@@ -532,6 +532,9 @@ fn add(s: &mut Session, p: &Value) -> Result<Value> {
         object.remove("template");
     }
     apply_output(&mut it.output, &templates, s.state.region_of_interest, &output_params, "renderQueue.add")?;
+    if str_p(p, "output").or(str_p(p, "path")).is_none() {
+        s.avoid_sources(&mut it);
+    }
     if let Some(l) = enum_p(p, "log", "renderQueue.add", RenderLog::parse, "errorsOnly|plusSettings|plusPerFrameInfo")? {
         it.log = l;
     }
@@ -770,6 +773,9 @@ fn pre_render(s: &mut Session, p: &Value) -> Result<Value> {
     it.output = templates.default_output_module(TemplateSlot::PreRender);
     it.output.output = "[compName]_prerender.[fileExtension]".into();
     apply_output(&mut it.output, &templates, s.state.region_of_interest, p, "render.preRender")?;
+    if str_p(p, "output").or(str_p(p, "path")).is_none() {
+        s.avoid_sources(&mut it);
+    }
     it.post_render = PostRenderAction::ImportAndReplace;
     let id = s.edit("Pre-render", None, |proj, _| {
         it.id = proj.render_queue.iter().map(|i| i.id).max().unwrap_or(0) + 1;
@@ -795,6 +801,9 @@ fn save_current_preview(s: &mut Session, p: &Value) -> Result<Value> {
     let mut item = RenderQueueItem::new(0, cid);
     item.output = OutputModule::for_format(format);
     item.output.output = path.clone();
+    if let Some(refusal) = s.check_outputs(&[vec![(item.clone(), path.clone())]]).first() {
+        return Err(EngineError::Other(refusal.reason.clone()));
+    }
     let job = crate::ExportJob {
         project: &s.project,
         footage: s.footage.as_ref(),
