@@ -869,8 +869,11 @@ Property.prototype.property = function () { return null; };
     }
     if (info.dims > 1) {
       if (!(v instanceof Array)) throw __err("value must be an array of " + info.dims + " numbers");
+      // After Effects rejects an array of the wrong length instead of truncating or broadcasting it
+      // (#1936). Two values for a 3-D property stay legal, as they are in After Effects: z is 0.
+      if (v.length !== info.dims && !(info.dims === 3 && v.length === 2)) throw __err("Array is not of the correct dimension");
       var o = [];
-      for (var d = 0; d < info.dims; d++) o.push(d < v.length ? __num(v[d]) : (d === 2 ? 0 : __num(v[v.length - 1])));
+      for (var d = 0; d < info.dims; d++) o.push(d < v.length ? __num(v[d]) : 0);
       return o;
     }
     if (v instanceof Array) throw __err("value must be a number, not an array");
@@ -1301,7 +1304,14 @@ AVLayer.prototype.constructor = AVLayer;
   }
   P.sourcePointToComp = function (p) { return pointIn(this, p, true); };
   P.compPointToSource = function (p) { return pointIn(this, p, false); };
-  P.replaceSource = function () { throw __err("replaceSource is not supported yet"); };
+  // Replace the layer's source item, keeping every layer property (After Effects'
+  // AVLayer.replaceSource). `fixExpressions` is accepted for compatibility: only AV sources are
+  // replaced, so the property tree and the layer's name stay and expressions keep resolving.
+  P.replaceSource = function (newSource, fixExpressions) {
+    if (!newSource || newSource.__id === undefined) throw __err("replaceSource needs a project item");
+    __call("layer.replaceSource", { comp: this.__comp, layers: [this.__id], item: newSource.__id, fixExpressions: !!fixExpressions });
+    return null;
+  };
   P.openInViewer = function () { __call("layer.openLayer", this.__p1()); return null; };
 })();
 

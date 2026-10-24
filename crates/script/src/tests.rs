@@ -963,6 +963,37 @@ fn footage_proxies_sequences_and_conform_rate() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// #813: `AVLayer.replaceSource` changes the source item and keeps the layer's name, timing and
+/// properties; a folder is not a source.
+#[test]
+fn av_layer_replace_source_keeps_the_layer() {
+    let mut s = session();
+    let o = ok(
+        &mut s,
+        r#"
+        var main = app.project.items.addComp("Main", 100, 100, 1, 5, 25);
+        var layer = main.layers.addSolid([1, 0, 0], "Old", 100, 100, 1);
+        layer.transform.position.setValue([10, 20]);
+        layer.startTime = 1;
+        var nested = app.project.items.addComp("Nested", 200, 100, 1, 3, 25);
+        layer.replaceSource(nested, false);
+        [layer.source.name, layer.source.width, layer.source.height, layer.source instanceof CompItem,
+         layer.name, layer.transform.position.value[0], layer.startTime, main.numLayers]
+        "#,
+    );
+    assert_eq!(o.result, json!(["Nested", 200, 100, true, "Old", 10, 1, 1]));
+    let bad = run_code(
+        &mut s,
+        r#"
+        var main = app.project.items.addComp("Other", 100, 100, 1, 2, 25);
+        var layer = main.layers.addSolid([1, 0, 0], "Layer", 100, 100, 1);
+        layer.replaceSource(app.project.items.addFolder("F"), false);
+        "#,
+        "replace-source.jsx",
+    );
+    assert!(bad.error.as_ref().is_some_and(|e| e.message.contains("folder")), "{bad:?}");
+}
+
 /// A flat green footage source, so `sampleImage` on a footage layer has known pixels.
 struct Flat;
 impl effectcraft_engine::render::FootageSource for Flat {
@@ -1584,4 +1615,42 @@ fn layer_property_resolves_transform_and_source_text_shortcuts() {
     );
     let (_, c) = comp_named(&s, "x");
     assert_eq!(layer(c, "s").props.prop("transform/opacity").unwrap().value, KV::Scalar(25.0));
+}
+
+/// #1936: an array whose length doesn't match the property's dimension is an error in After
+/// Effects, not a value to truncate or broadcast. Two values for a 3-D property stay legal.
+#[test]
+fn set_value_rejects_an_array_of_the_wrong_dimension() {
+    let mut s = session();
+    let o = ok(
+        &mut s,
+        r#"
+        var c = app.project.items.addComp("Dims", 640, 360, 1, 2, 30);
+        var l = c.layers.addSolid([1, 0, 0], "s", 640, 360, 1);
+        var ramp = l.property("ADBE Effect Parade").addProperty("ADBE Ramp").property("ADBE Ramp-0001");
+        function attempt(f) { try { f(); return "no error"; } catch (e) { return e.message; } }
+        var before = "" + ramp.value;
+        var tooMany = attempt(function () { ramp.setValue([1, 2, 3]); });
+        var tooFew = attempt(function () { ramp.setValue([1]); });
+        var untouched = "" + ramp.value;
+        ramp.setValue([7, 8]);
+        var keyed = attempt(function () { ramp.setValueAtTime(0, [1, 2, 3, 4]); });
+        // A 3-D property still takes two values, as it does in After Effects: z stays 0.
+        l.property("Position").setValue([120, 34]);
+        [tooMany, tooFew, untouched === before, "" + ramp.value, keyed, "" + l.property("Position").value]
+        "#,
+    );
+    assert_eq!(
+        o.result,
+        json!([
+            "Array is not of the correct dimension",
+            "Array is not of the correct dimension",
+            true,
+            "7,8",
+            "Array is not of the correct dimension",
+            "120,34,0"
+        ])
+    );
+    let (_, c) = comp_named(&s, "Dims");
+    assert_eq!(layer(c, "s").props.prop("transform/position").unwrap().value, KV::Vec3([120.0, 34.0, 0.0]));
 }
