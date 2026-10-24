@@ -427,15 +427,18 @@ fn footage_cmds(seq_first: &Path, clip: &Path, still: &Path) -> Cmds {
     c
 }
 
-/// Run `cmds` with `effectcraft-cli --empty run … --save-as out`.
+/// Run `cmds` with `effectcraft-cli --empty run --args-file … --save-as out`: a file, because the
+/// `layers` scenario is longer than a Windows command line (32 767 characters).
 fn build_project(bin: &Path, cmds: &Cmds, out: &Path) -> Result<(), String> {
-    let mut cmd = Command::new(bin);
-    cmd.arg("--empty").arg("run");
+    let mut lines = String::new();
     for (id, params) in cmds {
-        cmd.arg(id).arg(params.to_string());
+        lines.push_str(&format!("{id}\n{params}\n"));
     }
-    cmd.arg("--save-as").arg(out);
-    cli(&mut cmd)
+    let args = out.with_extension("args");
+    std::fs::write(&args, lines).map_err(|e| format!("{}: {e}", args.display()))?;
+    let r = cli(Command::new(bin).arg("--empty").arg("run").arg("--args-file").arg(&args).arg("--save-as").arg(out));
+    let _ = std::fs::remove_file(&args);
+    r
 }
 
 /// Run a CLI command quietly; on failure, the tail of its output is the error.

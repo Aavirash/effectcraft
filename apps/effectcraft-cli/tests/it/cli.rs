@@ -110,6 +110,29 @@ fn exec_set_get_with_saved_project() {
     assert_eq!(v[1]["result"]["time"], v[0]["result"]["time"], "{v}");
 }
 
+/// `run --args-file` reads its command / params pairs from a file, one per line: a batch longer
+/// than a Windows command line (32 767 characters, os error 206) still runs.
+#[test]
+fn run_reads_arguments_from_a_file() {
+    let proj = tmp("args-file.ecproj");
+    let p = proj.to_str().unwrap();
+    let mut lines = vec!["comp.new".to_string(), json!({"name": "A", "width": 64, "height": 64}).to_string()];
+    for i in 0..400 {
+        lines.push("layer.newSolid".into());
+        lines.push(json!({"width": 8, "height": 8, "name": format!("Solid with a long name to pass the limit {i:04}")}).to_string());
+        lines.push(String::new());
+    }
+    let text = lines.join("\n");
+    assert!(text.len() > 32_767);
+    let file = tmp("args-file.txt");
+    std::fs::write(&file, text).unwrap();
+    let v = ok_json(&["run", "--args-file", file.to_str().unwrap(), "--empty", "--save-as", p]);
+    assert_eq!(v["result"].as_array().map(Vec::len), Some(401), "{v}");
+    let out = bin().args(["run", "--args-file", "no/such/file.txt", "--empty"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("--args-file no/such/file.txt"));
+}
+
 #[test]
 fn render_frame_writes_png() {
     let out = tmp("f.png");

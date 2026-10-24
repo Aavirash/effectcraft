@@ -1036,12 +1036,18 @@ impl Session {
 
     /// Render a comp frame with the session's footage + expression hosts.
     pub fn render(&self, comp: ItemId, t: Tick, opts: RenderOpts) -> Image {
+        self.renderer(opts).comp_frame(comp, t)
+    }
+
+    /// The renderer [`Session::render`] uses: the session's footage, expressions, layer cache and
+    /// accelerator, and the render prefs (nested switches, draft shadows) over `opts`.
+    pub fn renderer(&self, opts: RenderOpts) -> Renderer<'_> {
         let opts = RenderOpts { nested_switches: self.prefs.general.switches_affect_nested_comps, draft_shadows: self.prefs.three_d.realtime_shadows, ..opts };
         let mut r = Renderer::new(&self.project, self.footage.as_ref(), opts);
         r.expr = self.expr.as_deref();
         r.cache = Some(&self.layer_cache);
         r.accel = self.accel.as_deref();
-        r.comp_frame(comp, t)
+        r
     }
 
     /// Resolve a comp reference (item id number or name; `None`/null = the active comp).
@@ -1241,6 +1247,8 @@ mod tests_camera_track;
 mod tests_codec_options;
 #[cfg(test)]
 mod tests_color_view;
+#[cfg(test)]
+mod tests_crypto_pick;
 #[cfg(test)]
 mod tests_delete_keys;
 #[cfg(test)]

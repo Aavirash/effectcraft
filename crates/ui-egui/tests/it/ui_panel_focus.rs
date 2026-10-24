@@ -187,3 +187,47 @@ fn double_clicking_an_effect_in_the_timeline_opens_effect_controls() {
     assert_eq!(st.selected_props.iter().map(|(l, u)| (l.0, *u)).collect::<Vec<_>>(), vec![(red, uid)], "with the effect selected");
     assert!(!h.state().ui.timeline.open_groups.contains(&uid), "the effect did not twirl open");
 }
+
+// Regression test for #354: the focused panel's blue outline was painted before the panel body,
+// so the body's background and widgets painted over it. It must be drawn after every panel body.
+#[test]
+fn focused_panel_outline_is_painted_over_the_panel_bodies() {
+    fn flatten<'a>(shape: &'a egui::Shape, clip: egui::Rect, out: &mut Vec<(egui::Rect, &'a egui::epaint::RectShape)>) {
+        match shape {
+            egui::Shape::Rect(r) => out.push((clip, r)),
+            egui::Shape::Vec(v) => v.iter().for_each(|s| flatten(s, clip, out)),
+            _ => {}
+        }
+    }
+    let (mut h, _, _) = harness();
+    for panel in [PanelKind::Timeline, PanelKind::Project] {
+        h.state_mut().ui.focused = panel;
+        h.run_steps(3);
+        let focus = h.state().tokens.focus;
+        let mut rects = vec![];
+        h.output().shapes.iter().for_each(|c| flatten(&c.shape, c.clip_rect, &mut rects));
+        // The one-pixel, unfilled outline round the focused panel's frame.
+        let body = rect(&h, &format!("panel.{}", panel.id()));
+        let outlines: Vec<usize> = rects
+            .iter()
+            .enumerate()
+            .filter(|(_, (_, r))| r.fill.a() == 0 && r.stroke.color == focus && r.stroke.width == 1.0 && r.rect.contains_rect(body))
+            .map(|(i, _)| i)
+            .collect();
+        let Some(&at) = outlines.last() else { panic!("{panel:?}: no focus outline painted") };
+        let outline = rects[at].1.rect;
+        // Nothing painted after it reaches the one-pixel ring it draws, where a panel's
+        // background or rows would hide it.
+        let ring = [
+            egui::Rect::from_min_max(outline.min, egui::pos2(outline.right(), outline.top() + 1.0)),
+            egui::Rect::from_min_max(egui::pos2(outline.left(), outline.bottom() - 1.0), outline.max),
+            egui::Rect::from_min_max(outline.min, egui::pos2(outline.left() + 1.0, outline.bottom())),
+            egui::Rect::from_min_max(egui::pos2(outline.right() - 1.0, outline.top()), outline.max),
+        ];
+        for (clip, r) in &rects[at + 1..] {
+            let painted = r.rect.intersect(*clip);
+            let over = ring.iter().any(|edge| edge.intersect(painted).area() > 0.0);
+            assert!(r.fill.a() == 0 || !over, "{panel:?}: a filled rect {:?} (fill {:?}) is painted over the focus outline {outline:?}", r.rect, r.fill);
+        }
+    }
+}

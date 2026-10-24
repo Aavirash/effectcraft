@@ -1246,6 +1246,24 @@ impl<'g> Enc<'g> {
         );
     }
 
+    /// A `w` × `h` image showing `src` with its pixel (`x`, `y`) at the top-left, transparent
+    /// where `src` doesn't reach (Image::crop).
+    pub fn crop(&mut self, src: &GpuImage, x: i64, y: i64, w: u32, h: u32) -> GpuImage {
+        let dst = self.image(w, h);
+        let span = |o: i64, n: u32, len: u32| {
+            let (a, b) = (o.max(0), (o + n as i64).min(len as i64));
+            (b > a).then(|| (a as u32, (a - o) as u32, (b - a) as u32))
+        };
+        let (Some((sx, dx, cw)), Some((sy, dy, ch))) = (span(x, w, src.width), span(y, h, src.height)) else { return dst };
+        let enc = self.encoder();
+        enc.copy_texture_to_texture(
+            wgpu::TexelCopyTextureInfo { texture: &src.texture, mip_level: 0, origin: wgpu::Origin3d { x: sx, y: sy, z: 0 }, aspect: wgpu::TextureAspect::All },
+            wgpu::TexelCopyTextureInfo { texture: &dst.texture, mip_level: 0, origin: wgpu::Origin3d { x: dx, y: dy, z: 0 }, aspect: wgpu::TextureAspect::All },
+            wgpu::Extent3d { width: cw, height: ch, depth_or_array_layers: 1 },
+        );
+        dst
+    }
+
     /// Submit recorded work.
     pub fn submit(&mut self) {
         if let Some((enc, id)) = self.enc.take() {

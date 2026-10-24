@@ -254,6 +254,22 @@ fn effects_run_in_pipeline() {
     assert!(c[1] > 0.99 && c[0] < 0.01, "{c:?}");
 }
 
+/// After Effects 2026, sRGB working space (not linearised), Tint at its defaults on full-frame
+/// solids: the effect sees the encoded solid colour and weights it Rec. 601.
+#[test]
+fn tint_in_an_srgb_working_space_matches_after_effects_greys() {
+    for (col, want) in [([1.0, 0.0, 0.0], 76.0), ([0.0, 1.0, 0.0], 150.0), ([0.0, 0.0, 1.0], 29.0), ([0.5, 0.5, 0.5], 128.0)] {
+        let (mut p, cid, comp) = setup();
+        p.settings.working_space = Some(effectcraft_color::ColorSpace::Srgb);
+        let mut l = solid(&mut p, &comp, col, 200, 100);
+        add_effect(&mut p, &mut l, "ec.color.tint", [200.0, 100.0], &[]);
+        p.comp_mut(cid).unwrap().layers.push(l);
+        let o = render_frame(&p, cid, Tick::ZERO, 1.0).get(100, 50);
+        let want = want / 255.0;
+        assert!(o[..3].iter().all(|v| (v - want).abs() <= 1.0 / 255.0), "{col:?}: {o:?} vs {want}");
+    }
+}
+
 /// Card Dance's Comp Camera through the default comp camera reproduces a 2D layer in place.
 #[test]
 fn card_dance_comp_camera_matches_the_default_view() {

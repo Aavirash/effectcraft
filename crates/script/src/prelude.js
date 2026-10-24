@@ -98,6 +98,8 @@ var ImportAsType = __enum("ImportAsType", ["COMP_CROPPED_LAYERS", "FOOTAGE", "CO
 ImportAsType.COMPOSITION_CROPPED_LAYERS = ImportAsType.COMP_CROPPED_LAYERS;
 ImportAsType.COMPOSITION = ImportAsType.COMP;
 var TimeDisplayType = __enum("TimeDisplayType", ["FRAMES", "TIMECODE"], 2012);
+// After Effects' values (FC_START_0 = 2612), as in docsforadobe/Types-for-Adobe.
+var FramesCountType = __enum("FramesCountType", ["FC_START_0", "FC_START_1", "FC_TIMECODE_CONVERSION"], 2612);
 var LogType = __enum("LogType", ["ERRORS_ONLY", "ERRORS_AND_SETTINGS", "ERRORS_AND_PER_FRAME_INFO"], 3212);
 var KeyframeLabel = __enum("KeyframeLabel", ["NONE"], 0);
 
@@ -1894,6 +1896,14 @@ Project.prototype = {
   set workingGamma(v) { __call("file.projectSettings", { workingGamma: __num(v) }); },
   get timeDisplayType() { return this.__info().timeDisplayFrames ? TimeDisplayType.FRAMES : TimeDisplayType.TIMECODE; },
   set timeDisplayType(v) { __call("file.projectSettings", { timeDisplay: v === TimeDisplayType.FRAMES ? "frames" : "timecode" }); },
+  get framesCountType() { return this.__info().displayStartFrame === 1 ? FramesCountType.FC_START_1 : FramesCountType.FC_START_0; },
+  set framesCountType(v) {
+    if (v === FramesCountType.FC_TIMECODE_CONVERSION) throw __err("framesCountType: Timecode Conversion is not supported, use FC_START_0 or FC_START_1");
+    if (v !== FramesCountType.FC_START_0 && v !== FramesCountType.FC_START_1) throw __err("Bad framesCountType value " + v);
+    __call("file.projectSettings", { frameStart: v === FramesCountType.FC_START_1 ? 1 : 0 });
+  },
+  get displayStartFrame() { return this.__info().displayStartFrame; },
+  set displayStartFrame(v) { __call("file.projectSettings", { frameStart: __num(v) }); },
   get expressionEngine() { return "javascript-1.0"; },
   set expressionEngine(v) {},
   item: function (i) {

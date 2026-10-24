@@ -39,6 +39,7 @@ mod ui_locked_color;
 mod ui_media_browser_cache;
 mod ui_media_browser_copy_path;
 mod ui_menus;
+mod ui_new_primitive;
 mod ui_object_matte;
 mod ui_panel_focus;
 mod ui_panel_windows;

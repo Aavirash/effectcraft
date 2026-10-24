@@ -314,26 +314,7 @@ impl EffectHost for FxHost<'_, '_, '_> {
     }
 
     fn aux(&self) -> Option<Arc<effectcraft_raster::AuxChannels>> {
-        match &self.layer.source {
-            LayerSource::Footage { item } => {
-                let ItemKind::Footage(f) = &self.r.project.item(*item)?.kind else { return None };
-                let a = self.r.footage.aux(*item, f, self.ctx.source_time(self.layer))?;
-                // Aux pixels per layer pixel (the layer is the footage at its nominal size).
-                if f.width > 0 && a.width > 0 {
-                    let mut a = (*a).clone();
-                    a.scale = a.width as f64 / f.width as f64;
-                    return Some(Arc::new(a));
-                }
-                Some(a)
-            }
-            LayerSource::Comp { item } => {
-                if self.r.depth > MAX_FX_DEPTH || self.r.project.comp_contains(*item, self.ctx.comp_id) {
-                    return None;
-                }
-                self.r.nested().comp_aux(*item, self.ctx.nested_time(self.layer)).map(Arc::new)
-            }
-            _ => None,
-        }
+        self.r.layer_aux(self.ctx, self.layer)
     }
 
     fn params_at(&self, layer_time: f64) -> Option<Params> {
@@ -1000,8 +981,7 @@ impl<'a> Renderer<'a> {
     pub fn comp_frame_cpu(&self, comp_id: ItemId, t: Tick) -> Image {
         let Some(comp) = self.project.comp(comp_id) else { return Image::new(1, 1) };
         let s = self.opts.scale;
-        let w = ((comp.width as f64 * s).round() as u32).max(1);
-        let h = ((comp.height as f64 * s).round() as u32).max(1);
+        let (w, h) = frame_size(comp.width, comp.height, s);
         // Region of interest on a comp with 3D layers: render the frame and crop it. A region
         // reaching past the comp frame (the Extended Viewer) renders Classic 3D natively — the
         // planes project through the offset camera — and Advanced 3D as the frame, padded.
@@ -1184,6 +1164,7 @@ impl<'a> Renderer<'a> {
             effect_index: 0,
             working_space: self.pipe.space,
             working_linear: self.pipe.linear,
+            float_depth: self.pipe.levels.is_none(),
             shutter: self.mb_on(ctx, layer).then_some((ctx.comp.shutter_angle, ctx.comp.shutter_phase, ctx.comp.motion_blur_samples)),
         };
         // Video effects in stack order (index, group, spec); disabled and audio effects skipped.
@@ -2051,6 +2032,12 @@ impl<'a> Renderer<'a> {
             color::convert(&mut below.img, &c);
         }
         let mut adjusted = self.apply_effects(ctx, layer, below, true);
+        // An effect that changed the frame (Motion Tile's Output size): back onto the canvas.
+        if let Some((dx, dy)) =
+            effectcraft_effects::adjustment_crop(adjusted.offset, o, (adjusted.img.width, adjusted.img.height), (canvas.width, canvas.height))
+        {
+            adjusted.img = adjusted.img.crop(dx, dy, canvas.width, canvas.height);
+        }
         if let Some(c) = self.pipe.to_blend() {
             color::convert(&mut adjusted.img, &c);
         }
@@ -2109,6 +2096,34 @@ impl<'a> Renderer<'a> {
     pub fn comp_aux(&self, comp_id: ItemId, t: Tick) -> Option<effectcraft_raster::AuxChannels> {
         let ctx = self.eval_ctx(comp_id, t)?;
         Some(three_d::compose::aux_pass(self, &ctx))
+    }
+
+    /// The auxiliary channels effects on `layer` read ([`EffectHost::aux`]): its multi-layer
+    /// OpenEXR footage's at the layer's source time (Time Remap included), or a precomp's
+    /// generated 3D channels at its nested time. `None` for other layers.
+    pub fn layer_aux(&self, ctx: &EvalCtx, layer: &Layer) -> Option<Arc<effectcraft_raster::AuxChannels>> {
+        match &layer.source {
+            LayerSource::Footage { item } => {
+                let ItemKind::Footage(f) = &self.project.item(*item)?.kind else { return None };
+                let a = self.footage.aux(*item, f, ctx.source_time(layer))?;
+                // Aux pixels per layer pixel (the layer is the footage at its nominal size). The
+                // planes are only copied when that changes the scale.
+                let scale = a.width as f64 / f.width as f64;
+                if f.width > 0 && a.width > 0 && a.scale != scale {
+                    let mut a = (*a).clone();
+                    a.scale = scale;
+                    return Some(Arc::new(a));
+                }
+                Some(a)
+            }
+            LayerSource::Comp { item } => {
+                if self.depth > MAX_FX_DEPTH || self.project.comp_contains(*item, ctx.comp_id) {
+                    return None;
+                }
+                self.nested().comp_aux(*item, ctx.nested_time(layer)).map(Arc::new)
+            }
+            _ => None,
+        }
     }
 
     /// Evaluation context of comp `comp_id` at comp time `t`.
@@ -2373,6 +2388,12 @@ pub fn extended_region(w: u32, h: u32, visible: [f64; 4], margin: f64) -> Option
     Some([x0, y0, x1 - x0, y1 - y0])
 }
 
+/// The size of a `width` x `height` comp frame rendered at `scale` (both compositors, and the
+/// frame size Composition Settings shows for a Resolution).
+pub fn frame_size(width: u32, height: u32, scale: f64) -> (u32, u32) {
+    (((width as f64 * scale).round() as u32).max(1), ((height as f64 * scale).round() as u32).max(1))
+}
+
 pub fn render_frame(project: &Project, comp: ItemId, t: Tick, scale: f64) -> Image {
     Renderer::new(project, &NoFootage, RenderOpts { scale, ..Default::default() }).comp_frame(comp, t)
 }
@@ -2429,6 +2450,8 @@ mod tests_guides;
 mod tests_mask_blur;
 #[cfg(test)]
 mod tests_mask_expansion;
+#[cfg(test)]
+mod tests_motion_tile;
 #[cfg(test)]
 mod tests_nested;
 #[cfg(test)]

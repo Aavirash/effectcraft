@@ -1065,6 +1065,48 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    // Regression test for #382 (#274): resampling footage audio divided by the requested mix
+    // rate, so a rate of 0 panicked (division by zero); the read must come back instead.
+    #[test]
+    fn decoding_audio_at_a_zero_mix_rate_does_not_divide_by_zero() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/test-zero-rate");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // One second of a 440 Hz tone, 44.1 kHz mono 16-bit PCM: not the 48 kHz mix rate.
+        let native = 44_100u32;
+        let pcm: Vec<u8> =
+            (0..native).flat_map(|n| (((n as f32 * 440.0 * std::f32::consts::TAU / native as f32).sin() * 8000.0) as i16).to_le_bytes()).collect();
+        let mut wav = b"RIFF".to_vec();
+        wav.extend((36 + pcm.len() as u32).to_le_bytes());
+        wav.extend(b"WAVEfmt ");
+        wav.extend(16u32.to_le_bytes());
+        wav.extend([1u16, 1].iter().flat_map(|v| v.to_le_bytes()));
+        wav.extend(native.to_le_bytes());
+        wav.extend((native * 2).to_le_bytes());
+        wav.extend([2u16, 16].iter().flat_map(|v| v.to_le_bytes()));
+        wav.extend(b"data");
+        wav.extend((pcm.len() as u32).to_le_bytes());
+        wav.extend(&pcm);
+        let path = dir.join("tone.wav");
+        std::fs::write(&path, &wav).unwrap();
+        let footage = Footage {
+            path: path.to_string_lossy().into(),
+            kind: FootageKind::Audio,
+            duration: Tick::from_seconds_f64(1.0),
+            has_audio: true,
+            ..Default::default()
+        };
+        let pool = MediaPool::new();
+        // The file really is read, and resampled, at a normal rate...
+        let tone = pool.decode_audio(&footage, Tick::from_seconds_f64(0.1), 1024, 48_000);
+        assert!(tone.iter().any(|v| v.abs() > 0.05), "the tone is audible at 48 kHz");
+        // ...and a mix rate of 0 (which `audio_samples` itself turns away) returns a read of the
+        // requested length instead of dividing by it.
+        let degenerate = pool.try_decode_audio(&footage, Tick::from_seconds_f64(0.1), 64, 0).unwrap();
+        assert_eq!(degenerate.len(), 128);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn frame_index_loops_and_clamps() {
         let r = FrameRate::FPS_30;

@@ -880,6 +880,52 @@ fn effects_whose_kernels_failed_render_on_the_cpu() {
     }
 }
 
+/// The GPU Tint gives After Effects 2026's greys for full-frame solids at its defaults (sRGB
+/// working space, not linearised): Rec. 601 weights, as the CPU (`color_fx::luma_601`).
+#[test]
+fn gpu_tint_defaults_match_after_effects_greys() {
+    let Some(g) = gpu() else {
+        // Visible skip (EFFECTCRAFT_REQUIRE_GPU=1 makes a missing adapter fail instead).
+        eprintln!("gpu_tint_defaults_match_after_effects_greys: skipped: no GPU adapter");
+        return;
+    };
+    for (col, want) in [([1.0, 0.0, 0.0], 76.0), ([0.0, 1.0, 0.0], 150.0), ([0.0, 0.0, 1.0], 29.0), ([0.5, 0.5, 0.5], 128.0)] {
+        let mut s = Scene::new(BitDepth::Bpc32);
+        s.p.settings.working_space = Some(ColorSpace::Srgb);
+        let mut l = s.solid(col, 97, 61);
+        s.effect(&mut l, "ec.color.tint", &[]);
+        s.push(l);
+        let mut r = Renderer::new(&s.p, &Pattern, RenderOpts { backend: Backend::Gpu, ..opts() });
+        r.accel = Some(g);
+        let o = g.render(&r, s.cid, Tick::ZERO).expect("the GPU renders the frame").get(48, 30);
+        let want = want / 255.0;
+        assert!(o[..3].iter().all(|v| (v - want).abs() <= 1.0 / 255.0), "{col:?}: {o:?} vs {want}");
+    }
+}
+
+/// WGSL has no way to read the CPU's constants, so the kernels repeat them as literals; this
+/// ties each literal to its Rust source (runs without a GPU): Rec. 601 luma for Tint (`pointwise`
+/// op 1), Tritone and Luma Key / Extract, Black & White's tint weights and Exposure's 2.2 power.
+#[test]
+fn shader_constants_match_the_cpu() {
+    use effectcraft_effects::{BW_TINT_LUMA, EXPOSURE_LINEAR_GAMMA, LUMA_601};
+    let kernels = include_str!("shaders/kernels.wgsl");
+    let color = include_str!("shaders/fx_color.wgsl");
+    let key = include_str!("shaders/fx_key.wgsl");
+    let [r, g, b] = LUMA_601;
+    let dot = format!("dot(c, vec3<f32>({r}, {g}, {b}))");
+    assert!(kernels.contains(&format!("clamp({r} * c.x + {g} * c.y + {b} * c.z, 0.0, 1.0)")), "Tint luma in kernels.wgsl is not {LUMA_601:?}");
+    assert!(color.contains(&format!("clamp({dot}, 0.0, 1.0)")), "Tritone luma in fx_color.wgsl is not {LUMA_601:?}");
+    assert!(key.contains(&format!("return {dot};")), "fxk_key_luma in fx_key.wgsl is not {LUMA_601:?}");
+    let [r, g, b] = BW_TINT_LUMA;
+    assert!(color.contains(&format!("let w = vec3<f32>({r}, {g}, {b});")), "fxc_bw_tint weights are not {BW_TINT_LUMA:?}");
+    let gamma = EXPOSURE_LINEAR_GAMMA;
+    assert!(
+        kernels.contains(&format!("powz(abs(c[i]), {gamma})")) && kernels.contains(&format!("1.0 / {gamma})")),
+        "Exposure's power in kernels.wgsl is not {gamma}"
+    );
+}
+
 /// A layer whose bounds change every frame reads back at a new size each time: the staging
 /// buffers kept for reuse stay within budget instead of growing for the whole render (#2081).
 #[test]

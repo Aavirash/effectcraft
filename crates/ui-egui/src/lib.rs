@@ -72,6 +72,7 @@ pub enum Dialog {
     ViewOptions,
     CameraSettings,
     LightSettings,
+    NewPrimitive,
     KeyVelocity,
     KeyInterpolation,
     TimeStretch,

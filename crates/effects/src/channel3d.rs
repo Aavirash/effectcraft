@@ -37,14 +37,22 @@ fn index_map(b: &Buf, a: &AuxChannels) -> Vec<Option<usize>> {
 /// [`index_map`] sampling each pixel at sub-pixel position `at` (0..1).
 fn index_map_at(b: &Buf, a: &AuxChannels, at: [f64; 2]) -> Vec<Option<usize>> {
     let (w, h) = (b.img.width as usize, b.img.height as usize);
-    let inv = 1.0 / b.scale.max(1e-9);
     (0..w * h)
         .into_par_iter()
         .map(|i| {
-            let (x, y) = ((i % w) as f64 + at[0], (i / w) as f64 + at[1]);
-            a.index_at((x - b.offset[0]) * inv, (y - b.offset[1]) * inv)
+            let [x, y] = aux_point(b.scale, b.offset, [(i % w) as f64 + at[0], (i / w) as f64 + at[1]]);
+            a.index_at(x, y)
         })
         .collect()
+}
+
+/// The layer point where 3D Channel effects look up the aux for buffer position `p` (pixel
+/// `i` + sub-pixel offset) of a buffer with `scale` and `offset`. The Cryptomatte pick calls
+/// it too, so the two can't pick different aux pixels.
+#[inline]
+pub fn aux_point(scale: f64, offset: [f64; 2], p: [f64; 2]) -> [f64; 2] {
+    let inv = 1.0 / scale.max(1e-9);
+    [(p[0] - offset[0]) * inv, (p[1] - offset[1]) * inv]
 }
 
 /// A channel sampled into the buffer grid (`fill` outside).
@@ -326,7 +334,7 @@ fn wild(pat: &str, name: &str) -> bool {
 /// Split a selection at its commas. A name in double or single quotes stays whole, commas
 /// included (Blender allows `Green, Glossy`), and a backslash takes the next character
 /// literally (`Green\, Glossy`, `\"`). Unquoted text is trimmed; the quotes are dropped.
-fn selection_names(sel: &str) -> Vec<String> {
+pub(crate) fn selection_names(sel: &str) -> Vec<String> {
     let mut out = vec![];
     let mut cur = String::new();
     let mut quote: Option<char> = None;

@@ -611,6 +611,26 @@ fn engine_entry_points() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// `app.project.framesCountType` / `displayStartFrame`: Project Settings ▸ Frame Count (#1807).
+#[test]
+fn frames_count_type_sets_the_project_frame_count() {
+    let mut s = session();
+    let o = ok(
+        &mut s,
+        "var p = app.project; var a = [p.framesCountType === FramesCountType.FC_START_0, p.displayStartFrame]; p.framesCountType = FramesCountType.FC_START_1; a.concat([p.framesCountType === FramesCountType.FC_START_1, p.displayStartFrame]).join('|')",
+    );
+    assert_eq!(o.result, json!("true|0|true|1"));
+    // After Effects' enum values, so scripts that store the number keep working.
+    let o = ok(&mut s, "[FramesCountType.FC_START_0, FramesCountType.FC_START_1, FramesCountType.FC_TIMECODE_CONVERSION].join('|')");
+    assert_eq!(o.result, json!("2612|2613|2614"));
+    assert_eq!(s.project.settings.frame_start, 1);
+    ok(&mut s, "app.project.displayStartFrame = 0");
+    assert_eq!(s.project.settings.frame_start, 0);
+    let o = run_code(&mut s, "app.project.framesCountType = FramesCountType.FC_TIMECODE_CONVERSION", "test.jsx");
+    assert!(o.error.is_some_and(|e| e.message.contains("Timecode Conversion")));
+    assert_eq!(s.project.settings.frame_start, 0);
+}
+
 #[test]
 fn console_keeps_variables() {
     let mut s = session();

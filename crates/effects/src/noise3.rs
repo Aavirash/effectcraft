@@ -17,7 +17,7 @@ use effectcraft_keyframe::Value;
 use effectcraft_project::ParamUi;
 use rayon::prelude::*;
 
-use crate::generate::{fade, lattice};
+use crate::generate::lattice;
 use crate::{Buf, EffectCtx, EffectSpec, ParamSpec, num, p, popup, slider};
 
 /// Fractal Type options (shared by both effects).
@@ -139,7 +139,7 @@ fn bspline(t: f32) -> [f32; 3] {
 }
 
 /// 3D value noise in about 0..1 with the given [`NOISE_TYPES`] interpolation in x and y (the
-/// evolution axis z always fades smoothly).
+/// evolution axis z always interpolates linearly, so evolution moves at a constant rate).
 ///
 /// Soft Linear is linear interpolation softened by a one-cell box filter, which is the quadratic
 /// B-spline: smooth like Spline from 9 lattice values instead of 16. A fade between two values
@@ -149,7 +149,7 @@ pub fn typed_noise(x: f32, y: f32, z: f32, seed: u32, noise_type: u32) -> f32 {
     // Soft Linear's taps are centred on the nearest lattice point, the others start at the cell's.
     let h = if noise_type == NOISE_SOFT_LINEAR { 0.5 } else { 0.0 };
     let (x0, y0, z0) = ((x + h).floor(), (y + h).floor(), z.floor());
-    let (tx, ty, fz) = (x + h - x0, y + h - y0, fade(z - z0));
+    let (tx, ty, fz) = (x + h - x0, y + h - y0, z - z0);
     let (ix, iy, iz) = (x0 as i32, y0 as i32, z0 as i32);
     let l = |a: f32, b: f32, t: f32| a + (b - a) * t;
     let slice = |dz: i32| -> f32 {
@@ -474,6 +474,20 @@ mod tests {
 
     fn run(id: &str, vals: &[(&str, Value)]) -> Image {
         run_fx(id, vals, Image::filled(40, 24, [0.2, 0.4, 0.6, 1.0]), 0.0, EffectEnv::default()).img
+    }
+
+    /// Evolution moves the noise at a constant rate: no ease in or out within a revolution.
+    #[test]
+    fn evolution_is_linear() {
+        for noise_type in [0, 1, 2, 3] {
+            let a = typed_noise(0.3, 0.7, 0.0, 5, noise_type);
+            let b = typed_noise(0.3, 0.7, 1.0, 5, noise_type);
+            for z in [0.25, 0.5, 0.75] {
+                let want = a + (b - a) * z;
+                let got = typed_noise(0.3, 0.7, z, 5, noise_type);
+                assert!((got - want).abs() < 1e-4, "type {noise_type} z {z}: {got} vs {want}");
+            }
+        }
     }
 
     /// A Fractal Noise saved before the twirl-downs existed: flat ids move into their groups and
