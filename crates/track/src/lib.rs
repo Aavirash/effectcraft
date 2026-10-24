@@ -399,6 +399,12 @@ impl Crop {
     }
 }
 
+/// Largest distance (in top-level pixels, per axis) between the best coarse match and the
+/// motion prediction for which the fine stage searches only ±1 pixel per level.
+const SMALL_MOTION: f64 = 1.0;
+/// Lowest coarse NCC score of the best match for which the fine stage may search only ±1.
+const RELIABLE_SCORE: f64 = 0.8;
+
 /// Per-point tracking state.
 #[derive(Clone, Debug)]
 struct PointState {
@@ -499,7 +505,10 @@ impl PointState {
                 break;
             }
         }
-        // Fine: refine each seed down the pyramid in a 5 × 5 neighbourhood.
+        // Fine: refine each seed down the pyramid. A good motion prediction plus a reliable coarse
+        // match only needs a 3 × 3 neighbourhood per level; otherwise keep 5 × 5.
+        let near = cands[0].0 >= RELIABLE_SCORE && seeds.first().is_some_and(|c| (c[0] - cp[0]).abs() <= SMALL_MOTION && (c[1] - cp[1]).abs() <= SMALL_MOTION);
+        let rr: i32 = if near { 1 } else { 2 };
         let mut best = (f64::MIN, sc);
         for seed in seeds {
             let mut c = seed;
@@ -510,8 +519,8 @@ impl PointState {
                 // Start from the projected match; neighbours must beat it (no drift on ties).
                 let scorer = Scorer::new(pl, tp, c, shape);
                 let mut lb = (scorer.at(0, 0), c);
-                for j in -2..=2 {
-                    for i in -2..=2 {
+                for j in -rr..=rr {
+                    for i in -rr..=rr {
                         if i == 0 && j == 0 {
                             continue;
                         }

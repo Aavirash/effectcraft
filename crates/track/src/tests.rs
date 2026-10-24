@@ -164,6 +164,27 @@ fn recovers_translation_path_subpixel() {
 }
 
 #[test]
+fn recovers_after_sudden_jumps_the_prediction_misses() {
+    // Alternating large steps defeat the velocity prediction, so the fine stage must keep its
+    // wider neighbourhood; smooth frames in between use the narrow one.
+    let path = |f: usize| {
+        let t = f as f64;
+        let jump = [0.0, 7.0, -5.0, 9.0, -8.0, 6.0, -7.0, 8.0];
+        let j = jump[f % jump.len()];
+        Pose { c: [120.0 + 1.5 * t + j, 100.0 + 1.1 * t - 0.6 * j], rot: 0.0, scale: 1.0 }
+    };
+    let f0 = frame(360, 260, path(0), 40.0, 0.02, 0, None);
+    let mut tr = Tracker::new(TrackOptions::default(), &[spec(path(0).c, 31.0, 91.0)], &Frame::new(&f0));
+    for f in 1..24 {
+        let img = frame(360, 260, path(f), 40.0, 0.02, f as u32, None);
+        let r = tr.step(&Frame::new(&img))[0];
+        let e = dist(r.center, path(f).c);
+        assert!(e < 0.3, "frame {f}: error {e} px");
+        assert_eq!(r.status, Status::Tracked);
+    }
+}
+
+#[test]
 fn layer_offset_and_channels() {
     let pose = |f: usize| Pose { c: [120.0 + 3.3 * f as f64, 100.0 - 1.7 * f as f64], rot: 0.0, scale: 1.0 };
     for channel in Channel::ALL {
