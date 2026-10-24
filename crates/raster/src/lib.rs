@@ -143,16 +143,23 @@ impl Image {
         }
         o
     }
-    /// Copy with `pad` transparent pixels on every side.
+    /// The pad [`Image::padded`] applies for a requested `pad`: clamped so neither output side
+    /// exceeds [`MAX_PADDED_SIDE`]. At most `(MAX_PADDED_SIDE - side) / 2`, so
+    /// `side + 2 · pad ≤ MAX_PADDED_SIDE` and overflow is unreachable by construction (a side
+    /// already past the cap gets pad 0). Callers that track where the pixels went (a buffer
+    /// offset) must move by this, not by the requested pad.
+    pub fn effective_pad(&self, pad: u32) -> u32 {
+        pad.min(MAX_PADDED_SIDE.saturating_sub(self.width) / 2).min(MAX_PADDED_SIDE.saturating_sub(self.height) / 2)
+    }
+    /// Copy with [`Image::effective_pad`] transparent pixels on every side.
     ///
-    /// `pad` is clamped so neither output side exceeds [`MAX_PADDED_SIDE`]: the never-crash bound
-    /// lives here rather than in each caller. The effective pad is at most
-    /// `(MAX_PADDED_SIDE - side) / 2`, so `side + 2 · pad ≤ MAX_PADDED_SIDE` and overflow is
-    /// unreachable by construction (a side already past the cap gets pad 0 — still no panic).
-    /// Callers that must *reject* rather than clamp an oversized pad pre-check it (see
-    /// `padded_size` in render's `three_d/compose.rs`); legitimate bounded pads are byte-identical.
+    /// The clamp keeps the output within the largest image the engine supports (a max-size comp
+    /// frame), so an unbounded pad cannot overflow or size a buffer past that. It is not a memory
+    /// budget: callers that pad by a derived, possibly large amount bound the area themselves
+    /// (`DOF_PAD_BUDGET` in render's `three_d/compose.rs`, `fits()` on the GPU path) or reject an
+    /// oversized pad first (`padded_size`); legitimate bounded pads are byte-identical.
     pub fn padded(&self, pad: u32) -> Image {
-        let eff = pad.min(MAX_PADDED_SIDE.saturating_sub(self.width) / 2).min(MAX_PADDED_SIDE.saturating_sub(self.height) / 2);
+        let eff = self.effective_pad(pad);
         let mut out = Image::new(self.width + 2 * eff, self.height + 2 * eff);
         let ow = out.width as usize;
         for y in 0..self.height as usize {
