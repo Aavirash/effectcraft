@@ -15,6 +15,10 @@ Create Proxy: recreating a proxy chooses a new default name and attaches the new
 the previous proxy file intact. An explicit output path is kept as entered and refused if it
 would replace a protected file.
 
+After Pre-render imports its result, that file is footage too. Re-queueing the same item
+with the same output is refused; run Pre-render again for a fresh default output, or choose
+another Output To. An item's `last_output` is not permission to replace imported footage.
+
 Image-sequence checks inspect existing frames in the requested range. Skip Existing Files leaves
 existing frames alone. If a frame number appears in a folder name, the checker probes each
 frame separately and refuses ranges over 100,000 frames instead of silently checking a prefix.

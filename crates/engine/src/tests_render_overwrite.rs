@@ -230,6 +230,7 @@ fn the_rest_of_the_queue_renders_when_one_item_would_replace_footage() {
     assert_eq!(f.read("main.mp4"), RENDERED);
     assert!(matches!(f.s.project.render_queue[0].status, RenderStatus::Failed(_)));
     assert_eq!(f.s.project.render_queue[1].status, RenderStatus::Done);
+    assert!(r["items"].as_array().unwrap().iter().any(|i| i["status"].get("Failed").is_some()), "the reply includes the refused item: {r}");
     assert!(r["items"].as_array().unwrap().iter().any(|i| i["status"] == "Done"), "{r}");
 }
 
@@ -311,6 +312,40 @@ fn creating_a_proxy_again_chooses_a_new_default_and_attaches_it() {
         assert!(error.contains("never replaces a proxy"), "{error}");
         assert_eq!(f.exported().len(), 2);
     }
+}
+
+/// A pre-render becomes imported footage. Its old output stays protected even from the
+/// same queue item; issuing Pre-render again supplies a fresh default output instead.
+#[test]
+fn refreshing_a_pre_render_uses_a_new_default_without_exempting_imported_footage() {
+    struct Probe;
+    impl crate::Importer for Probe {
+        fn probe(&self, path: &str) -> Result<Footage, String> {
+            if !Path::new(path).is_file() {
+                return Err("pre-render missing".into());
+            }
+            Ok(Footage { path: path.into(), kind: FootageKind::Video, width: 16, height: 16, has_video: true, ..Default::default() })
+        }
+    }
+    let mut f = Fixture::new("refresh-pre-render");
+    f.s.importer = Some(Arc::new(Probe));
+    f.comp("Main");
+    f.s.execute("render.preRender", json!({"format": "gif"})).unwrap();
+    let first = f.output(0);
+    f.render(json!({})).unwrap();
+    f.s.execute("renderQueue.setRender", json!({"index": 1, "render": true})).unwrap();
+    let error = f.render(json!({})).unwrap_err().to_string();
+    assert!(error.contains("footage"), "{error}");
+    assert_eq!(std::fs::read(&first).unwrap(), RENDERED);
+    assert_eq!(f.exported().len(), 1);
+    f.s.execute("renderQueue.setRender", json!({"index": 1, "render": false})).unwrap();
+    f.s.execute("render.preRender", json!({"format": "gif"})).unwrap();
+    let second = f.output(1);
+    assert_ne!(first, second);
+    f.render(json!({})).unwrap();
+    assert_eq!(std::fs::read(first).unwrap(), RENDERED);
+    assert_eq!(std::fs::read(second).unwrap(), RENDERED);
+    assert_eq!(f.exported().len(), 2);
 }
 
 /// Exercise the engine's import and project serialization paths, rather than injecting a

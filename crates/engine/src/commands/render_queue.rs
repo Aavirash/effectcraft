@@ -681,8 +681,18 @@ fn render(s: &mut Session, p: &Value) -> Result<Value> {
     {
         log::warn!("{e}");
     }
+    let queued: std::collections::HashSet<u64> = s.project.render_queue.iter().filter(|i| i.is_queued()).map(|i| i.id).collect();
     let ids = s.start_render(wait).map_err(EngineError::Other)?;
-    let items: Vec<Value> = s.project.render_queue.iter().enumerate().filter(|(_, i)| ids.contains(&i.id)).map(|(k, i)| item_json(s, i, k)).collect();
+    // Source refusals fail before the exporter starts. Report them just like encoding
+    // failures, so CLI/MCP callers do not mistake a partly refused queue for full success.
+    let items: Vec<Value> = s
+        .project
+        .render_queue
+        .iter()
+        .enumerate()
+        .filter(|(_, i)| ids.contains(&i.id) || (queued.contains(&i.id) && matches!(i.status, RenderStatus::Failed(_))))
+        .map(|(k, i)| item_json(s, i, k))
+        .collect();
     Ok(json!({"rendering": s.is_rendering(), "items": items}))
 }
 
