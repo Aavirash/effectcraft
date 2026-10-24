@@ -74,10 +74,13 @@ fn scale_comp_doubles_the_frame_with_keys_and_parented_layers() {
     assert_eq!(bounds(&s, 0.0, 1), doubled(green0));
     assert_eq!(v3(&s, green, "transform/position", 0.0)[..2], [10.0, 15.0]);
     assert_eq!(v3(&s, green, "transform/scale", 0.0), [100.0; 3]);
+    let after = s.project.clone();
 
-    // One undo step.
+    // One undo step, and one redo step.
     s.execute("edit.undo", json!({})).unwrap();
     assert!(s.project == before, "undo restores the comp and every layer");
+    s.execute("edit.redo", json!({})).unwrap();
+    assert!(s.project == after, "redo scales the comp and every layer again");
 }
 
 #[test]
