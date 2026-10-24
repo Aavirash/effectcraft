@@ -127,7 +127,7 @@ impl EffectcraftApp {
         self.now = self.clock.now();
         // The compositor exists before the first paint and while hidden (device-loss handling
         // must run there too).
-        self.init_gpu(frame);
+        self.init_gpu(ctx, frame);
         self.apply_gpu_failure(ctx);
         if self.gpu_failure_applied == Some(true) {
             self.close_after_device_loss(ctx);
