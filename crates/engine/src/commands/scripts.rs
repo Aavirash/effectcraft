@@ -341,7 +341,8 @@ fn open_panel(s: &mut Session, p: &Value) -> Result<Value> {
         s.events.push(Event::Frontend { command: c.into(), params: json!({"window": id}) });
         return Ok(json!({"window": id, "open": true}));
     }
-    let (_, code) = script_code(s, &name, Some(true)).or_else(|| script_code(s, &name, None)).ok_or_else(|| bad(c, format!("no ScriptUI panel `{name}`")))?;
+    // Only panels: a script opened as one would be remembered, then forgotten at the next launch.
+    let (_, code) = script_code(s, &name, Some(true)).ok_or_else(|| bad(c, format!("no ScriptUI panel `{name}`")))?;
     let out = super::file_more::run_js_named(s, &panel_wrapper(&title, &code), &name)?;
     let id = s.script_ui.windows.iter().rev().find(|w| w.kind == scriptui::WindowKind::Panel && w.script == name).map(|w| w.id);
     if let Some(id) = id {
@@ -601,6 +602,10 @@ mod tests {
         let ran = r["result"]["ran"].as_str().unwrap_or_default();
         assert!(ran.contains("animate") && ran.contains(r#"__uiDockPanel("Animate")"#), "{r}");
         assert_eq!(script_code(&s, "Motion Kit/Animate.jsx", Some(true)), Some((true, "animate".to_string())));
+        // A script that is not a panel doesn't open as one.
+        for name in ["Tools/Hello.jsx", "Rename Layers.jsx"] {
+            assert!(bad_params(&s.execute("window.scriptPanel", json!({"name": name}))), "{name}");
+        }
         for name in ["../x.jsx", "a/b/c.jsx", "a\\b.jsx", "Motion Kit/sub/Deep.jsx", "ScriptUI Panels/Top.jsx", "Tools/../../../outside.jsx"] {
             assert_eq!(script_code(&s, name, None), None, "{name:?}");
             for c in ["file.runScript", "window.scriptPanel", "file.uninstallScript"] {
