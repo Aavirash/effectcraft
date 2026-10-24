@@ -14,7 +14,8 @@ use crate::Session;
 use crate::render::{FootageSource, RenderOpts};
 
 /// Files by name: `red16.png` (16×16 red), `blue8.png` (8×8 blue), `lines.mov` (interlaced:
-/// even rows red, odd rows blue; 4×4, 10 fps), `matte_black.png` / `matte_white.png` (a
+/// even rows red, odd rows blue; 4×4, 10 fps), `flash.mov` (10×10, 10 fps: red, then blue from
+/// the second frame), `matte_black.png` / `matte_white.png` (a
 /// semi-transparent green premultiplied against black / white, read as straight), `half.png`
 /// (white at 25 % alpha), `wide.png` (10×10 white).
 struct Synthetic;
@@ -52,9 +53,14 @@ fn size_of(path: &str) -> (u32, u32) {
 }
 
 impl FootageSource for Synthetic {
-    fn frame(&self, _: ItemId, f: &Footage, _t: Tick) -> Option<Arc<Image>> {
+    fn frame(&self, _: ItemId, f: &Footage, t: Tick) -> Option<Arc<Image>> {
         let (w, h) = size_of(&f.path);
         let mut img = Image::new(w, h);
+        // `flash.mov` is red for its first frame and blue from its second (0.1 s) on.
+        if f.path.ends_with("flash.mov") {
+            let c = if t.seconds() >= 0.1 - 1e-9 { [0.0, 0.0, 1.0, 1.0] } else { [1.0, 0.0, 0.0, 1.0] };
+            return Some(Arc::new(Image::filled(w, h, c)));
+        }
         for y in 0..h {
             for x in 0..w {
                 // Decoders hand out premultiplied pixels (straight file colour × alpha).
@@ -169,6 +175,75 @@ fn comp_proxy_and_create_proxy() {
     s.post_render_action(id, "/m/blue8.png").unwrap();
     assert_eq!(s.project.item(inner).unwrap().proxy.as_ref().unwrap().footage.path, "/m/blue8.png");
     assert!(blue(px(&s, outer, 0.0, o, 8, 8)));
+}
+
+/// Outer (4×4, 20 fps) holding a layer of Inner (4×4, 10 fps, a red solid): (inner, outer).
+fn nested(s: &mut Session) -> (ItemId, ItemId) {
+    s.execute("comp.new", json!({"name": "Inner", "width": 4, "height": 4, "frameRate": 10, "duration": 2})).unwrap();
+    let inner = s.active_comp_id().unwrap();
+    s.execute("layer.newSolid", json!({"color": "#ff0000"})).unwrap();
+    s.execute("comp.new", json!({"name": "Outer", "width": 4, "height": 4, "frameRate": 20, "duration": 2})).unwrap();
+    let outer = s.active_comp_id().unwrap();
+    s.execute("layer.addItem", json!({"item": inner.0})).unwrap();
+    (inner, outer)
+}
+
+/// Interpret Footage ▸ Proxy's Invert Alpha and Interpret As Linear Light change what a
+/// composition proxy draws, as they do for the same file used as footage.
+#[test]
+fn comp_proxy_draws_with_its_interpretation() {
+    let mut s = session();
+    let (inner, outer) = nested(&mut s);
+    let o = RenderOpts::default();
+    // Invert Alpha: the 25 % proxy covers 75 %.
+    s.execute("file.setProxy", json!({"item": inner.0, "path": "/m/half.png"})).unwrap();
+    s.execute("file.interpretProxy", json!({"item": inner.0, "alpha": "straight", "invertAlpha": true})).unwrap();
+    let p = px(&s, outer, 0.0, o, 1, 1);
+    assert!((p[3] - 0.75).abs() < 0.01, "{p:?}");
+    // Interpret As Linear Light: the proxy draws as the file does as footage with that setting.
+    let f = import(&mut s, "/m/matte_black.png");
+    s.execute("file.interpretFootage", json!({"item": f.0, "linearLight": true})).unwrap();
+    s.execute("comp.new", json!({"name": "Ref", "width": 4, "height": 4, "frameRate": 20, "duration": 2})).unwrap();
+    let r = s.active_comp_id().unwrap();
+    s.execute("layer.addItem", json!({"item": f.0})).unwrap();
+    let want = px(&s, r, 0.0, o, 1, 1);
+    assert!(want[1] / want[3] > 0.7, "linear light re-encodes the 0.5 green: {want:?}");
+    s.execute("file.setProxy", json!({"item": inner.0, "path": "/m/matte_black.png"})).unwrap();
+    s.execute("file.interpretProxy", json!({"item": inner.0, "linearLight": true})).unwrap();
+    let p = px(&s, outer, 0.0, o, 1, 1);
+    assert!((0..4).all(|i| (p[i] - want[i]).abs() < 1e-3), "{p:?} != {want:?}");
+}
+
+/// Interpret Footage ▸ Proxy ▸ Separate Fields: a composition proxy shows one field per frame
+/// at twice the rate, as footage does.
+#[test]
+fn comp_proxy_separates_fields() {
+    let mut s = session();
+    let (inner, outer) = nested(&mut s);
+    let o = RenderOpts::default();
+    s.execute("file.setProxy", json!({"item": inner.0, "path": "/m/lines.mov"})).unwrap();
+    assert!(red(px(&s, outer, 0.05, o, 1, 0)) && blue(px(&s, outer, 0.05, o, 1, 1)), "progressive");
+    s.execute("file.interpretProxy", json!({"item": inner.0, "fields": "upper"})).unwrap();
+    // At 0.05 s the lower field (odd rows, blue) is shown, with the even rows interpolated.
+    for y in 0..3 {
+        assert!(blue(px(&s, outer, 0.05, o, 1, y)), "lower field at row {y}");
+    }
+}
+
+/// Frame Blending on a precomp layer blends the frames of the composition's proxy.
+#[test]
+fn comp_proxy_frames_blend() {
+    let mut s = session();
+    let (inner, outer) = nested(&mut s);
+    let o = RenderOpts::default();
+    s.execute("file.setProxy", json!({"item": inner.0, "path": "/m/flash.mov"})).unwrap();
+    assert!(red(px(&s, outer, 0.05, o, 1, 1)));
+    s.execute("layer.frameBlending", json!({"mode": "frameMix"})).unwrap();
+    s.execute("comp.setSwitch", json!({"switch": "frameBlending", "value": true})).unwrap();
+    // Halfway between the red first frame and the blue second one.
+    let p = px(&s, outer, 0.05, o, 1, 1);
+    assert!((p[0] - 0.5).abs() < 0.05 && (p[2] - 0.5).abs() < 0.05 && p[3] > 0.99, "{p:?}");
+    assert!(blue(px(&s, outer, 0.1, o, 1, 1)));
 }
 
 #[test]

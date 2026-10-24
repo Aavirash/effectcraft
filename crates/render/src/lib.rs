@@ -1257,8 +1257,10 @@ impl<'a> Renderer<'a> {
                 if self.project.comp_contains(*item, ctx.comp_id) {
                     return None;
                 }
-                // A composition proxy (a rendered still or movie) stands in for the comp.
-                // Nothing before the nested comp starts or after it ends.
+                // A composition proxy (a rendered still or movie) stands in for the comp. It is
+                // decoded like footage: its Separate Fields, Invert Alpha and Interpret As Linear
+                // Light settings and the layer's Frame Blending apply. Nothing before the nested
+                // comp starts or after it ends.
                 let lt = ctx.nested_time(layer);
                 if !self.project.comp(*item).is_some_and(|nc| nc.covers(lt)) {
                     return None;
@@ -1266,7 +1268,7 @@ impl<'a> Renderer<'a> {
                 if let Some(pf) = self.proxy_for(*item)
                     && let Some(nc) = self.project.comp(*item)
                 {
-                    let img = self.footage.frame_with(*item, pf, lt, None, self.pipe.float_encoding())?;
+                    let img = self.footage_frame(ctx, layer, *item, pf, lt, None)?;
                     return Some(self.footage_buf(&img, pf, nc.width, nc.height));
                 }
                 // Essential Properties overrides render the nested comp with this instance's
