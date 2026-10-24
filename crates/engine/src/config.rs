@@ -32,6 +32,11 @@ pub trait ConfigStore: Send + Sync {
         let _ = dir;
         vec![]
     }
+    /// Names of the folders directly in `dir`, sorted, like [`ConfigStore::list`].
+    fn list_dirs(&self, dir: &str) -> Vec<String> {
+        let _ = dir;
+        vec![]
+    }
     /// The folder next to the configuration (default Auto-Save folder for untitled projects),
     /// in the namespace of [`ConfigStore::files`]; `None` when there is none.
     fn dir(&self) -> Option<PathBuf> {
@@ -107,6 +112,14 @@ impl ConfigStore for MemoryConfig {
         let Ok(m) = self.files.lock() else { return vec![] };
         m.keys().filter_map(|k| k.strip_prefix(&pre)).filter(|n| !n.is_empty() && !n.contains('/')).map(str::to_string).collect()
     }
+    fn list_dirs(&self, dir: &str) -> Vec<String> {
+        let pre = format!("{}/", dir.trim_end_matches('/'));
+        let Ok(m) = self.files.lock() else { return vec![] };
+        let mut v: Vec<String> = m.keys().filter_map(|k| k.strip_prefix(&pre)?.split_once('/')).map(|(d, _)| d.to_string()).filter(|d| !d.is_empty()).collect();
+        v.sort();
+        v.dedup();
+        v
+    }
 }
 
 /// Files in one directory, written atomically.
@@ -150,6 +163,12 @@ impl ConfigStore for DirConfig {
     fn list(&self, dir: &str) -> Vec<String> {
         let Ok(rd) = std::fs::read_dir(self.dir.join(dir)) else { return vec![] };
         let mut v: Vec<String> = rd.flatten().filter(|e| e.path().is_file()).map(|e| e.file_name().to_string_lossy().to_string()).collect();
+        v.sort();
+        v
+    }
+    fn list_dirs(&self, dir: &str) -> Vec<String> {
+        let Ok(rd) = std::fs::read_dir(self.dir.join(dir)) else { return vec![] };
+        let mut v: Vec<String> = rd.flatten().filter(|e| e.path().is_dir()).map(|e| e.file_name().to_string_lossy().to_string()).collect();
         v.sort();
         v
     }

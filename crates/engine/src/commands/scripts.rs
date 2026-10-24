@@ -5,7 +5,8 @@
 //!   settings on the desktop, so dropping `.jsx` files in those folders works too. File ▸ Scripts
 //!   lists them with the bundled sample scripts and extensions ([`BUNDLED`]) and runs them by name; ScriptUI
 //!   panels appear at the bottom of the Window menu and open as dockable panels
-//!   (`window.scriptPanel`), running with `this` = the panel as in After Effects.
+//!   (`window.scriptPanel`), running with `this` = the panel as in After Effects. A subfolder of
+//!   either folder (one level) is a submenu named after it; its scripts are named `Folder/File.jsx`.
 //! * **ScriptUI windows** (`scriptui.*`): list the open script windows, read their control
 //!   trees, click buttons and set values like a user, close them (see [`crate::scriptui`]).
 //! * **Script settings** (`script.settings.*`): After Effects' `app.settings`, string values by
@@ -22,6 +23,8 @@ use crate::{EngineError, Event, Result, Session, cmd, scriptui};
 /// The settings-store folders of installed scripts.
 pub const SCRIPTS_DIR: &str = "Scripts";
 pub const PANELS_DIR: &str = "Scripts/ScriptUI Panels";
+/// [`PANELS_DIR`]'s name in [`SCRIPTS_DIR`]: it holds the panels, so it is not a folder of scripts.
+const PANELS_FOLDER: &str = "ScriptUI Panels";
 /// The ScriptUI panels open when EffectCraft last quit (settings store), reopened at launch.
 pub const OPEN_PANELS_FILE: &str = "scriptui_panels.json";
 /// Scripts' `app.settings` in the settings store: `{section: {key: value}}`, as After Effects
@@ -111,7 +114,7 @@ pub const BUNDLED: &[(&str, bool, &str, &str)] = &[
 /// A script File ▸ Scripts (or the Window menu, for panels) offers.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ScriptEntry {
-    /// File name (`Rename Layers.jsx`): what the menus show and commands take.
+    /// File name (`Rename Layers.jsx`), or `Folder/File.jsx` in a subfolder: what commands take.
     pub name: String,
     /// In the ScriptUI Panels folder: opens as a dockable panel.
     pub panel: bool,
@@ -124,11 +127,17 @@ fn is_script(name: &str) -> bool {
     l.ends_with(".jsx") || l.ends_with(".js")
 }
 
-/// Whether `name` can name an installed script: a bare file name, never a path (names are joined
-/// onto the Scripts folders of the settings store, which takes them as relative paths), and on
-/// Windows none of the names [`windows_unsafe_name`] lists.
+/// Whether `name` can name an installed script: a file name, or `Folder/File` for one in a
+/// subfolder of a Scripts folder (one level, and not `ScriptUI Panels/…`, the panels' own
+/// folder). Each part is a bare name, never a path (names are joined onto the Scripts folders of
+/// the settings store, which takes them as relative paths), and on Windows none of the names
+/// [`windows_unsafe_name`] lists.
 fn is_script_name(name: &str) -> bool {
-    is_bare_name(name) && !(cfg!(windows) && windows_unsafe_name(name))
+    let part = |n: &str| is_bare_name(n) && !(cfg!(windows) && windows_unsafe_name(n));
+    match name.split_once('/') {
+        Some((folder, file)) => part(folder) && part(file) && !folder.eq_ignore_ascii_case(PANELS_FOLDER),
+        None => part(name),
+    }
 }
 
 /// One path component on every platform: not empty, `.` or `..`, and without `/`, `\` or NUL.
@@ -155,8 +164,13 @@ pub fn scripts(s: &Session) -> Vec<ScriptEntry> {
     let mut v: Vec<ScriptEntry> = vec![];
     if let Some(cfg) = &s.config {
         for (dir, panel) in [(SCRIPTS_DIR, false), (PANELS_DIR, true)] {
-            for n in cfg.list(dir).into_iter().filter(|n| is_script(n) && is_script_name(n)) {
-                v.push(ScriptEntry { name: n, panel, source: "installed" });
+            // The folder itself, then each subfolder, whose scripts are named `Folder/File.jsx`.
+            let subfolders = cfg.list_dirs(dir).into_iter().map(|f| (format!("{dir}/{f}"), format!("{f}/")));
+            for (folder, prefix) in std::iter::once((dir.to_string(), String::new())).chain(subfolders) {
+                let names = cfg.list(&folder).into_iter().map(|n| format!("{prefix}{n}"));
+                for n in names.filter(|n| is_script(n) && is_script_name(n)) {
+                    v.push(ScriptEntry { name: n, panel, source: "installed" });
+                }
             }
         }
     }
@@ -312,7 +326,8 @@ fn restore_panels(s: &mut Session, _: &Value) -> Result<Value> {
 fn open_panel(s: &mut Session, p: &Value) -> Result<Value> {
     let c = "window.scriptPanel";
     let name = str_p(p, "name").ok_or_else(|| bad(c, "missing `name` (a script in the ScriptUI Panels folder)"))?.to_string();
-    let title = name.trim_end_matches(".jsx").trim_end_matches(".js").to_string();
+    let file = name.rsplit_once('/').map_or(name.as_str(), |(_, f)| f);
+    let title = file.trim_end_matches(".jsx").trim_end_matches(".js").to_string();
     if let Some(w) = s.script_ui.windows.iter().find(|w| w.kind == scriptui::WindowKind::Panel && w.script == name) {
         let id = w.id;
         s.events.push(Event::Frontend { command: c.into(), params: json!({"window": id}) });
@@ -355,13 +370,13 @@ pub fn specs() -> Vec<CommandSpec> {
             |s, p| install(s, p, true)
         ),
         cmd!("file.uninstallScript", "Uninstall Script", [], None, "{name}", always, uninstall),
-        crate::query!("file.scripts.list", "List Scripts", "{} → [{name, panel, source: installed|sample|extension}]", list),
+        crate::query!("file.scripts.list", "List Scripts", "{} → [{name (`Folder/File.jsx` in a subfolder), panel, source: installed|sample|extension}]", list),
         cmd!(
             "window.scriptPanel",
             "ScriptUI Panel",
             [],
             None,
-            "{name (a script in the ScriptUI Panels folder, e.g. `Layer Tools.jsx`)} → opens it as a dockable panel",
+            "{name (a script in the ScriptUI Panels folder, e.g. `Layer Tools.jsx`, or `Folder/Panel.jsx` in a subfolder)} → opens it as a dockable panel",
             always,
             open_panel
         ),
@@ -506,7 +521,8 @@ mod tests {
         for name in BUNDLED.iter().map(|b| b.0).chain(more) {
             assert!(is_script(name) && is_script_name(name), "{name}");
         }
-        for name in PATHS {
+        // `a/b.jsx` is a script in a folder (see below).
+        for name in PATHS.into_iter().filter(|n| *n != "a/b.jsx") {
             assert!(!is_script_name(name), "{name:?}");
         }
         for name in WINDOWS_ONLY {
@@ -522,6 +538,107 @@ mod tests {
             assert!(!root.join("settings").join(SCRIPTS_DIR).join("a\\b.jsx").exists());
             let _ = std::fs::remove_dir_all(&root);
         }
+    }
+
+    #[test]
+    fn script_names_may_have_one_folder() {
+        for name in ["Motion Kit/Animate.jsx", "a/b.jsx", "Äpfel/✓.js", "..jsx/x.jsx"] {
+            assert!(is_script_name(name), "{name:?}");
+        }
+        // Deeper, up, absolute, an empty part, a `\` path, and the panels' own folder in `Scripts`.
+        let refused = ["a/b/c.jsx", "../x.jsx", "a/../x.jsx", "./x.jsx", "a/..", "/x.jsx", "a//x.jsx", "a/", "a\\b.jsx", "a/b\\c.jsx", "a\0/x.jsx"];
+        for name in refused.into_iter().chain(["ScriptUI Panels/x.jsx", "scriptui panels/x.jsx"]) {
+            assert!(!is_script_name(name), "{name:?}");
+        }
+        for name in ["In:Out/x.jsx", "con/x.jsx", "x/COM1.jsx", "x./y.jsx"] {
+            assert_eq!(is_script_name(name), !cfg!(windows), "{name:?}");
+        }
+    }
+
+    /// Writes `code` to `rel` in the settings folder of [`session_in_tmp`]'s `root`.
+    fn put(root: &std::path::Path, rel: &str, code: &str) {
+        let p = root.join("settings").join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, code).unwrap();
+    }
+
+    #[test]
+    fn scripts_in_a_subfolder_are_listed_run_opened_and_uninstalled_as_folder_and_file() {
+        let (mut s, root) = session_in_tmp("folders");
+        put(&root, "Scripts/Tools/Hello.jsx", "hello");
+        put(&root, "Scripts/ScriptUI Panels/Motion Kit/Animate.jsx", "animate");
+        put(&root, "Scripts/ScriptUI Panels/Top.jsx", "top");
+        // Two folders deep: neither listed nor run.
+        put(&root, "Scripts/a/b/c.jsx", "too deep");
+        put(&root, "Scripts/ScriptUI Panels/Motion Kit/sub/Deep.jsx", "too deep");
+        let list = s.execute("file.scripts.list", json!({})).unwrap();
+        let installed: Vec<(&str, bool)> =
+            list.as_array().unwrap().iter().filter(|e| e["source"] == "installed").map(|e| (e["name"].as_str().unwrap(), e["panel"] == true)).collect();
+        assert_eq!(installed, [("Tools/Hello.jsx", false), ("Motion Kit/Animate.jsx", true), ("Top.jsx", true)]);
+        assert_eq!(s.execute("file.runScript", json!({"name": "Tools/Hello.jsx"})).unwrap()["ran"], "hello");
+        // A panel in a folder is titled after its file.
+        let r = s.execute("window.scriptPanel", json!({"name": "Motion Kit/Animate.jsx"})).unwrap();
+        let ran = r["result"]["ran"].as_str().unwrap_or_default();
+        assert!(ran.contains("animate") && ran.contains(r#"__uiDockPanel("Animate")"#), "{r}");
+        assert_eq!(script_code(&s, "Motion Kit/Animate.jsx", Some(true)), Some((true, "animate".to_string())));
+        for name in ["../x.jsx", "a/b/c.jsx", "a\\b.jsx", "Motion Kit/sub/Deep.jsx", "ScriptUI Panels/Top.jsx", "Tools/../../../outside.jsx"] {
+            assert_eq!(script_code(&s, name, None), None, "{name:?}");
+            for c in ["file.runScript", "window.scriptPanel", "file.uninstallScript"] {
+                let r = s.execute(c, json!({"name": name}));
+                assert!(bad_params(&r), "{c} `{name}`: {r:?}");
+            }
+        }
+        assert!(["Scripts/a/b/c.jsx", "Scripts/ScriptUI Panels/Top.jsx"].iter().all(|p| root.join("settings").join(p).is_file()));
+        assert!(root.join("outside.jsx").is_file());
+        for name in ["Tools/Hello.jsx", "Motion Kit/Animate.jsx"] {
+            s.execute("file.uninstallScript", json!({"name": name})).unwrap();
+        }
+        assert!(["Scripts/Tools/Hello.jsx", "Scripts/ScriptUI Panels/Motion Kit/Animate.jsx"].iter().all(|p| !root.join("settings").join(p).exists()));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Window ▸ Motion Kit ▸ Animate.jsx: a subfolder is a submenu named after it, where the folder
+    /// sorts; the entries outside folders stay as they were.
+    #[test]
+    fn a_subfolder_is_a_submenu() {
+        use crate::menus::{MenuNode, dynamic, dynamic_nodes};
+        let (s, root) = session_in_tmp("submenus");
+        put(&root, "Scripts/ScriptUI Panels/Motion Kit/Animate.jsx", "");
+        put(&root, "Scripts/ScriptUI Panels/Motion Kit/Rig.jsx", "");
+        put(&root, "Scripts/ScriptUI Panels/Top.jsx", "");
+        put(&root, "Scripts/Tools/Hello.jsx", "");
+        let cx = Default::default();
+        let item =
+            |label: &str, command: &str, name: &str| json!({"type": "item", "label": label, "command": command, "params": {"name": name}, "shortcut": null});
+        let menus = [
+            (
+                "scriptPanels",
+                json!({"type": "submenu", "label": "Motion Kit", "children": [
+                    item("Animate.jsx", "window.scriptPanel", "Motion Kit/Animate.jsx"),
+                    item("Rig.jsx", "window.scriptPanel", "Motion Kit/Rig.jsx"),
+                ]}),
+            ),
+            ("scripts", json!({"type": "submenu", "label": "Tools", "children": [item("Hello.jsx", "file.runScript", "Tools/Hello.jsx")]})),
+        ];
+        for (menu, folder) in menus {
+            let (nodes, _) = dynamic_nodes(&s, menu, &cx);
+            let (entries, _) = dynamic(&s, menu, &cx);
+            let items: Vec<_> = nodes.iter().filter_map(|n| if let MenuNode::Item(e) = n { Some(e) } else { None }).collect();
+            assert_eq!(items, entries.iter().filter(|e| !e.label.contains('/')).collect::<Vec<_>>(), "{menu}");
+            let folders: Vec<Value> = nodes.iter().filter(|n| matches!(n, MenuNode::Submenu { .. })).map(|n| serde_json::to_value(n).unwrap()).collect();
+            assert_eq!(folders, [folder], "{menu}");
+        }
+        let (panels, _) = dynamic_nodes(&s, "scriptPanels", &cx);
+        let labels: Vec<&str> = panels
+            .iter()
+            .filter_map(|n| match n {
+                MenuNode::Item(e) => Some(e.label.as_str()),
+                MenuNode::Submenu { label, .. } => Some(label),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(labels, ["Ease Presets.jsx", "Layer Tools.jsx", "Motion Kit", "Top.jsx"]);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

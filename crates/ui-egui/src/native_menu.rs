@@ -138,8 +138,8 @@ pub fn build(app: &EffectcraftApp) -> NativeMenu {
                     // Recent projects / footage / presets, undo history, shortcut slots, viewers,
                     // saved workspaces.
                     let saved = app.saved_workspace_names();
-                    let (entries, empty) = effectcraft_engine::menus::dynamic(&app.session, name, &crate::menus::dyn_ctx(&app.ui.workspace, &saved));
-                    if entries.is_empty()
+                    let (nodes, empty) = effectcraft_engine::menus::dynamic_nodes(&app.session, name, &crate::menus::dyn_ctx(&app.ui.workspace, &saved));
+                    if nodes.is_empty()
                         && let Some(e) = empty
                     {
                         out.push(NativeNode::Item(NativeItem {
@@ -153,7 +153,12 @@ pub fn build(app: &EffectcraftApp) -> NativeMenu {
                             checked: None,
                         }));
                     }
-                    for (k, e) in entries.iter().enumerate() {
+                    for (k, n) in nodes.iter().enumerate() {
+                        // A folder of scripts or panels: a submenu.
+                        let MenuNode::Item(e) = n else {
+                            rec(app, std::slice::from_ref(n), &format!("{id}.d{k}"), out);
+                            continue;
+                        };
                         out.push(NativeNode::Item(NativeItem {
                             id: format!("{id}.d{k}"),
                             label: e.label.clone(),
