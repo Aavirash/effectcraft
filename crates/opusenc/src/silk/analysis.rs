@@ -229,9 +229,20 @@ pub fn pitch_search(x: &[f32], start: usize, len: usize, fs_khz: usize) -> Pitch
     let score = full[(lag - min_lag) as usize];
     // Contour: per-subframe lag offsets around the chosen lag.
     let cb: &[[i32; 4]] = if fs_khz == 8 { &CB_NB_20 } else { &CB_WB_20 };
+    // The contour search revisits the same (subframe, lag) pairs for neighbouring base lags and
+    // codebook entries, so each correlation is computed once.
+    let span = (18 * fs - min_lag + 1) as usize;
+    let memo = std::cell::RefCell::new(vec![f64::NAN; 4 * span]);
     let sub_score = |k: usize, l: i32| -> f64 {
         let l = l.clamp(min_lag, 18 * fs);
-        ncorr(x, start + k * sub..start + (k + 1) * sub, l as usize)
+        let slot = k * span + (l - min_lag) as usize;
+        let cached = memo.borrow()[slot];
+        if !cached.is_nan() {
+            return cached;
+        }
+        let v = ncorr(x, start + k * sub..start + (k + 1) * sub, l as usize);
+        memo.borrow_mut()[slot] = v;
+        v
     };
     let mut best = (f64::MIN, lag, 0usize);
     for l0 in (lag - 2).max(min_lag)..=(lag + 2).min(max_lag) {
