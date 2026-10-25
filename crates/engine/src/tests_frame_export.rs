@@ -219,3 +219,22 @@ fn save_frame_as_defaults_to_png_sequence_with_alpha() {
     assert_eq!(it.output.name, "PNG Sequence with Alpha");
     assert_eq!(it.output.channels, effectcraft_project::render_queue::Channels::Rgba);
 }
+
+#[test]
+fn save_frame_as_defaults_to_transparent_even_with_rgb_frame_template() {
+    let mut s = Session::default();
+    s.execute("comp.new", json!({"name": "Comp", "width": 32, "height": 32, "frameRate": 24, "duration": 1})).unwrap();
+
+    // Set Frame Default to an RGB output template ("PNG Sequence")
+    s.execute_checked("renderQueue.setTemplateDefault", json!({"kind": "outputModule", "slot": "still", "name": "PNG Sequence"})).unwrap();
+
+    // Omitting `transparent` must default to true and promote to Channels::Rgba
+    s.execute_checked("comp.saveFrameAs", json!({"queue": true})).unwrap();
+    let it = s.project.render_queue.last().unwrap();
+    assert_eq!(it.output.channels, effectcraft_project::render_queue::Channels::Rgba);
+
+    // Explicit `transparent: false` respects the request and stays Channels::Rgb
+    s.execute_checked("comp.saveFrameAs", json!({"queue": true, "transparent": false})).unwrap();
+    let it = s.project.render_queue.last().unwrap();
+    assert_eq!(it.output.channels, effectcraft_project::render_queue::Channels::Rgb);
+}
