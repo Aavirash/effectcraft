@@ -175,6 +175,7 @@ fn params_of(v: Option<&Value>) -> Result<Value> {
 
 // ------------------------------------------------------------------ engine tools
 
+/// `list_commands` tool: the engine command list, minus empty fields; with `compact`, only `id` and `label`.
 fn list_commands(b: &mut Backend, a: &Value) -> Result<Reply> {
     let compact = get(a, "compact").and_then(Value::as_bool).unwrap_or(false);
     let schemas = (!compact && get(a, "schemas").and_then(Value::as_bool).unwrap_or(false)).then_some(json!(true));
@@ -209,6 +210,7 @@ fn describe_command(b: &mut Backend, a: &Value) -> Result<Reply> {
     json_reply(b.exec("command.describe", json!({"command": id}))?)
 }
 
+/// `list_effects` tool: the effect registry; with `compact`, only `id`, `name` and `category`.
 fn list_effects(b: &mut Backend, a: &Value) -> Result<Reply> {
     let mut r = b.exec("effect.list", obj(&[("filter", get(a, "filter"))]))?;
     if get(a, "compact").and_then(Value::as_bool).unwrap_or(false) {
