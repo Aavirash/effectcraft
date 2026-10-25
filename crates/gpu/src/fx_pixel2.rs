@@ -247,6 +247,12 @@ fn point(e: &mut Enc, id: &str, ctx: &EffectCtx, b: GBuf) -> Option<GBuf> {
             p.f[0] = pr.color("highlightColor");
         }
         "ec.channel.cccomposite" => {
+            // A chosen layer (Create 3D Layer Instance's solid) runs on the CPU: its pixels — a
+            // referenced 3D model rendered through the comp's camera — replace the layer's own
+            // original, alpha included.
+            if ctx.layer_param("layer", true).is_some() {
+                return None;
+            }
             if let Some(source) = ctx.env.host.and_then(|h| h.original()) {
                 let fitted = effectcraft_effects::util::fit_buffer(source, b.img.width, b.img.height, b.offset, b.scale);
                 original = Some(e.g.upload_image(&fitted)?);

@@ -1,14 +1,17 @@
 //! Layer ▸ Create: Convert to Editable Text (Photoshop type layers), Create Shapes from Text,
-//! Create Masks from Text and Create Shapes from Vector Layer (SVG footage).
+//! Create Masks from Text, Create Shapes from Vector Layer (SVG footage) and Create 3D Layer
+//! Instance (a 2D copy of a 3D model layer that 2D effects can be applied to).
 
 use effectcraft_color::Label;
+use effectcraft_keyframe::Value as KV;
+use effectcraft_project::build::{self, Ids};
 use effectcraft_project::{ItemKind, LayerSource, Solid};
 use serde_json::{Value, json};
 
 use super::{CommandSpec, bad, has_layers, layers_p, str_p};
 use crate::{EngineError, Result, Session, cmd};
 
-const OPS: &str = "editableText|shapesFromText|masksFromText|shapesFromVector";
+const OPS: &str = "editableText|shapesFromText|masksFromText|shapesFromVector|instance3d";
 
 fn create(s: &mut Session, p: &Value) -> Result<Value> {
     let op = str_p(p, "op").ok_or_else(|| bad("layer.create", format!("missing `op` ({OPS})")))?;
@@ -151,6 +154,49 @@ fn create(s: &mut Session, p: &Value) -> Result<Value> {
                 })?;
                 created.push(id.0);
             }
+            "instance3d" => {
+                // After Effects' Create 3D Layer Instance (Layer ▸ Create): 3D model layers take
+                // no masks or effects, so a comp-sized solid goes at the top of the layer stack
+                // with CC Composite referencing the model — a 2D copy of its render, through the
+                // comp's camera, that 2D effects can be applied to. The model is switched off,
+                // as After Effects does (back on to keep its shadow).
+                if !src.source.is_model() {
+                    skipped.push(format!("{}: not a 3D model layer", src.name));
+                    continue;
+                }
+                let id = s.edit("Create 3D Layer Instance", None, |proj, st| {
+                    let name = comp.unique_layer_name(&format!("{} Instance", src.name));
+                    let folder = proj.folder_named("Solids").unwrap_or_else(|| proj.add_item("Solids", Label::Yellow, None, ItemKind::Folder));
+                    let sid = proj.add_item(
+                        &name,
+                        src.label,
+                        Some(folder),
+                        ItemKind::Solid(Solid { color: [1.0, 1.0, 1.0], width: comp.width, height: comp.height, pixel_aspect: 1.0 }),
+                    );
+                    let mut l = build::layer(proj, &comp, &name, LayerSource::Solid { item: sid }, (comp.width, comp.height), None);
+                    // CC Composite referencing the 3D layer: the solid shows its render (the 2D
+                    // copy).
+                    let fx = effectcraft_effects::find("ec.channel.cccomposite").ok_or_else(|| bad("layer.create", "the CC Composite effect is missing"))?;
+                    let mut g = effectcraft_effects::instantiate(fx, &mut Ids(&mut proj.next_id), fx.name, [comp.width as f64, comp.height as f64]);
+                    if let Some(pr) = g.get_mut("layer") {
+                        pr.value = KV::Layer(Some(lid.0));
+                    }
+                    if let Some(fxg) = l.props.sub_mut("effects") {
+                        fxg.children.push(g.into());
+                    }
+                    let c = proj.comp_mut(cid).ok_or(EngineError::NoComp)?;
+                    // The model is switched off (After Effects turns the referenced layer off);
+                    // the copy goes at the top of the stack, selected.
+                    if let Some(m) = c.layers.iter_mut().find(|x| x.id == lid) {
+                        m.switches.video = false;
+                    }
+                    let id = l.id;
+                    c.layers.insert(0, l);
+                    st.selected_layers = vec![id];
+                    Ok(id)
+                })?;
+                created.push(id.0);
+            }
             other => return Err(bad("layer.create", format!("`{other}` is not available yet (supported: {OPS})"))),
         }
     }
@@ -198,5 +244,5 @@ fn insert_above(
 }
 
 pub fn specs() -> Vec<CommandSpec> {
-    vec![cmd!("layer.create", "Create", [], None, "{op: editableText|shapesFromText|masksFromText|shapesFromVector, layers?}", has_layers, create)]
+    vec![cmd!("layer.create", "Create", [], None, "{op: editableText|shapesFromText|masksFromText|shapesFromVector|instance3d, layers?}", has_layers, create)]
 }

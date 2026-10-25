@@ -68,6 +68,13 @@ impl Dependencies<'_> {
         if self.path.len() > crate::MAX_FX_DEPTH || self.path.contains(&id) {
             return None;
         }
+        // A referenced 3D model or primitive layer renders through the comp's camera and lights
+        // (an effect layer parameter reads it that way — Create 3D Layer Instance's CC
+        // Composite): those move its pixels without a trace in its own properties, so the owner
+        // keeps no cache entry for it.
+        if layer.source.is_model() {
+            return None;
+        }
         self.remaining = self.remaining.checked_sub(1)?;
         if (self.other_times || super::reads_other_times(layer)) && super::has_expression(&layer.props) {
             return None;
