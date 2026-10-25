@@ -20,6 +20,20 @@ fn settle(h: &mut Harness<'_, EffectcraftApp>) {
     }
 }
 
+/// Step until the GPU compositor's worker has handed its result over (attached, or why not).
+/// The first step starts the build.
+fn wait_for_compositor(h: &mut Harness<'_, EffectcraftApp>) {
+    h.step();
+    for _ in 0..3000 {
+        if !h.state().gpu_initializing() {
+            return;
+        }
+        h.step();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    panic!("the GPU compositor's worker gave no result within a minute");
+}
+
 /// Whether wgpu finds any adapter at all (egui_kittest's wgpu harness needs one; CI runners
 /// without a GPU skip).
 fn any_adapter() -> bool {
@@ -148,21 +162,24 @@ fn viewer_draws_gpu_frames_that_match_the_cpu() {
     // egui-wgpu creates its GL device with WebGL2's limits, which the compositor declines.
     let gl = adapter.ends_with("(Gl)");
     drop(probe);
-    let mut s = Session::default();
-    s.execute("file.openDemoProject", json!({})).unwrap();
-    s.execute("time.set", json!({"time": 2.0})).unwrap();
     let mut h = Harness::builder()
         .with_size(egui::vec2(1400.0, 900.0))
         .with_pixels_per_point(1.0)
         .wgpu_setup(same_adapter(adapter))
-        .build_eframe(|_| EffectcraftApp::new(s));
-    settle(&mut h);
+        .build_eframe(|_| EffectcraftApp::new(Session::default()));
+    // The project opens once the compositor (built on a worker thread) is attached. A frame the
+    // CPU composited while it was being built has the GPU frame's key, so the viewer would keep
+    // showing it, and the comparison below would be the CPU against itself.
+    wait_for_compositor(&mut h);
     if gl && h.state().gpu_adapter().is_none() {
         eprintln!("egui-wgpu's GL device has WebGL2 limits: the viewer stays on the CPU, skipping");
         return;
     }
     assert!(h.state().gpu_adapter().is_some(), "GPU compositor on egui-wgpu's device");
     eprintln!("viewer compositor adapter: {:?}", h.state().gpu_adapter());
+    h.state_mut().session.execute("file.openDemoProject", json!({})).unwrap();
+    h.state_mut().session.execute("time.set", json!({"time": 2.0})).unwrap();
+    settle(&mut h);
     let gpu_px = h.state_mut().viewer_pixels().expect("read back the GPU frame");
     let gpu_shot = h.render().expect("render");
     // Mercury Software Only: the same frame from the CPU.
