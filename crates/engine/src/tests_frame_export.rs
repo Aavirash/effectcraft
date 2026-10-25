@@ -184,7 +184,7 @@ fn save_frame_as_png_preserves_alpha_channel() {
     assert_eq!(empty_px[3], 0, "outside solid region must have alpha 0: {empty_px:?}");
 
     let flat_path = dir.join("flat.png").to_string_lossy().to_string();
-    s.execute("comp.saveFrameAs", json!({"path": flat_path, "transparent": false})).unwrap();
+    s.execute_checked("comp.saveFrameAs", json!({"path": flat_path, "transparent": false})).unwrap();
     let flat_img = image::load_from_memory(&std::fs::read(&flat_path).unwrap()).unwrap().to_rgba8();
     let flat_empty_px = flat_img.get_pixel(24, 24);
     assert_eq!(flat_empty_px[3], 255, "transparent: false must composite over background: {flat_empty_px:?}");

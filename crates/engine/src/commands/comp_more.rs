@@ -235,7 +235,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "File...",
             ["Composition", "Save Frame As"],
             Some("Cmd+Alt+S"),
-            "{path (.png; with queue: an output path or template), time?, scale?, queue?: bool (add a Render Queue item from the Frame Default templates instead of writing now)}",
+            "{path (.png; with queue: an output path or template), time?, scale?, queue?: bool (add a Render Queue item from the Frame Default templates instead of writing now), transparent?: bool (default true)}",
             has_comp,
             save_frame
         ),
