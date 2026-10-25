@@ -15,7 +15,7 @@ effectcraft-host = { workspace = true }
 effectcraft-ui-egui = { workspace = true }
 egui = { workspace = true }
 # `links`: links (Help menu, Discord, Settings) open in the system browser.
-eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "links", "wayland", "x11"] }
+eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "clipboard", "links", "wayland", "x11"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 # The window's monitors, size and position (src/window.rs), and macOS event-loop options (no app
