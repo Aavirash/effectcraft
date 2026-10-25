@@ -35,6 +35,7 @@ pub mod paint_panels;
 pub mod panel_kit;
 pub mod path_vr_panels;
 pub mod precomp;
+pub mod primitive_dialog;
 pub mod project;
 pub mod properties;
 pub mod puppet_tool;
@@ -151,6 +152,11 @@ pub fn timecode(session: &Session, comp: &Comp, t: Tick) -> String {
     effectcraft_engine::commands::time::display_time(session, comp, t)
 }
 
+/// A length (a Duration) formatted per project settings, with no start offset.
+pub fn duration(session: &Session, comp: &Comp, len: Tick) -> String {
+    effectcraft_engine::commands::time::display_duration(session, comp, len)
+}
+
 /// Ctrl/Cmd-click on a current-time display toggles the project's Time Display Style between
 /// Timecode and Frames, as in After Effects (through Project Settings: one undo step).
 pub(crate) fn toggle_time_display(app: &mut EffectcraftApp, resp: &egui::Response) {
@@ -212,7 +218,7 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, p: PanelKind, rect: Rec
 
 /// The ≡ panel menu (opened from a tab).
 pub fn panel_menu_popup(app: &mut EffectcraftApp, ui: &mut egui::Ui) {
-    let id = egui::Id::new("panel-menu");
+    let id = egui::Id::unique("panel-menu");
     let Some((panel, pos)) = ui.ctx().data(|d| d.get_temp::<(PanelKind, egui::Pos2)>(id)) else { return };
     // The menu opens in the window that shows the panel (a panel can have its own window).
     if app.panel_viewport(ui.ctx(), panel) != ui.ctx().viewport_id() {
