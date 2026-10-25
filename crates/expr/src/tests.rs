@@ -985,6 +985,8 @@ fn shadowing_layer_attribute_names_is_local() {
     let f = fx();
     assert_close!(f.num("var width = 3;\nwidth * 2", 0.0), 6.0);
     assert_close!(f.num("width", 0.0), 20.0, 1e-9);
+    assert_close!(f.num("function width() { return 4; }\nwidth() * 2", 0.0), 8.0);
+    assert_close!(f.num("width", 0.0), 20.0, 1e-9);
 }
 
 #[test]
@@ -1411,7 +1413,7 @@ fn a_kept_layer_reads_the_project_again() {
 #[test]
 fn an_expression_cant_change_the_prelude_for_the_next() {
     let f = fx();
-    let read = "[thisComp.layer(1).index, thisLayer.index, thisLayer('transform').property('rotation').value,                 thisLayer.transform.opacity.value, thisProject.bitsPerChannel, comp(thisComp.name).numLayers]";
+    let read = "[thisComp.layer(1).index, thisLayer.index, thisLayer('transform').property('rotation').value,                 thisLayer.transform.opacity.value, thisProject.bitsPerChannel, comp(thisComp.name).numLayers, width]";
     let before = f.ev(f.a, ROT, read, 0.5).unwrap();
     let attacks = [
         "Comp.prototype.layer = function () { return 0; }",
@@ -1425,6 +1427,10 @@ fn an_expression_cant_change_the_prelude_for_the_next() {
         "__layer = function () { return null; }",
         "__child = function () {}",
         "delete __mkProp",
+        "delete thisLayer",
+        "delete thisComp",
+        "delete width",
+        "Object.defineProperty(globalThis, 'thisComp', { get: function () { return 0; } })",
     ];
     for a in attacks {
         let _ = f.ev(f.a, ROT, &format!("try {{ {a} }} catch (e) {{}} 0"), 0.0);
