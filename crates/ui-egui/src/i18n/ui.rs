@@ -4998,7 +4998,7 @@ const GEORGIAN: &[(&str, &str)] = &[
     ("EffectCraft on GitHub", "EffectCraft GitHub-ზე"),
     ("Motion graphics and visual effects · version {}", "მოძრავი გრაფიკა და ვიზუალური ეფექტები · ვერსია {}"),
     ("New Composition", "ახალი კომპოზიცია"),
-    ("Open Demo Project", "სადემონსტრაციო პროექტის გახსნა"),
+    ("Open Demo Project", "დემო-პროექტის გახსნა"),
     ("Import Footage…", "ვიდეომასალის იმპორტი…"),
     ("Filter recent files", "ბოლო ფაილების გაფილტვრა"),
     ("NAME", "სახელი"),
