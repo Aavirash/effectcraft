@@ -26,7 +26,7 @@ our own scripts; no real-world script library has been run against both apps.
 | Startup / Shutdown folders | yes | not run | missing | plugins.md |
 | `#include`, `#target` directives | yes | `#include` / `//@include` / `#includepath` inline files relative to the including script (once each, nested at most 32 deep, under the scripts' file gate; errors name the included file and line); `#target`, `#targetengine`, `#strict` are ignored | good | `tests_include.rs` (#759); installed scripts and panels have no folder of their own, so they include from the project's folder or absolute paths |
 | `.jsxbin` | yes | no | out of scope | No public specification |
-| Keyboard shortcuts for scripts | yes | no | missing | plugins.md |
+| Keyboard shortcuts for scripts | yes: the scripts of the Scripts folder take keys, by their place in the alphabetical list | Edit ▸ Keyboard Shortcuts lists the scripts of File ▸ Scripts; a key stays with the script's file name | same | `file_scripts_entries_take_keyboard_shortcuts`, `a_key_given_to_a_script_runs_it` ([plugins.md](plugins.md)); ScriptUI panels in the Window menu take no key |
 | Command-line rendering `aerender` | yes | `effectcraft-cli render`, `script`, `exec` | same purpose | `apps/effectcraft-cli` |
 | Essential Graphics scripting hooks | `addToMotionGraphicsTemplate…` | yes (M13.7) | good | — |
 | Agent control (MCP, control channel, every command) | none | yes | beyond | [agents.md](agents.md), [control-protocol.md](control-protocol.md); `list_effects` omits parameter types and ranges (#441) |

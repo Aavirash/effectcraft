@@ -159,8 +159,9 @@ pub fn build(app: &EffectcraftApp) -> NativeMenu {
                             label: e.label.clone(),
                             command: e.command.clone(),
                             params: e.params.clone(),
-                            shortcut: None,
-                            accelerator: None,
+                            // File ▸ Scripts entries show the key a script was given.
+                            shortcut: crate::menus::entry_shortcut(app, e),
+                            accelerator: crate::menus::entry_shortcut(app, e).as_deref().and_then(accelerator),
                             enabled: crate::menus::entry_enabled(app, e),
                             checked: crate::menus::entry_checked(app, e),
                         }));
