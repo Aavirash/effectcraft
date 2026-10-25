@@ -228,7 +228,16 @@ pub fn open_form(app: &mut EffectcraftApp, id: &str, p: &Value) -> bool {
         "file.import" if !has(p, &["importAs", "page"]) && is_pdf(p) => (
             "Import PDF / Illustrator File".into(),
             vec![
-                Field::choice("importAs", "Import Kind", &[("Footage", json!("footage")), ("Composition", json!("composition"))], 0),
+                Field::choice(
+                    "importAs",
+                    "Import Kind",
+                    &[
+                        ("Footage", json!("footage")),
+                        ("Composition", json!("composition")),
+                        ("Composition - Retain Layer Sizes", json!("compositionLayerSizes")),
+                    ],
+                    0,
+                ),
                 Field::num("page", "Page", 1.0),
             ],
         ),
@@ -533,6 +542,8 @@ pub fn open_form(app: &mut EffectcraftApp, id: &str, p: &Value) -> bool {
                             }
                         },
                     ),
+                    // Time Display Style ▸ Frames ▸ Frame Count (also numbers Feet + Frames).
+                    Field::choice("frameStart", "Frame count", &[("Start at 0", json!(0)), ("Start at 1", json!(1))], usize::from(st.frame_start == 1)),
                     Field::choice(
                         "colorEngine",
                         "Color engine",

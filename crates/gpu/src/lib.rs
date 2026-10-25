@@ -317,6 +317,10 @@ impl Accelerator for Gpu {
         self.ctx.name.clone()
     }
 
+    fn available(&self) -> bool {
+        self.ctx.check_health().is_ok()
+    }
+
     fn comp_frame(&self, r: &Renderer, comp: ItemId, t: Tick) -> Option<Image> {
         let img = self.render(r, comp, t);
         if img.is_none() {
@@ -457,3 +461,5 @@ mod tests_fx_warp;
 mod tests_init;
 #[cfg(test)]
 mod tests_particles;
+#[cfg(test)]
+mod tests_wgsl_grammar;
