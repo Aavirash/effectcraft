@@ -194,11 +194,24 @@ fn save_frame_as_png_preserves_alpha_channel() {
 fn save_frame_as_defaults_to_png_sequence_with_alpha() {
     let mut s = Session::default();
     s.execute("comp.new", json!({"name": "Comp", "width": 32, "height": 32, "frameRate": 24, "duration": 1})).unwrap();
-    let r = s.execute("comp.saveFrameAs", json!({"queue": true})).unwrap();
+    let r = s.execute_checked("comp.saveFrameAs", json!({"queue": true})).unwrap();
     assert_eq!(r["queued"], true);
     let it = s.project.render_queue.last().unwrap();
     assert_eq!(it.output.name, "PNG Sequence with Alpha");
     assert_eq!(it.output.channels, effectcraft_project::render_queue::Channels::Rgba);
+
+    // Queued save with transparent: false sets Channels::Rgb (composited over background).
+    s.execute_checked("comp.saveFrameAs", json!({"queue": true, "transparent": false})).unwrap();
+    let it = s.project.render_queue.last().unwrap();
+    assert_eq!(it.output.channels, effectcraft_project::render_queue::Channels::Rgb);
+
+    // Queued save with transparent: true preserves Channels::Rgba.
+    s.execute_checked("comp.saveFrameAs", json!({"queue": true, "transparent": true})).unwrap();
+    let it = s.project.render_queue.last().unwrap();
+    assert_eq!(it.output.channels, effectcraft_project::render_queue::Channels::Rgba);
+
+    s.execute("edit.undo", json!({})).unwrap();
+    s.execute("edit.undo", json!({})).unwrap();
     s.execute("edit.undo", json!({})).unwrap();
     assert!(s.project.render_queue.is_empty());
     s.execute("edit.redo", json!({})).unwrap();
