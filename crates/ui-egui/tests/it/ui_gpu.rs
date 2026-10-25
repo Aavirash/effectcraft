@@ -47,6 +47,9 @@ fn the_interface_draws_and_composites_on_the_cpu_while_the_gpu_compositor_is_bui
     let s = small_session();
     let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).wgpu().build_eframe(move |_| {
         let mut app = EffectcraftApp::new(s);
+        // The status line's 5 s expiry reads the app clock: a manual one makes the steps below
+        // stand for a known span of time.
+        app.use_manual_clock();
         app.hooks.before_gpu_build = Some(Box::new(move || {
             let _ = gate.recv();
         }));
@@ -67,6 +70,14 @@ fn the_interface_draws_and_composites_on_the_cpu_while_the_gpu_compositor_is_bui
     assert_eq!(h.state().session.accel_note.as_deref(), Some(effectcraft_ui_egui::GPU_PREPARING));
     assert!(h.state().frames.last_ms.lock().map(|v| *v > 0.0).unwrap_or(false), "a frame was composited on the CPU meanwhile");
     assert!(h.state_mut().viewer_pixels().is_some(), "the viewer shows that frame");
+    // Other statuses clear after 5 s; this one stays for as long as the build takes (each step
+    // is a quarter of a second).
+    for _ in 0..30 {
+        h.state_mut().clock_mut().advance(0.25);
+        h.step();
+    }
+    assert!(h.state().gpu_initializing());
+    assert_eq!(h.state().ui.status, effectcraft_ui_egui::GPU_PREPARING, "the status line still says so 7.5 s later");
     release.send(()).unwrap();
     settle(&mut h);
     assert!(!h.state().gpu_initializing());

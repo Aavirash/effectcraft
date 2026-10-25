@@ -461,6 +461,13 @@ impl EffectcraftApp {
                 self.ui.status.clear();
                 self.toast = None;
             }
+            // "Preparing the GPU compositor…" stays until the compositor is attached (tens of
+            // seconds on a cold shader cache), not 5 s: `finish_gpu_build` clears it, and the
+            // worker's repaint brings that frame, so nothing needs to tick meanwhile. A click
+            // still dismisses it.
+            if self.ui.status == crate::GPU_PREPARING && self.gpu_initializing() {
+                return;
+            }
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(500));
             if !self.ui.status.is_empty() {
                 let since: f64 = ui.data(|d| d.get_temp(egui::Id::unique("status-since")).unwrap_or(now));
