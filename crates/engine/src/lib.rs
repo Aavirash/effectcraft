@@ -15,6 +15,7 @@ pub mod camera_track;
 pub mod commands;
 pub mod config;
 pub mod demo;
+pub mod doc_path;
 pub mod footage_check;
 pub mod footage_reload;
 pub mod guard;
@@ -344,6 +345,11 @@ fn one_view() -> u8 {
     1
 }
 
+/// `t` as a current time of `comp`: a frame within its duration.
+fn comp_frame_at(comp: &Comp, t: Tick) -> Tick {
+    comp.frame_rate.snap_nearest(t.min(comp.duration - comp.frame_duration()).max(Tick::ZERO))
+}
+
 /// What Copy with Property Links / Copy Expression Only put on the clipboard.
 #[derive(Clone, Debug, PartialEq)]
 pub enum LinkClip {
@@ -388,6 +394,15 @@ pub struct Session {
     pub project: Arc<Project>,
     pub history: History,
     pub revision: u64,
+    /// Process-unique monotonic revision of the on-canvas editor's committed text and session.
+    /// Unlike [`Session::revision`], unrelated project edits do not advance it; the IME receipt
+    /// uses it when surrounding text is unavailable. Read it with
+    /// [`commands::text_edit::ime_stamp_revision`].
+    ///
+    /// Stamps come from a process-global checked allocator and are never rewound: a failed
+    /// atomic batch keeps the highest intermediate stamp. On allocator exhaustion no stamp is
+    /// issued, so an unavailable receipt cannot be accepted with a reused revision.
+    pub ime_revision: u64,
     pub saved_revision: u64,
     /// The project as last opened or saved: the project is unmodified while it is this very
     /// snapshot, so undoing back to the saved state clears the modified mark.
@@ -508,11 +523,15 @@ pub struct Session {
     /// event loop (the desktop app) turn this on; headless sessions run `footage.check` when
     /// they want it.
     pub check_footage_on_open: bool,
+    /// Footage paths that came from a document, with that document ([`doc_path`]).
+    pub stored_paths: doc_path::StoredPaths,
     /// Each footage file's size and modification time when last seen (Settings ▸ Import ▸
     /// Reload Footage Changed on Disk, [`footage_reload`]).
     pub footage_stamps: std::collections::HashMap<String, footage_reload::Stamp>,
     /// The stamps being taken on a worker thread ([`footage_reload::start_scan`]).
     pub footage_scan: Option<footage_reload::Scan>,
+    /// The disk cache's footage salt and the footage it was taken for ([`Session::refresh_disk_salt`]).
+    pub disk_salt: Option<(u64, u64)>,
     /// How many script-issued commands are running ([`Session::execute_for_script`]): while one
     /// is, settings that guard what scripts may do can't change (see
     /// [`prefs::Scripting::same_permissions`]).
@@ -552,6 +571,8 @@ impl Default for Session {
             project,
             history: History::default(),
             revision: 0,
+            // A fresh session gets its own process-monotonic stamp even before its first edit.
+            ime_revision: commands::text_edit::next_ime_revision().unwrap_or(u64::MAX),
             saved_revision: 0,
             path: None,
             state: EditorState { snapping: true, view_layout: 1, ..Default::default() },
@@ -608,7 +629,9 @@ impl Default for Session {
             next_task_id: 1,
             learn: None,
             check_footage_on_open: false,
+            stored_paths: Default::default(),
             footage_stamps: Default::default(),
+            disk_salt: None,
             footage_scan: None,
             script_calls: ScriptCalls::default(),
         }
@@ -674,7 +697,25 @@ impl Session {
     }
 
     /// Apply an undoable edit. `merge`: consecutive edits with the same key fold into one step.
+    ///
+    /// Every edit is an external boundary for the on-canvas text editor: if it replaced the
+    /// document the editor is showing, the selection is clamped and the editor gets a fresh IME
+    /// epoch. The editor's own typing goes through `edit_text_doc`, which owns that
+    /// document and must not treat its own keystrokes as a replacement.
     pub fn edit<T>(&mut self, label: &str, merge: Option<&str>, f: impl FnOnce(&mut Project, &mut EditorState) -> Result<T>) -> Result<T> {
+        let edited = commands::text_edit::active_editor_snapshot(self);
+        let out = self.edit_inner(label, merge, f)?;
+        commands::text_edit::after_external_change(self, edited.as_ref());
+        Ok(out)
+    }
+
+    /// [`Session::edit`] for the on-canvas editor's own text changes. Its document is the one
+    /// the editor owns, so a change here is typing, not a replacement behind the IME's back.
+    pub(crate) fn edit_text_doc<T>(&mut self, label: &str, merge: Option<&str>, f: impl FnOnce(&mut Project, &mut EditorState) -> Result<T>) -> Result<T> {
+        self.edit_inner(label, merge, f)
+    }
+
+    fn edit_inner<T>(&mut self, label: &str, merge: Option<&str>, f: impl FnOnce(&mut Project, &mut EditorState) -> Result<T>) -> Result<T> {
         let before = self.project.clone();
         let mut p = (*self.project).clone();
         let mut st = self.state.clone();
@@ -721,16 +762,59 @@ impl Session {
         Ok(r)
     }
 
+    /// Note a change to the on-canvas editor's committed text or session.
+    ///
+    /// Frontends compare this with [`commands::text_edit::ime_stamp_revision`]; an unrelated
+    /// project change must not advance it.
+    pub(crate) fn note_text_edit_change(&mut self) {
+        // Checked process-wide allocation: a stamp is never wrapped or reused. On exhaustion
+        // keep the previous value; an unavailable before/after pair then compares equal and
+        // earns no receipt instead of accepting a stale revision.
+        if let Some(revision) = commands::text_edit::next_ime_revision() {
+            self.ime_revision = self.ime_revision.max(revision);
+        }
+    }
+
     pub fn bump(&mut self) {
         self.revision += 1;
         // Back at the saved state (undo, redo, a history jump or a rolled-back batch).
         if Arc::ptr_eq(&self.project, &self.saved_project) {
             self.saved_revision = self.revision;
         }
-        if self.disk_cache.is_some() {
-            self.layer_cache.set_disk_salt(effectcraft_render::disk_cache::footage_salt(&self.project));
-        }
+        self.refresh_disk_salt(false);
         self.events.push(Event::ProjectChanged { revision: self.revision });
+    }
+
+    /// Salt the disk cache's layer keys with the project's footage files
+    /// ([`effectcraft_render::disk_cache::footage_salt`]). Taking it reads the size and time of
+    /// every file, every frame of an image sequence included, so it is taken again only when the
+    /// footage items changed, or with `force` (a project opened, footage reloaded, the disk cache
+    /// attached), not at every edit: with a few large sequences that cost each keystroke in a
+    /// text field over half a second (#1926).
+    pub fn refresh_disk_salt(&mut self, force: bool) -> Option<u64> {
+        use std::hash::{Hash, Hasher};
+        if self.disk_cache.is_none() {
+            self.disk_salt = None;
+            return None;
+        }
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        for (id, it) in &self.project.items {
+            if let effectcraft_project::ItemKind::Footage(f) = &it.kind {
+                id.hash(&mut h);
+                format!("{f:?}").hash(&mut h);
+            }
+        }
+        let footage = h.finish();
+        if let Some((seen, salt)) = self.disk_salt
+            && seen == footage
+            && !force
+        {
+            return Some(salt);
+        }
+        let salt = effectcraft_render::disk_cache::footage_salt(&self.project);
+        self.disk_salt = Some((footage, salt));
+        self.layer_cache.set_disk_salt(salt);
+        Some(salt)
     }
 
     /// Set a comp's Resolution. As in After Effects it is saved with the project (which becomes
@@ -763,24 +847,46 @@ impl Session {
 
     pub fn undo(&mut self) -> bool {
         let Some((label, p)) = self.history.undo.pop() else { return false };
+        let edited = commands::text_edit::active_editor_snapshot(self);
         let cur = std::mem::replace(&mut self.project, p);
         self.keep_view_settings(&cur);
         self.history.redo.push((label, cur));
         self.history.merge_key = None;
-        self.sanitize_state();
+        self.sanitize_after_replacement(edited.as_ref());
         self.bump();
         true
     }
 
     pub fn redo(&mut self) -> bool {
         let Some((label, p)) = self.history.redo.pop() else { return false };
+        let edited = commands::text_edit::active_editor_snapshot(self);
         let cur = std::mem::replace(&mut self.project, p);
         self.keep_view_settings(&cur);
         self.history.undo.push((label, cur));
         self.history.merge_key = None;
-        self.sanitize_state();
+        self.sanitize_after_replacement(edited.as_ref());
         self.bump();
         true
+    }
+
+    /// Keep selections valid after the project was replaced by another state (undo, redo, a
+    /// history jump, a rollback): the same layer id can name a different document, so the
+    /// on-canvas editor gets a fresh IME epoch only when its own document changed.
+    ///
+    /// Normally `before` is [`commands::text_edit::active_editor_snapshot`] taken from the
+    /// state this call is about to replace. Atomic batch rollback is the exception: it has
+    /// already restored the pre-batch state and passes the snapshot of the failing intermediate
+    /// state, so a transient restart or component switch inside the batch still rejects reviving
+    /// the old composition. A restored state that still has the same composition, layer and
+    /// editor session and shows byte/style-equivalent text (an opacity or other property undo)
+    /// keeps the editor's owner and selection; a different document, comp, layer or session clamps the
+    /// selection and starts a new epoch. A closed editor stays closed, and a fallback comp's
+    /// matching layer id never inherits the old comp's session. `None` means no editor was open
+    /// when the snapshot was taken; if one is open after the replacement it is treated as an
+    /// unverified document replacement, so it never inherits an old composition.
+    pub fn sanitize_after_replacement(&mut self, before: Option<&commands::text_edit::EditorSnapshot>) {
+        self.sanitize_state();
+        commands::text_edit::after_replacement(self, before);
     }
 
     /// Drop selections that no longer exist. Each comp keeps its own selection (#1001); a layer id
@@ -799,6 +905,8 @@ impl Session {
         });
         if self.state.active_comp.is_some_and(|c| p.comp(c).is_none()) {
             self.clear_live_selection();
+            // A matching layer id in the fallback comp is not the document being edited.
+            self.state.text_edit = None;
             self.state.active_comp = self.state.open_comps.first().copied();
             if let Some(id) = self.state.active_comp {
                 self.recall_selection(id);
@@ -858,17 +966,22 @@ impl Session {
         self.state.active_comp.and_then(|c| self.state.times.get(&c).copied()).unwrap_or(Tick::ZERO)
     }
 
+    /// Move the active comp's current time.
+    ///
+    /// Time is an external boundary for the on-canvas text editor too: an animated Source Text
+    /// can show a different document at another time. The document is snapshotted only while an
+    /// editor is open, so playback with no text editor does no text copying.
     pub fn set_time(&mut self, t: Tick) {
         if let Some(c) = self.state.active_comp {
-            let comp = self.project.comp(c);
-            let t = match comp {
-                Some(comp) => comp.frame_rate.snap_nearest(t.clamp(Tick::ZERO, comp.duration - comp.frame_duration())),
-                None => t,
-            };
+            let t = self.project.comp(c).map_or(t, |comp| comp_frame_at(comp, t));
+            let edited = commands::text_edit::active_editor_snapshot(self);
             self.state.times.insert(c, t);
             if self.prefs.general.sync_time_related_items {
-                self.sync_related_times(c, t);
+                // Direct call: this `set_time` owns the editor snapshot for both time changes,
+                // so a synced move does not take a second snapshot or start a second epoch.
+                self.sync_related_times_inner(c, t);
             }
+            commands::text_edit::after_external_change(self, edited.as_ref());
         }
     }
 
@@ -876,6 +989,14 @@ impl Session {
     /// `comp` moves the current time of the comps nested in it (through their precomp layers'
     /// timing) and of the comps it is nested in, so every related viewer shows the same moment.
     pub fn sync_related_times(&mut self, comp: ItemId, t: Tick) {
+        // Moving a related comp can move the active one, so the editor's document is checked
+        // here too; the snapshot is skipped entirely when no text editor is open.
+        let edited = commands::text_edit::active_editor_snapshot(self);
+        self.sync_related_times_inner(comp, t);
+        commands::text_edit::after_external_change(self, edited.as_ref());
+    }
+
+    fn sync_related_times_inner(&mut self, comp: ItemId, t: Tick) {
         let mut seen = std::collections::BTreeSet::from([comp]);
         let mut todo = vec![(comp, t)];
         let mut found = vec![];
@@ -919,6 +1040,9 @@ impl Session {
         self.state.active_comp = Some(id);
         self.recall_selection(id);
         self.state.current_track = None;
+        // A text-edit session belongs to the comp that owned it. Switching comps ends it; even
+        // a same-numbered layer in the new comp must not inherit the old IME composition.
+        self.state.text_edit = None;
     }
 
     /// Leave no comp active, keeping the one that was active in [`EditorState::comp_selections`].
@@ -927,6 +1051,7 @@ impl Session {
         self.state.active_comp = None;
         self.clear_live_selection();
         self.state.current_track = None;
+        self.state.text_edit = None;
     }
 
     fn remember_selection(&mut self) {
@@ -983,15 +1108,24 @@ impl Session {
         self.events.push(Event::OpenComp(id));
     }
 
-    /// The open compositions, as a project file records them ([`effectcraft_project::SavedView`]).
+    /// The open compositions and their current times, as a project file records them
+    /// ([`effectcraft_project::SavedView`]).
     pub fn saved_view(&self) -> effectcraft_project::SavedView {
-        effectcraft_project::SavedView { active_comp: self.state.active_comp, open_comps: self.state.open_comps.clone() }
+        let comp_times = self.state.times.iter().filter(|(id, _)| self.project.comp(**id).is_some()).map(|(id, t)| (*id, *t)).collect();
+        effectcraft_project::SavedView { active_comp: self.state.active_comp, open_comps: self.state.open_comps.clone(), comp_times }
     }
 
-    /// Reopen the compositions a project file was saved with (#748). Ids that no longer name a
-    /// comp are skipped; with none left the project stays on the comp [`Session::replace_project`]
-    /// opened (its first), as files from before the view was saved do.
+    /// Reopen the compositions a project file was saved with (#748), each at its saved current
+    /// time (#1714). Ids that no longer name a comp are skipped; with none left the project stays
+    /// on the comp [`Session::replace_project`] opened (its first), as files from before the view
+    /// was saved do.
     pub fn restore_view(&mut self, view: &effectcraft_project::SavedView) {
+        for (id, t) in &view.comp_times {
+            if let Some(comp) = self.project.comp(*id) {
+                let t = comp_frame_at(comp, *t);
+                self.state.times.insert(*id, t);
+            }
+        }
         let mut open: Vec<ItemId> = Vec::new();
         for id in view.open_comps.iter().copied().filter(|id| self.project.comp(*id).is_some()) {
             if !open.contains(&id) {
@@ -1022,12 +1156,18 @@ impl Session {
 
     /// Render a comp frame with the session's footage + expression hosts.
     pub fn render(&self, comp: ItemId, t: Tick, opts: RenderOpts) -> Image {
+        self.renderer(opts).comp_frame(comp, t)
+    }
+
+    /// The renderer [`Session::render`] uses: the session's footage, expressions, layer cache and
+    /// accelerator, and the render prefs (nested switches, draft shadows) over `opts`.
+    pub fn renderer(&self, opts: RenderOpts) -> Renderer<'_> {
         let opts = RenderOpts { nested_switches: self.prefs.general.switches_affect_nested_comps, draft_shadows: self.prefs.three_d.realtime_shadows, ..opts };
         let mut r = Renderer::new(&self.project, self.footage.as_ref(), opts);
         r.expr = self.expr.as_deref();
         r.cache = Some(&self.layer_cache);
         r.accel = self.accel.as_deref();
-        r.comp_frame(comp, t)
+        r
     }
 
     /// Resolve a comp reference (item id number or name; `None`/null = the active comp).
@@ -1128,6 +1268,7 @@ impl Session {
             job.wait();
         }
         self.render_job = None;
+        self.stored_paths = Default::default();
         self.stop_track();
         self.track_job = None;
         self.stop_mask_track();
@@ -1154,6 +1295,8 @@ impl Session {
         }
         self.layer_cache.clear();
         self.project = Arc::new(p);
+        // Its files may have changed since they were last stamped.
+        self.disk_salt = None;
         self.history = History::default();
         self.state = EditorState { snapping: true, view_layout: 1, ..Default::default() };
         self.path = path;
@@ -1227,6 +1370,10 @@ mod tests_codec_options;
 #[cfg(test)]
 mod tests_color_view;
 #[cfg(test)]
+mod tests_crypto_pick;
+#[cfg(test)]
+mod tests_delete_keys;
+#[cfg(test)]
 mod tests_disk_cache;
 #[cfg(test)]
 mod tests_effects;
@@ -1272,6 +1419,8 @@ mod tests_project_items;
 mod tests_proxy;
 #[cfg(test)]
 mod tests_quick_offset;
+#[cfg(test)]
+mod tests_replace_source;
 #[cfg(test)]
 mod tests_rig3d;
 #[cfg(test)]
