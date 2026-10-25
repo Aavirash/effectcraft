@@ -4978,7 +4978,7 @@ const GEORGIAN: &[(&str, &str)] = &[
     ("Import PDF / Illustrator File", "PDF / Illustrator ფაილის იმპორტი"),
     ("Import Photoshop File", "Photoshop ფაილის იმპორტი"),
     ("Interpret Unlabeled Alpha As", "არამონიშნული ალფას ინტერპრეტაცია როგორც"),
-    ("Join the ArtCraft Discord", "შემოუერთდით ArtCraft-ის Discord-ს"),
+    ("Join the ArtCraft Discord", "შემოგვიერთდით Discord-ზე"),
     ("Mercury GPU Acceleration ({})", "Mercury GPU აჩქარება ({})"),
     ("Mercury Software Only", "მხოლოდ Mercury Software"),
     ("OCIO (built-in ACES config)", "OCIO (ჩაშენებული ACES კონფიგურაცია)"),
