@@ -876,7 +876,9 @@ impl Comp {
     /// (even during playback) leaves every rendered frame valid. Protected time markers with a
     /// duration set the timing (Responsive Design), so those always count.
     pub fn same_pixels_with(&self, o: &Comp, with_markers: bool) -> bool {
-        self.same_settings(o, with_markers) && self.layers.len() == o.layers.len() && self.layers.iter().zip(&o.layers).all(|(a, b)| a.same_pixels_with(b, with_markers))
+        self.same_settings(o, with_markers)
+            && self.layers.len() == o.layers.len()
+            && self.layers.iter().zip(&o.layers).all(|(a, b)| a.same_pixels_with(b, with_markers))
     }
 
     /// [`Self::same_pixels_with`] but for the layers.
