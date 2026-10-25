@@ -1422,6 +1422,15 @@ fn the_kept_layers_are_bounded() {
     assert_close!(f.num(&format!("{same} * 100 + thisLayer.index * 10 + thisLayer.name.length"), 0.0), 111.0);
 }
 
+/// A change to `Object.prototype` doesn't reach the kept layers: a frozen object put there under
+/// the comp's id, before any of its layers is kept, doesn't stop them being kept.
+#[test]
+fn the_kept_layers_dont_go_through_object_prototype() {
+    let f = fx();
+    let _ = f.ev(f.a, ROT, "try { Object.prototype[thisComp.__c] = Object.freeze({}); } catch (e) {} 0", 0.0);
+    assert_close!(f.num("thisLayer === thisComp.layer(thisLayer.index) ? 1 : 0", 0.0), 1.0);
+}
+
 /// The prelude is kept from one evaluation to the next, so an expression can't change its object
 /// model or internals for the ones after it.
 #[test]
