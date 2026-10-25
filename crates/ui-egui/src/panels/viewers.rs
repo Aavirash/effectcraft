@@ -89,7 +89,7 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, id: u32, rect: Rect) {
     let ctx = ui.ctx().clone();
     let p = ui.painter().with_clip_rect(rect);
     p.rect_filled(rect, 0.0, t.pasteboard);
-    let resp = ui.interact(rect, egui::Id::new(("passive-viewer", id)), Sense::click()).on_hover_text(tr("Click to make this viewer active"));
+    let resp = ui.interact(rect, egui::Id::unique(("passive-viewer", id)), Sense::click()).on_hover_text(tr("Click to make this viewer active"));
     app.auto.add(&format!("viewers.{id}"), rect, "Composition viewer (click to make it active)");
     match comp_of(app, id).and_then(|cid| Some((cid, app.session.project.comp(cid)?.clone()))) {
         Some((cid, c)) => {
@@ -137,7 +137,7 @@ fn set_texture(
     dc: Option<effectcraft_engine::viewer::DisplayColor>,
     dkey: u64,
 ) {
-    let dc_id = egui::Id::new(("passive-viewer-display", id));
+    let dc_id = egui::Id::unique(("passive-viewer-display", id));
     let same_display = ctx.data(|d| d.get_temp::<u64>(dc_id)) == Some(dkey);
     if let Some((k, _)) = app.passive_tex.get_mut(&id)
         && *k == key
@@ -297,5 +297,5 @@ pub fn on_close(app: &mut EffectcraftApp, p: PanelKind) {
 /// The tab label of viewer `id` ("Composition Intro").
 pub fn title(app: &EffectcraftApp, id: u32) -> Option<String> {
     let c = comp_of(app, id)?;
-    Some(format!("Composition {}", app.session.project.item(c)?.name))
+    Some(format!("{} {}", crate::i18n::command_label("window.panel", "Composition"), app.session.project.item(c)?.name))
 }

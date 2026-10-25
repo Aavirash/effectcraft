@@ -32,12 +32,13 @@ pub type Scan = Arc<Mutex<Option<Vec<(String, Option<Stamp>)>>>>;
 /// The files footage items read: each item's file and every frame of an image sequence. Image
 /// sequences count only with Automatically Reload Footage set to All Footage (After Effects'
 /// default, Non-Sequence Footage, leaves them alone: thousands of frames on a share add up).
+/// Items with a stored path that is not followed ([`crate::doc_path`]) are not watched.
 fn watched(s: &Session) -> BTreeSet<String> {
     let sequences = s.prefs.import.auto_reload_footage == "all";
     let mut paths = BTreeSet::new();
     for it in s.project.items.values() {
         if let ItemKind::Footage(f) = &it.kind {
-            if !f.sequence.is_empty() && !sequences {
+            if (!f.sequence.is_empty() && !sequences) || s.stored_paths.check(f).is_err() {
                 continue;
             }
             if !f.path.is_empty() {
@@ -56,6 +57,12 @@ fn psd_layer(s: &Session, path: &str, l: &SourceLayer) -> Option<(u32, Option<(u
     let found = psd.layers.get(l.index as usize).filter(|x| x.name == l.name).or_else(|| psd.layers.iter().find(|x| x.name == l.name))?;
     let size = (!found.rect.is_empty()).then(|| (found.rect.width(), found.rect.height()));
     Some((u32::try_from(found.index).ok()?, size))
+}
+
+fn vector_size(s: &Session, f: &Footage) -> Option<(u32, u32)> {
+    let bytes = s.services.read_file(&f.path).ok()?;
+    let doc = crate::vector::vector_doc(&f.path, &bytes, f.layer.as_ref(), f.page)?.ok()?;
+    (!doc.root.children.is_empty()).then(|| doc.pixel_size())
 }
 
 /// Footage `f` as its file is now, given the importer's fresh look at the file (`probed`).
@@ -89,6 +96,7 @@ fn refreshed(s: &Session, f: &Footage, probed: Footage) -> Footage {
     match &f.layer {
         // A smart object's size is its embedded file's, recorded at import.
         Some(l) if l.embedded.is_some() => (w, h) = (f.width, f.height),
+        Some(_) if crate::vector::is_vector(f) => (w, h) = vector_size(s, f).unwrap_or((f.width, f.height)),
         Some(l) => match psd_layer(s, &f.path, l) {
             Some((index, size)) => {
                 if let Some(nl) = nf.layer.as_mut() {
@@ -121,16 +129,23 @@ pub fn reload_items(s: &mut Session, ids: &[ItemId]) -> crate::Result<usize> {
 /// writing it) is left as it was. Returns the number reloaded and the files that couldn't be read
 /// (only without `undoable`).
 fn reload(s: &mut Session, ids: &[ItemId], undoable: bool) -> crate::Result<(usize, BTreeSet<String>)> {
-    if s.importer.is_none() {
+    let Some(importer) = s.importer.clone() else {
         return Err(crate::EngineError::Other("media import is not available in this build".into()));
-    }
+    };
     let mut updates = vec![];
     let mut paths = BTreeSet::new();
     let mut failed = BTreeSet::new();
     for i in ids {
         if let Some(ItemKind::Footage(f)) = s.project.item(*i).map(|x| &x.kind) {
-            // Probed the way it imports by default, so a sequence is found as one.
-            let nf = match s.probe_footage(&f.path) {
+            // A sequence is probed the way it imports by default, so its run is found again; any
+            // other item is its one file, not the run a numbered still sits in (#2074). A path
+            // that is not followed is not read.
+            let probed = s
+                .stored_paths
+                .check(f)
+                .map_err(|(p, why)| crate::doc_path::refusal(&p, why))
+                .and_then(|_| if f.kind == FootageKind::Sequence { s.probe_footage(&f.path) } else { importer.probe(&f.path) });
+            let nf = match probed {
                 Ok(p) => refreshed(s, f, p),
                 Err(_) if undoable => Footage { missing: true, ..f.clone() },
                 Err(_) => {
@@ -183,6 +198,8 @@ fn forget(s: &mut Session, paths: &BTreeSet<String>) {
         s.footage.forget(p);
     }
     s.layer_cache.clear();
+    // Reloaded files may keep their footage settings but not their size and time.
+    s.refresh_disk_salt(true);
     s.events.push(crate::Event::PurgeCaches);
 }
 

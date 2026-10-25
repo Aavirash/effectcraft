@@ -109,6 +109,15 @@ fn shown_dims(l: &Layer, pr: &Property) -> usize {
     if pr.shown_dims > 0 && !l.is_3d() { (pr.shown_dims as usize).min(n) } else { n.min(4) }
 }
 
+/// The speed graph's value of dimension `d` at layer time `lt` (one curve for a spatial property).
+fn speed_at(pr: &Property, spatial: bool, d: usize, lt: Tick) -> f64 {
+    if spatial {
+        effectcraft_engine::keyframe::speed(&pr.keys, lt, true)
+    } else {
+        effectcraft_engine::keyframe::velocity(&pr.keys, lt, false).get(d).copied().unwrap_or(0.0).abs()
+    }
+}
+
 /// Build the curves for the visible time span.
 fn curves<'a>(app: &EffectcraftApp, comp: &'a Comp, ectx: &EvalCtx, tm: TMap, plot: Rect, speed: bool) -> Vec<Curve<'a>> {
     let sel = &app.session.state.selected_keys;
@@ -126,16 +135,7 @@ fn curves<'a>(app: &EffectcraftApp, comp: &'a Comp, ectx: &EvalCtx, tm: TMap, pl
                 let x = plot.min.x + plot.width() * i as f32 / (n - 1) as f32;
                 let ct = tm.t(x);
                 let tt = Tick::from_seconds_f64(ct);
-                let v = if speed {
-                    let lt = l.layer_time(tt);
-                    if spatial {
-                        effectcraft_engine::keyframe::speed(&pr.keys, lt, true)
-                    } else {
-                        effectcraft_engine::keyframe::velocity(&pr.keys, lt, false).get(d).copied().unwrap_or(0.0).abs()
-                    }
-                } else {
-                    ectx.at(tt).value(l, pr).components().get(d).copied().unwrap_or(0.0)
-                };
+                let v = if speed { speed_at(pr, spatial, d, l.layer_time(tt)) } else { ectx.at(tt).value(l, pr).components().get(d).copied().unwrap_or(0.0) };
                 pts.push((ct, v));
             }
             let mut keys = vec![];
@@ -190,7 +190,7 @@ impl ButtonBar {
     const MORE_W: f32 = 24.0;
 
     fn new(ctx: &egui::Context, bar: Rect) -> Self {
-        let chosen = ctx.data_mut(|d| d.remove_temp::<String>(egui::Id::new(MORE_POPUP).with("chosen")));
+        let chosen = ctx.data_mut(|d| d.remove_temp::<String>(egui::Id::unique(MORE_POPUP).with("chosen")));
         ButtonBar { x: bar.min.x + 8.0, limit: bar.max.x - 8.0 - Self::MORE_W - 4.0, hidden: Vec::new(), chosen }
     }
 
@@ -201,7 +201,7 @@ impl ButtonBar {
         }
         let t = app.tokens;
         let r = Rect::from_min_size(pos2(bar.max.x - 8.0 - Self::MORE_W, bar.center().y - 9.0), vec2(Self::MORE_W, 18.0));
-        let pid = egui::Id::new(MORE_POPUP);
+        let pid = egui::Id::unique(MORE_POPUP);
         let resp = ui.interact(r, pid.with("button"), Sense::click()).on_hover_text(crate::i18n::tr("More"));
         p.rect_filled(r, 3.0, if resp.hovered() { t.hover } else { Color32::from_rgb(0x2c, 0x2c, 0x2c) });
         p.text(r.center(), Align2::CENTER_CENTER, "»", Tokens::ui(12.0), t.text);
@@ -252,7 +252,7 @@ fn text_button(
         return bar.chosen.as_deref() == Some(id);
     }
     let r = Rect::from_min_size(pos2(bar.x, y - 9.0), vec2(w, 18.0));
-    let resp = ui.interact(r, egui::Id::new(("graph-btn", id)), Sense::click()).on_hover_text(tip);
+    let resp = ui.interact(r, egui::Id::unique(("graph-btn", id)), Sense::click()).on_hover_text(tip);
     p.rect_filled(
         r,
         3.0,
@@ -278,19 +278,19 @@ pub(crate) fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, p: &egui::Painte
     let plot = Rect::from_min_max(area.min + vec2(0.0, 6.0), pos2(area.max.x, area.max.y - footer_h));
     let bar = Rect::from_min_max(pos2(area.min.x, area.max.y - footer_h), area.max);
     // Background first so keys and handles (added later) sit on top for hit-testing.
-    let bg = ui.interact(plot, egui::Id::new("graph-bg"), Sense::click_and_drag());
+    let bg = ui.interact(plot, egui::Id::unique("graph-bg"), Sense::click_and_drag());
     p.rect_filled(area, 0.0, Color32::from_rgb(0x1d, 0x1d, 0x1d));
     app.auto.add("timeline.graph", plot, &app.ui.timeline.graph_mode.clone());
     let speed = speed_graph(app, comp);
     let cs = curves(app, comp, ectx, tm, plot, speed);
     // Just opened, or the graph type changed (value and speed have different units): frame the
     // graphs (Fit Selection to View, else Fit All Graphs to View).
-    let was_speed_id = egui::Id::new("graph-was-speed");
+    let was_speed_id = egui::Id::unique("graph-was-speed");
     let type_changed = ctx.data(|d| d.get_temp::<bool>(was_speed_id)).is_some_and(|was| was != speed);
     ctx.data_mut(|d| d.insert_temp(was_speed_id, speed));
     if ctx.data_mut(|d| d.remove_temp::<bool>(fit_pending_id())).unwrap_or(false) || type_changed {
         if cs.iter().any(|c| c.keys.iter().any(|k| k.sel)) {
-            fit_selection(app, &cs, tm, plot);
+            fit_selection(app, &cs, tm, plot, speed);
         } else {
             fit_all(app);
         }
@@ -322,7 +322,7 @@ pub(crate) fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, p: &egui::Painte
     let pad = (hi - lo) * 0.08;
     let auto = (lo - pad, hi + pad);
     // While a key or handle is being dragged the scale stays put (no feedback loop).
-    let drag_id = egui::Id::new("graph-dragging");
+    let drag_id = egui::Id::unique("graph-dragging");
     let dragging = ctx.data(|d| d.get_temp::<bool>(drag_id)).unwrap_or(false) && ctx.input(|i| i.pointer.any_down());
     let (lo, hi) = if app.ui.timeline.graph_auto_zoom && !dragging { auto } else { app.ui.timeline.graph_range.unwrap_or(auto) };
     if app.ui.timeline.graph_auto_zoom && !dragging {
@@ -398,7 +398,7 @@ pub(crate) fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, p: &egui::Painte
             let kp = pos2(tm.x(k.t), ymap(k.v));
             // In the speed graph an end key rises with the handle being dragged; skipping it once it
             // leaves the plot would drop the handle's widget and end the drag at the top edge.
-            let handle_dragged = || ["in", "out"].iter().any(|side| ctx.is_being_dragged(egui::Id::new(("ghandle", uid, d, k.idx, *side))));
+            let handle_dragged = || ["in", "out"].iter().any(|side| ctx.is_being_dragged(egui::Id::unique(("ghandle", uid, d, k.idx, *side))));
             if !plot.expand(6.0).contains(kp) && !handle_dragged() {
                 continue;
             }
@@ -411,7 +411,7 @@ pub(crate) fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, p: &egui::Painte
                 pc.circle_filled(hp, 3.5, Color32::from_rgb(0xd8, 0xd8, 0x60));
                 let side = if h.out { "out" } else { "in" };
                 let hr = Rect::from_center_size(hp, vec2(10.0, 10.0));
-                let hresp = ui.interact(hr, egui::Id::new(("ghandle", uid, d, k.idx, side)), Sense::drag());
+                let hresp = ui.interact(hr, egui::Id::unique(("ghandle", uid, d, k.idx, side)), Sense::drag());
                 app.auto.add(&format!("timeline.graph.handle.{uid}.{d}.{}.{side}", k.idx), hr, "Bezier handle");
                 // The same side's handles of every selected key move with it, by as much as the
                 // pointer moved (After Effects), in one undo step.
@@ -464,7 +464,7 @@ pub(crate) fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, p: &egui::Painte
             pc.rect_filled(Rect::from_center_size(kp, vec2(7.0, 7.0)), 0.0, col);
             pc.rect_stroke(Rect::from_center_size(kp, vec2(7.0, 7.0)), 0.0, Stroke::new(1.0, c.color), StrokeKind::Outside);
             let kr = Rect::from_center_size(kp, vec2(11.0, 11.0));
-            let kresp = ui.interact(kr, egui::Id::new(("gkey", uid, d, k.idx)), Sense::click_and_drag());
+            let kresp = ui.interact(kr, egui::Id::unique(("gkey", uid, d, k.idx)), Sense::click_and_drag());
             app.auto.add(&format!("timeline.graph.key.{uid}.{d}.{}", k.idx), kr, &c.prop.name);
             let mods = ui.input(|i| i.modifiers);
             let key = &c.prop.keys[k.idx];
@@ -526,12 +526,12 @@ pub(crate) fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, p: &egui::Painte
         let br = Rect::from_two_pos(o, cur);
         pc.rect_filled(br, 0.0, t.accent.gamma_multiply(0.12));
         pc.rect_stroke(br, 0.0, Stroke::new(1.0, t.accent), StrokeKind::Middle);
-        ctx.data_mut(|d| d.insert_temp(egui::Id::new("graph-box"), br));
+        ctx.data_mut(|d| d.insert_temp(egui::Id::unique("graph-box"), br));
     }
     if bg.drag_stopped()
-        && let Some(br) = ctx.data(|d| d.get_temp::<Rect>(egui::Id::new("graph-box")))
+        && let Some(br) = ctx.data(|d| d.get_temp::<Rect>(egui::Id::unique("graph-box")))
     {
-        ctx.data_mut(|d| d.remove::<Rect>(egui::Id::new("graph-box")));
+        ctx.data_mut(|d| d.remove::<Rect>(egui::Id::unique("graph-box")));
         let keys: Vec<serde_json::Value> = key_screens.iter().filter(|(_, sp)| br.contains(*sp)).map(|(k, _)| k.clone()).collect();
         actions.push(("keys.select".into(), json!({"keys": keys, "add": ui.input(|i| i.modifiers.shift)})));
     }
@@ -584,7 +584,7 @@ pub(crate) fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, p: &egui::Painte
         fit_all(app);
     }
     if text_button(app, ui, p, &mut buttons, y, "Fit Selection", false, "fitSelection", "Fit selection to view") {
-        fit_selection(app, &cs, tm, plot);
+        fit_selection(app, &cs, tm, plot, speed);
     }
     buttons.x += 6.0;
     let (snap, reference, tbox) = (app.ui.timeline.graph_snap, app.ui.timeline.graph_reference, app.ui.timeline.graph_transform_box);
@@ -628,14 +628,14 @@ fn fit_all(app: &mut EffectcraftApp) {
 }
 
 fn fit_pending_id() -> egui::Id {
-    egui::Id::new("graph-fit-pending")
+    egui::Id::unique("graph-fit-pending")
 }
 
 /// Called every Timeline frame with whether the Graph Editor is on: switching it on (header
 /// button, menu, Shift+F3 or the control channel) frames the graphs on its first frame, when the
 /// plot rect is known, as After Effects does.
 pub(crate) fn track_open(ctx: &egui::Context, on: bool) {
-    let was_id = egui::Id::new("graph-editor-was-on");
+    let was_id = egui::Id::unique("graph-editor-was-on");
     let was = ctx.data(|d| d.get_temp::<bool>(was_id)).unwrap_or(false);
     ctx.data_mut(|d| {
         d.insert_temp(was_id, on);
@@ -646,7 +646,7 @@ pub(crate) fn track_open(ctx: &egui::Context, on: bool) {
 }
 
 /// Zoom time and value to the selected keys (and their handles).
-fn fit_selection(app: &mut EffectcraftApp, cs: &[Curve], tm: TMap, plot: Rect) {
+fn fit_selection(app: &mut EffectcraftApp, cs: &[Curve], tm: TMap, plot: Rect, speed: bool) {
     let mut t0 = f64::INFINITY;
     let mut t1 = f64::NEG_INFINITY;
     let mut v0 = f64::INFINITY;
@@ -675,6 +675,26 @@ fn fit_selection(app: &mut EffectcraftApp, cs: &[Curve], tm: TMap, plot: Rect) {
                     v0 = v0.min(n.v);
                     v1 = v1.max(n.v);
                 }
+            }
+        }
+    }
+    // In the speed graph eased keys sit at speed 0 and the curve peaks between them (#1617):
+    // frame the curve from the first to the last selected key. A lone key has its handles on
+    // the speed graph, so the check above misses it: it frames its neighbouring segments here.
+    if speed {
+        for c in cs {
+            let (Some(first), Some(last)) = (c.keys.iter().position(|k| k.sel), c.keys.iter().rposition(|k| k.sel)) else { continue };
+            let (a, b) = if first == last { (first.saturating_sub(1), last + 1) } else { (first, last) };
+            let (Some(ka), Some(kb)) = (c.keys.get(a), c.keys.get(b.min(c.keys.len().saturating_sub(1)))) else { continue };
+            t0 = t0.min(ka.t);
+            t1 = t1.max(kb.t);
+            let (s0, s1) = (ka.time.seconds(), kb.time.seconds());
+            const SAMPLES: usize = 128;
+            for i in 0..=SAMPLES {
+                let lt = Tick::from_seconds_f64(s0 + (s1 - s0) * i as f64 / SAMPLES as f64);
+                let v = speed_at(c.prop, !c.editable, c.dim, lt);
+                v0 = v0.min(v);
+                v1 = v1.max(v);
             }
         }
     }
@@ -720,7 +740,7 @@ struct KeyGrab {
 }
 
 fn key_grab_id() -> egui::Id {
-    egui::Id::new("graph-key-grab")
+    egui::Id::unique("graph-key-grab")
 }
 
 /// A Bezier handle moving with a handle drag: its key, side and dimension, the key's place
@@ -767,7 +787,7 @@ impl HandleGrab {
 type HandleDrag = (Pos2, Vec<HandleGrab>);
 
 fn handle_drag_id() -> egui::Id {
-    egui::Id::new("graph-handle-drag")
+    egui::Id::unique("graph-handle-drag")
 }
 
 /// Which axes a drag may move on (time, value): both, or with Shift only the one the pointer moved more along.

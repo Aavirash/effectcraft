@@ -26,9 +26,7 @@ pub(crate) fn render<'g>(e: &mut Enc<'g>, r: &Renderer, comp_id: ItemId, t: Tick
         return None;
     }
     let ctx = r.eval_ctx(comp_id, t)?;
-    let s = r.opts.scale;
-    let w = ((ctx.comp.width as f64 * s).round() as u32).max(1);
-    let h = ((ctx.comp.height as f64 * s).round() as u32).max(1);
+    let (w, h) = effectcraft_render::frame_size(ctx.comp.width, ctx.comp.height, r.opts.scale);
     if r.depth() > 16 || !e.g.fits(w, h) {
         return None;
     }
@@ -73,6 +71,9 @@ fn draw_comp<'a>(e: &mut Enc, r: &Renderer<'a>, ctx: &EvalCtx<'a>, canvas: &mut 
     let levels = r.pipe().levels;
     let mut i = 0;
     while i < visible.len() {
+        // A device that ran out of memory (or was lost) on an earlier layer fails every later
+        // one: give the frame back to the CPU now instead of drawing the rest of the comp.
+        e.g.check_health().ok()?;
         if visible[i].is_3d() {
             let mut j = i;
             while j < visible.len() && visible[j].is_3d() {
@@ -354,7 +355,11 @@ fn draw_adjustment(e: &mut Enc, r: &Renderer, ctx: &EvalCtx, layer: &Layer, canv
     };
     let mut fx = crate::effects::GpuFx::new(e, below, [0.0; 2], r.opts.scale, pipe.levels);
     r.run_effects_on(ctx, layer, true, &mut fx);
-    let (mut adjusted, _, _) = fx.finish()?;
+    let (mut adjusted, offset, _) = fx.finish()?;
+    // An effect that changed the frame (Motion Tile's Output size): back onto the canvas.
+    if let Some((dx, dy)) = effectcraft_effects::adjustment_crop(offset, [0.0; 2], (adjusted.width, adjusted.height), (w, h)) {
+        adjusted = e.crop(&adjusted, dx, dy, w, h);
+    }
     if adjusted.width != w || adjusted.height != h {
         return Some(());
     }
