@@ -446,7 +446,12 @@ and Origin), `camera.createFromSolve {kind: text|solid|null|shadowCatcher, point
 {center, normal, size?}, multiple?}` (Create Text / Solid / Null / Shadow Catcher, Camera and Light,
 Create Multiple …), `camera.deletePoints {points?, wait?}` (re-solves; with Auto-delete Points
 Across Time the same feature's other tracks go too) and `camera.create` (the Create Camera button).
-Each is one undo step; the first create adds the one-node "3D Tracker Camera" keyed on every frame.
+Each edit is one undo step; the first create adds the one-node "3D Tracker Camera" keyed on every frame.
+
+`camera.exportBlender {path: ".py", layer?, effect?, sensorWidth?: 36, unitScale?: 0.01,
+startFrame?: 1, includePoints?: true}` exports the solve as an executable Blender scene script:
+baked camera/lens/focus, synced video background, points and ground. See
+[Blender camera export](blender-camera-export.md) for framing, assumptions and limitations.
 Changing the layer's frames clears the analysis; changing `effects/#1/shotType`,
 `effects/#1/horizontalAngleOfView`, `effects/#1/advanced/solveMethod` re-solves the stored tracks.
 

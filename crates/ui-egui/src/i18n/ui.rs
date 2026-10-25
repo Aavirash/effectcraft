@@ -2996,6 +2996,7 @@ const UKRAINIAN: &[(&str, &str)] = &[
 
 // Brazilian Portuguese.
 const PORTUGUESE: &[(&str, &str)] = &[
+    ("Export Scene to Blender...", "Exportar cena para o Blender..."),
     ("   OK   ", "   OK   "),
     ("  Delete  ", "  Excluir  "),
     (" Open Auto-Save ", " Abrir salvamento automático "),
