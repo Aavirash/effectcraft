@@ -595,6 +595,22 @@ pub fn shape_simple_op(ids: &mut Ids, kind: &str) -> Option<PropGroup> {
             .with(ids.prop("correlation", "Correlation", Value::Scalar(50.0)).with_ui(ParamUi::Percent))
             .with(ids.prop("phase", "Temporal Phase", Value::Scalar(0.0)).with_ui(ParamUi::Angle))
             .with(ids.prop("seed", "Random Seed", Value::Scalar(0.0))),
+        "wiggler" | "wiggleTransform" => {
+            // The Transform group holds how far each transformation wiggles.
+            let tr = ids
+                .group("transform", "Transform")
+                .with(ids.prop("anchor", "Anchor Point", Value::Vec2([0.0, 0.0])).with_ui(ParamUi::Point))
+                .with(ids.prop("position", "Position", Value::Vec2([0.0, 0.0])).with_ui(ParamUi::Point))
+                .with(ids.prop("scale", "Scale", Value::Vec2([0.0, 0.0])).with_ui(ParamUi::Percent))
+                .with(ids.prop("rotation", "Rotation", Value::Scalar(0.0)).with_ui(ParamUi::Angle));
+            indexed(ids.group("wiggler", "Wiggle Transform 1"))
+                .with(ids.prop("speed", "Wiggles/Second", Value::Scalar(2.0)))
+                .with(ids.prop("correlation", "Correlation", Value::Scalar(50.0)).with_ui(ParamUi::Percent))
+                .with(ids.prop("phase", "Temporal Phase", Value::Scalar(0.0)).with_ui(ParamUi::Angle))
+                .with(ids.prop("spatialPhase", "Spatial Phase", Value::Scalar(0.0)).with_ui(ParamUi::Angle))
+                .with(ids.prop("seed", "Random Seed", Value::Scalar(0.0)))
+                .with(tr)
+        }
         "merge" => indexed(ids.group("merge", "Merge Paths 1")).with(ids.prop("mode", "Mode", Value::Enum(0)).with_ui(popup(&[
             "Merge",
             "Add",

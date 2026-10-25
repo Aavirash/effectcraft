@@ -75,6 +75,22 @@ fn shape_contents_add_menu_adds_path_operations() {
     assert_eq!(items, ["group", "trim"]);
 }
 
+#[test]
+fn shape_contents_add_menu_adds_wiggle_transform() {
+    let mut s = session();
+    let l = s.execute("layer.newShape", json!({"kind": "ellipse"})).unwrap()["layer"].as_u64().unwrap();
+    let contents = s.active_comp().unwrap().layer(LayerId(l)).unwrap().props.sub("contents").unwrap().uid;
+    let mut h = harness(s);
+    open_layer(&mut h, l);
+    click(&mut h, &format!("timeline.group.{contents}.add"));
+    assert!(h.get_by_label("Zig Zag").rect().max.y <= 1000.0, "the whole menu fits in the window");
+    let entry = h.get_by_label("Wiggle Transform").rect();
+    click_at(&mut h, entry.center());
+    let layer = h.state().session.active_comp().unwrap().layer(LayerId(l)).unwrap().clone();
+    let items: Vec<&str> = layer.props.sub("contents").unwrap().groups().map(|g| g.match_id.as_str()).collect();
+    assert_eq!(items, ["group", "wiggler"]);
+}
+
 /// A shape group's inner Contents is elided in After Effects: opening the group lists its items
 /// (here the path) directly, with no "Contents" row between them.
 #[test]
