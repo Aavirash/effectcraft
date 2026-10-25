@@ -42,14 +42,14 @@ fn split_layers_go_above_or_below_the_original() {
     let mut s = session();
     let a = solid(&mut s, "#ff0000");
     s.execute("time.set", json!({"time": 1.0})).unwrap();
-    let below = s.execute("edit.splitLayer", json!({"layers": [a]})).unwrap()[0].as_u64().unwrap();
-    let order: Vec<u64> = s.active_comp().unwrap().layers.iter().map(|l| l.id.0).collect();
-    assert_eq!(order, vec![a, below], "off (default): the new part goes below");
-    s.execute("edit.undo", json!({})).unwrap();
-    s.execute("prefs.set", json!({"key": "general.createSplitLayersAbove", "value": true})).unwrap();
     let above = s.execute("edit.splitLayer", json!({"layers": [a]})).unwrap()[0].as_u64().unwrap();
     let order: Vec<u64> = s.active_comp().unwrap().layers.iter().map(|l| l.id.0).collect();
-    assert_eq!(order, vec![above, a]);
+    assert_eq!(order, vec![above, a], "on (default): the new part goes above");
+    s.execute("edit.undo", json!({})).unwrap();
+    s.execute("prefs.set", json!({"key": "general.createSplitLayersAbove", "value": false})).unwrap();
+    let below = s.execute("edit.splitLayer", json!({"layers": [a]})).unwrap()[0].as_u64().unwrap();
+    let order: Vec<u64> = s.active_comp().unwrap().layers.iter().map(|l| l.id.0).collect();
+    assert_eq!(order, vec![a, below]);
 }
 
 #[test]
@@ -369,6 +369,34 @@ fn execute_file_needs_the_gate_and_asks_first() {
     assert!(s.drain_events().iter().any(|e| matches!(e, crate::Event::OpenUrl(u) if u.starts_with("file://"))));
     s.execute("prefs.set", json!({"key": "scripting.warnExecutingFiles", "value": false})).unwrap();
     assert!(s.execute("file.executeFile", p).unwrap().get("opened").is_some());
+}
+
+#[test]
+fn a_script_cannot_confirm_executing_a_file_for_itself() {
+    // Warn User When Executing Files: only the user answers the question (#1246).
+    let mut s = session();
+    let f = tmp("script-run.txt");
+    std::fs::write(&f, "x").unwrap();
+    let path = f.to_string_lossy().to_string();
+    let opened = |s: &mut Session| s.drain_events().iter().any(|e| matches!(e, crate::Event::OpenUrl(_)));
+    // Without the gate a script can't run files at all, confirmed or not.
+    assert!(s.execute_for_script("file.executeFile", json!({"path": path, "confirmed": true})).is_err());
+    s.execute("prefs.set", json!({"key": "scripting.allowScriptsWriteFiles", "value": true})).unwrap();
+    s.drain_events();
+    // A script asserting `confirmed` still gets the question, directly or in a batch.
+    let r = s.execute_for_script("file.executeFile", json!({"path": path, "confirmed": true})).unwrap();
+    assert!(r.get("needsConfirmation").is_some(), "{r}");
+    assert!(!opened(&mut s));
+    let steps = json!({"steps": [{"command": "file.executeFile", "params": {"path": path, "confirmed": true}}]});
+    let r = s.execute_for_script("engine.batch", steps).unwrap();
+    assert!(r.to_string().contains("needsConfirmation"), "{r}");
+    assert!(!opened(&mut s));
+    // The user's answer from the frontend's question still opens it.
+    assert!(s.execute("file.executeFile", json!({"path": path, "confirmed": true})).unwrap().get("opened").is_some());
+    assert!(opened(&mut s));
+    // With the warning off a script's request opens the file without a question, as before.
+    s.execute("prefs.set", json!({"key": "scripting.warnExecutingFiles", "value": false})).unwrap();
+    assert!(s.execute_for_script("file.executeFile", json!({"path": path})).unwrap().get("opened").is_some());
 }
 
 // ---------------------------------------------------------------- Edit ▸ History, recent lists

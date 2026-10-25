@@ -206,6 +206,8 @@ pub fn build(app: &EffectcraftApp) -> NativeMenu {
                                     "Serviços"
                                 } else if crate::i18n::czech(app) {
                                     "Služby"
+                                } else if crate::i18n::georgian(app) {
+                                    "სერვისები"
                                 } else {
                                     "Services"
                                 }
@@ -376,6 +378,7 @@ pub fn activate(app: &mut EffectcraftApp, ctx: &egui::Context, menu: &NativeMenu
         }
     }
     let params = if params.is_null() { json!({}) } else { params };
+    let (command, params) = crate::menus::menu_choice(app, command, params);
     let r = crate::menus::invoke(app, ctx, &command, params);
     if let Err(e) = &r {
         app.ui.status = e.clone();
@@ -487,6 +490,27 @@ mod tests {
         let mut translated = vec![];
         labels(&build(&app).menus, &mut translated);
         assert_eq!(translated, ["Služby", "Skrýt EffectCraft", "Skrýt ostatní", "Zobrazit vše"]);
+    }
+
+    #[test]
+    fn georgian_translates_macos_predefined_items() {
+        if !cfg!(target_os = "macos") {
+            return;
+        }
+        let mut app = EffectcraftApp::new(effectcraft_engine::Session::default());
+        app.session.execute("prefs.set", json!({"key": "general.language", "value": "ka"})).unwrap();
+        fn labels(nodes: &[NativeNode], out: &mut Vec<String>) {
+            for node in nodes {
+                match node {
+                    NativeNode::Predefined { label, .. } => out.push(label.clone()),
+                    NativeNode::Submenu { children, .. } => labels(children, out),
+                    _ => {}
+                }
+            }
+        }
+        let mut translated = vec![];
+        labels(&build(&app).menus, &mut translated);
+        assert_eq!(translated, ["სერვისები", "EffectCraft-ის დამალვა", "სხვების დამალვა", "ყველას ჩვენება"]);
     }
 
     #[test]
@@ -610,6 +634,23 @@ mod tests {
         let spec2 = build(&app);
         assert_ne!(spec1.structure(), spec2.structure());
         assert!(spec2.items().iter().any(|i| i.command == "file.openRecent" && i.label == "Recent Test.ecproj"));
+    }
+
+    /// #1630: a checked Window menu entry closes its panel; an unchecked one opens it.
+    #[test]
+    fn window_menu_entry_toggles_its_panel() {
+        use crate::dock::PanelKind;
+        let mut app = app();
+        let ctx = egui::Context::default();
+        let choose = |app: &mut EffectcraftApp| {
+            let spec = build(app);
+            let id = spec.items().into_iter().find(|i| i.command == "window.panel" && i.params["panel"] == "align").unwrap().id.clone();
+            activate(app, &ctx, &spec, &id).unwrap();
+        };
+        choose(&mut app);
+        assert!(app.ui.dock.contains(PanelKind::Align));
+        choose(&mut app);
+        assert!(!app.ui.dock.contains(PanelKind::Align));
     }
 
     #[test]
