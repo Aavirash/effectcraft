@@ -1408,6 +1408,20 @@ fn a_kept_layer_reads_the_project_again() {
     assert_close!(f.num("thisLayer.index * 10 + thisLayer.name.length", 0.0), 21.0);
 }
 
+/// The kept layers are bounded: past the bound a layer isn't kept, an evaluation that makes more
+/// layers than are kept still sees one object for each layer it had kept, and the evaluations
+/// after it, which start over, read the right layers.
+#[test]
+fn the_kept_layers_are_bounded() {
+    let f = fx();
+    let same = "(thisLayer === thisComp.layer(thisLayer.index) ? 1 : 0)";
+    let many =
+        format!("var c = thisLayer.__c;\nfor (var i = 0; i < 5000; i++) __layer(c, 100000 + i);\n{same} * 10 + (__layer(c, 1e6) === __layer(c, 1e6) ? 0 : 1)");
+    assert_close!(f.num(&many, 0.0), 11.0);
+    assert_close!(f.num(&format!("{same} * 100 + thisLayer.index * 10 + thisLayer.name.length"), 0.0), 111.0);
+    assert_close!(f.num(&format!("{same} * 100 + thisLayer.index * 10 + thisLayer.name.length"), 0.0), 111.0);
+}
+
 /// The prelude is kept from one evaluation to the next, so an expression can't change its object
 /// model or internals for the ones after it.
 #[test]
