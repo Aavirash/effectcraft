@@ -146,25 +146,45 @@ pub fn pvq_search(x: &[f32], k: usize, y: &mut [i32]) {
     }
 }
 
-/// Encodes the PVQ codeword `y` (`sum |y| = k`) as the index the RFC 6716 §4.3.4.2 decoder maps
-/// back to `y`.
-pub fn encode_pulses(y: &[i32], k: usize, enc: &mut RangeEncoder, v: &mut Vec<u64>) {
-    let n = y.len();
-    let w = k + 1;
-    v.clear();
-    v.resize((n + 1) * w, 0);
+/// Largest band width and pulse count the encoder codes (176 coefficients, `get_pulses(40)` = 128).
+const PVQ_MAX_N: usize = 176;
+const PVQ_MAX_K: usize = 128;
+
+/// Row-major `V(n, k)` for `n <= max_n`, `k <= max_k` with row stride `max_k + 1`, saturated at
+/// `u32::MAX` (a codebook that large is never coded, see `rate::fits_in32`).
+fn build_pvq_table(max_n: usize, max_k: usize) -> Vec<u32> {
+    let w = max_k + 1;
+    let mut v = vec![0u32; (max_n + 1) * w];
     v[0] = 1;
-    for nn in 1..=n {
+    for nn in 1..=max_n {
         v[nn * w] = 1;
-        for kk in 1..=k {
-            let a = v[(nn - 1) * w + kk];
-            let b = v[nn * w + kk - 1];
-            let c = v[(nn - 1) * w + kk - 1];
-            v[nn * w + kk] = a.saturating_add(b).saturating_add(c);
+        for kk in 1..=max_k {
+            let sum = v[(nn - 1) * w + kk] as u64 + v[nn * w + kk - 1] as u64 + v[(nn - 1) * w + kk - 1] as u64;
+            v[nn * w + kk] = sum.min(u32::MAX as u64) as u32;
         }
     }
-    let total = v[n * w + k];
-    let vv = |nn: usize, kx: usize| v[nn * w + kx];
+    v
+}
+
+fn pvq_table() -> &'static [u32] {
+    static TABLE: std::sync::OnceLock<Vec<u32>> = std::sync::OnceLock::new();
+    TABLE.get_or_init(|| build_pvq_table(PVQ_MAX_N, PVQ_MAX_K))
+}
+
+/// Encodes the PVQ codeword `y` (`sum |y| = k`) as the index the RFC 6716 §4.3.4.2 decoder maps
+/// back to `y`.
+pub fn encode_pulses(y: &[i32], k: usize, enc: &mut RangeEncoder) {
+    let n = y.len();
+    // Shapes outside the coded range (never produced by the band layout) get a local table.
+    let local;
+    let (v, w) = if n <= PVQ_MAX_N && k <= PVQ_MAX_K {
+        (pvq_table(), PVQ_MAX_K + 1)
+    } else {
+        local = build_pvq_table(n, k);
+        (&local[..], k + 1)
+    };
+    let row = |nn: usize| &v[nn * w..(nn + 1) * w];
+    let total = row(n)[k] as u64;
     let mut index = 0u64;
     let mut kk = k;
     for j in 0..n {
@@ -173,10 +193,11 @@ pub fn encode_pulses(y: &[i32], k: usize, enc: &mut RangeEncoder, v: &mut Vec<u6
         }
         let rem = n - j;
         let t = y[j].unsigned_abs() as usize;
+        let below = row(rem - 1);
         // Codewords with |y_j| = t start at sum_{m < kk - t} V(rem-1, m) within their sign half.
-        let mut base: u64 = (0..kk - t).map(|m| vv(rem - 1, m)).sum();
+        let mut base: u64 = below[..kk - t].iter().map(|&x| x as u64).sum();
         if y[j] < 0 {
-            base += (vv(rem - 1, kk) + vv(rem, kk)) / 2;
+            base += (below[kk] as u64 + row(rem)[kk] as u64) / 2;
         }
         index += base;
         kk -= t;
@@ -193,7 +214,6 @@ pub struct BandEnc<'m, 'e> {
     pub i: usize,
     pub spread: usize,
     pub remaining_bits: i32,
-    pvq_v: Vec<u64>,
     iy: Vec<i32>,
     tmp: Vec<f32>,
 }
@@ -287,7 +307,7 @@ impl BandEnc<'_, '_> {
             iy.clear();
             iy.resize(n, 0);
             pvq_search(&tmp, k, &mut iy);
-            encode_pulses(&iy, k, self.enc, &mut self.pvq_v);
+            encode_pulses(&iy, k, self.enc);
             self.iy = iy;
             self.tmp = tmp;
         }
@@ -316,7 +336,7 @@ pub fn quant_all_bands(
 ) {
     let mm = 1usize << lm;
     debug_assert!(c == 1 || dual_stereo || intensity <= start, "stereo frames are coded as dual stereo");
-    let mut ctx = BandEnc { m, enc, i: 0, spread, remaining_bits: 0, pvq_v: Vec::new(), iy: Vec::new(), tmp: Vec::new() };
+    let mut ctx = BandEnc { m, enc, i: 0, spread, remaining_bits: 0, iy: Vec::new(), tmp: Vec::new() };
     for i in start..end {
         ctx.i = i;
         let xo = mm * EBANDS[i] as usize;
@@ -466,18 +486,93 @@ mod tests {
 
     #[test]
     fn pvq_index_roundtrip_exhaustive() {
-        let mut v = Vec::new();
         for n in 1..6usize {
             for k in 1..6usize {
                 for y in all_codewords(n, k) {
                     let mut e = RangeEncoder::new();
-                    encode_pulses(&y, k, &mut e, &mut v);
+                    encode_pulses(&y, k, &mut e);
                     let buf = e.done(16);
                     let mut d = RangeDecoder::new(&buf);
                     assert_eq!(decode_pulses(n, k, &mut d), y, "n={n} k={k}");
                 }
             }
         }
+    }
+
+    /// The per-call table encoder this module used before the shared table.
+    fn encode_pulses_reference(y: &[i32], k: usize, enc: &mut RangeEncoder) {
+        let n = y.len();
+        let w = k + 1;
+        let mut v = vec![0u64; (n + 1) * w];
+        v[0] = 1;
+        for nn in 1..=n {
+            v[nn * w] = 1;
+            for kk in 1..=k {
+                let a = v[(nn - 1) * w + kk];
+                let b = v[nn * w + kk - 1];
+                let c = v[(nn - 1) * w + kk - 1];
+                v[nn * w + kk] = a.saturating_add(b).saturating_add(c);
+            }
+        }
+        let total = v[n * w + k];
+        let vv = |nn: usize, kx: usize| v[nn * w + kx];
+        let mut index = 0u64;
+        let mut kk = k;
+        for j in 0..n {
+            if kk == 0 {
+                break;
+            }
+            let rem = n - j;
+            let t = y[j].unsigned_abs() as usize;
+            let mut base: u64 = (0..kk - t).map(|m| vv(rem - 1, m)).sum();
+            if y[j] < 0 {
+                base += (vv(rem - 1, kk) + vv(rem, kk)) / 2;
+            }
+            index += base;
+            kk -= t;
+        }
+        if total >= 2 {
+            enc.uint(index as u32, total as u32);
+        }
+    }
+
+    #[test]
+    fn pvq_table_encode_matches_per_call_table() {
+        let mut seed = 0x9E37_79B9_7F4A_7C15u64;
+        let mut next = move |m: u64| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed % m
+        };
+        let mut checked = 0;
+        for n in (1..=PVQ_MAX_N).step_by(5).chain([PVQ_MAX_N]) {
+            for k in (1..=PVQ_MAX_K).step_by(3).chain([PVQ_MAX_K]) {
+                if crate::rate::pvq_v(n, k) > u32::MAX as u128 {
+                    continue;
+                }
+                for _ in 0..4 {
+                    let mut y = vec![0i32; n];
+                    for _ in 0..k {
+                        let at = next(n as u64) as usize;
+                        y[at] += if next(2) == 0 { 1 } else { -1 };
+                    }
+                    // Opposite pulses cancel; top up so that sum |y| = k again.
+                    let mut have: usize = y.iter().map(|v| v.unsigned_abs() as usize).sum();
+                    while have < k {
+                        let at = next(n as u64) as usize;
+                        y[at] += if y[at] < 0 { -1 } else { 1 };
+                        have += 1;
+                    }
+                    let (mut a, mut b) = (RangeEncoder::new(), RangeEncoder::new());
+                    encode_pulses(&y, k, &mut a);
+                    encode_pulses_reference(&y, k, &mut b);
+                    assert_eq!(a.done(16), b.done(16), "n={n} k={k}");
+                    checked += 1;
+                }
+            }
+        }
+        assert!(checked > 100, "{checked}");
     }
 
     #[test]
