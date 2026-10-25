@@ -88,8 +88,8 @@ fn cos_series(p: &[f64], w: f64) -> f64 {
 const GRID: usize = 1024;
 /// Largest multiple of ω in the series (half the LPC order, at most 16 / 2).
 const MAX_H: usize = 8;
-/// Bisection steps per root.
-const BISECT_STEPS: usize = 40;
+/// Bisection steps per root: the bracket shrinks to 3e-9 rad, far below one Q15 NLSF step (9.6e-5 rad).
+const BISECT_STEPS: usize = 20;
 
 /// `cos(m · π g / GRID)` for every grid point `g` and `m` in `0..=MAX_H`, computed with the same
 /// expression as [`cos_series`], so the table values are bit-identical to calling `cos` there.
