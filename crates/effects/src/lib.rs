@@ -21,6 +21,7 @@ mod color2;
 mod color3;
 mod color_fx;
 pub mod controls;
+pub mod crypto_select;
 mod distort;
 mod distort2;
 mod distort3;
@@ -40,6 +41,7 @@ pub mod mocha_shape;
 mod noise;
 mod noise2;
 mod noise3;
+pub mod object_matte;
 mod obsolete;
 mod ocio;
 pub mod ocio_config;
@@ -69,11 +71,11 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 
 pub use card3d::{CompLight, CompScene};
-pub use color_fx::{COLORAMA_PRESETS, ColoramaPalette};
 pub use color_fx::{
-    HUESAT_CHANNELS, HUESAT_RANGES, LEVELS_CHANNELS, PHOTO_FILTER_CUSTOM, PHOTO_FILTERS, exposure_settings, fill_uses_masks, huesat_ranges_identity,
-    levels_channel_ids, levels_channel_settings, levels_channels_identity, levels_clip,
+    BW_TINT_LUMA, EXPOSURE_LINEAR_GAMMA, HUESAT_CHANNELS, HUESAT_RANGES, LEVELS_CHANNELS, LUMA_601, PHOTO_FILTER_CUSTOM, PHOTO_FILTERS, exposure_settings,
+    fill_uses_masks, huesat_ranges_identity, levels_channel_ids, levels_channel_settings, levels_channels_identity, levels_clip,
 };
+pub use color_fx::{COLORAMA_PRESETS, ColoramaPalette};
 pub use color2::{Curve, auto_correct_settings, color_link_mode, color_link_sample, equalize_tables, luma_clip_points, shadow_highlight_amounts};
 pub use color3::OffsetCurve;
 pub use distort::transform_shutter;
@@ -89,8 +91,8 @@ pub use sim::particle_state;
 pub use sim3::{PgBlit, PgPlan, playground_plan, playground_state};
 pub use stylize2::strobe_on;
 // CPU helpers the GPU kernels share (effectcraft-gpu).
-pub use blur2::{camera_lens_plain, camera_lens_spans};
-pub use generate::gen_mode;
+pub use blur2::{camera_lens_plain, camera_lens_spans, radial_fast_pad};
+pub use generate::{four_color_softening, gen_mode};
 pub use generate2::pattern_kind as cell_pattern_kind;
 pub use generate2::{BoltSeg, Contour, Ghost, RadioPlan, Wave, flare_ghosts, lightning_segments, radio_plan};
 pub use generate3::{
@@ -109,7 +111,7 @@ pub use time_fx::{PixelMotion, TimewarpPlan, TwStep, pmb_plan, posterized_time, 
 // effectcraft-gpu fx_tone.
 pub use ocio::color_stabilizer_maps;
 // GPU effects, part B (3D Channel, Immersive Video, colour management, simulation render passes).
-pub use channel3d::{CRYPTO_LAYERS, id_color, selection_hashes};
+pub use channel3d::{CRYPTO_LAYERS, CryptoAux, aux_point, crypto_aux_image, crypto_aux_image_with, id_color, selection_hashes};
 pub use ocio::{ColorOp, Straight, Tf, color_program};
 pub use sim::{Acc, Blob, Bubble, Post, Shape, Sprite, SpritePlan, Tint, bubble_list, drizzle_drops, mercury_blobs, sprite_plan};
 pub use sim2::{
@@ -296,6 +298,43 @@ impl Buf {
     }
 }
 
+/// Motion Tile's output frame for a buffer with layer origin `offset` (pixels) at `scale`:
+/// `(width, height, offset)`. Output Width / Height grow (or crop) the layer rectangle about its
+/// centre, on adjustment layers too, where the rectangle is the comp's and starts at the comp
+/// origin in the buffer below (After Effects; a Transform after it brings the tiles into view,
+/// #1727). An adjustment at 100 % keeps the buffer it was given; one whose frame would pass
+/// 16 384 pixels a side does too.
+pub fn motion_tile_frame(ctx: &EffectCtx, offset: [f64; 2], size: (u32, u32), scale: f64) -> (u32, u32, [f64; 2]) {
+    let (lw, lh) = (ctx.layer_size[0], ctx.layer_size[1]);
+    let (pw, ph) = (ctx.params.f("outputWidth"), ctx.params.f("outputHeight"));
+    let ow = (lw * pw / 100.0).max(1.0 / scale);
+    let oh = (lh * ph / 100.0).max(1.0 / scale);
+    let (nw, nh) = ((ow * scale).round().max(1.0), (oh * scale).round().max(1.0));
+    let grow = [(ow - lw) * 0.5 * scale, (oh - lh) * 0.5 * scale];
+    if !ctx.adjustment {
+        return (nw as u32, nh as u32, grow);
+    }
+    // The grown rectangle's top-left in the buffer below, on whole pixels so the result lines
+    // up with the comp again when the stack ends.
+    let (x0, y0) = ((offset[0] - grow[0]).round(), (offset[1] - grow[1]).round());
+    let fits = [x0, y0, nw, nh].iter().all(|v| v.is_finite()) && nw <= 16384.0 && nh <= 16384.0;
+    if (pw == 100.0 && ph == 100.0) || !fits {
+        return (size.0, size.1, offset);
+    }
+    (nw as u32, nh as u32, [offset[0] - x0, offset[1] - y0])
+}
+
+/// Where an adjustment stack's result (comp origin at `offset`, `size` pixels) lies on the canvas
+/// it came from (comp origin at `canvas_offset`): the result pixel at canvas pixel (0, 0).
+/// `None` when it already is the canvas, frame for frame.
+pub fn adjustment_crop(offset: [f64; 2], canvas_offset: [f64; 2], size: (u32, u32), canvas: (u32, u32)) -> Option<(i64, i64)> {
+    let (dx, dy) = ((offset[0] - canvas_offset[0]).round(), (offset[1] - canvas_offset[1]).round());
+    if !dx.is_finite() || !dy.is_finite() || (dx == 0.0 && dy == 0.0 && size == canvas) {
+        return None;
+    }
+    Some((dx as i64, dy as i64))
+}
+
 /// Where [`Buf::cover`] would take a buffer: shift its pixels by `(dx, dy)` and resize it to
 /// `width` × `height` so it spans the `size`-layer-pixel region that starts at its offset — the
 /// whole layer rectangle, which a sized source's buffer already is. `None` when the buffer
@@ -354,8 +393,8 @@ pub trait EffectHost: Sync {
         self.layer(id, false)
     }
     /// The effect's own layer at another **layer time** `layer_time` (seconds): its source with
-    /// masks applied, followed by the first `effects` effects of its stack (0 = none, which is
-    /// what After Effects' Time effects see). `None` when unavailable (no host, recursion
+    /// masks applied, followed by the first `effects` effects of its stack (0 = none; the host
+    /// never goes past the effect being rendered). `None` when unavailable (no host, recursion
     /// limit, adjustment layers). Time effects use this to read neighbouring frames.
     fn self_at(&self, _layer_time: f64, _effects: usize) -> Option<Buf> {
         None
@@ -405,6 +444,8 @@ pub struct EffectEnv<'a> {
     pub working_space: Option<effectcraft_color::ColorSpace>,
     /// Working-space pixels are linear light (Linearize Working Space).
     pub working_linear: bool,
+    /// The project works in 32 bpc float (Levels' "Off for 32 bpc Color" clips only below it).
+    pub float_depth: bool,
     /// The composition's shutter (angle and phase in degrees, samples per frame) when both the
     /// comp's and the layer's motion blur switches are on (Transform's Use Composition's
     /// Shutter Angle).
@@ -533,6 +574,7 @@ pub fn registry() -> &'static [EffectSpec] {
         v.extend(camera_tracker::specs());
         v.extend(face_track::specs());
         v.extend(roto::specs());
+        v.extend(object_matte::specs());
         v.sort_by(|a, b| a.category.cmp(b.category).then(a.name.cmp(b.name)));
         for s in v.iter_mut() {
             if GPU_EFFECTS.contains(&s.id) {
@@ -841,7 +883,15 @@ pub const PARAM_GROUPS: &[(&str, &str)] = &[
 
 /// Display names of nested parameter groups by match id.
 fn group_name(m: &str) -> &str {
-    warp_stab::GROUPS.iter().chain(roto::GROUPS).chain(keylight::GROUPS).chain(PARAM_GROUPS).find(|(id, _)| *id == m).map(|(_, n)| *n).unwrap_or(m)
+    warp_stab::GROUPS
+        .iter()
+        .chain(roto::GROUPS)
+        .chain(object_matte::GROUPS)
+        .chain(keylight::GROUPS)
+        .chain(PARAM_GROUPS)
+        .find(|(id, _)| *id == m)
+        .map(|(_, n)| *n)
+        .unwrap_or(m)
 }
 
 /// The nested group at `path` (`borders/autoScale`) under `g`, created on first use.
@@ -1216,6 +1266,7 @@ pub const TIME_DEPENDENT: &[&str] = &[
     camera_tracker::ID,
     // Each frame has its own segmentation.
     roto::ID,
+    object_matte::ID,
 ];
 
 /// See [`TIME_DEPENDENT`].

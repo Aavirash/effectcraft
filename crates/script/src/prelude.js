@@ -98,6 +98,8 @@ var ImportAsType = __enum("ImportAsType", ["COMP_CROPPED_LAYERS", "FOOTAGE", "CO
 ImportAsType.COMPOSITION_CROPPED_LAYERS = ImportAsType.COMP_CROPPED_LAYERS;
 ImportAsType.COMPOSITION = ImportAsType.COMP;
 var TimeDisplayType = __enum("TimeDisplayType", ["FRAMES", "TIMECODE"], 2012);
+// After Effects' values (FC_START_0 = 2612), as in docsforadobe/Types-for-Adobe.
+var FramesCountType = __enum("FramesCountType", ["FC_START_0", "FC_START_1", "FC_TIMECODE_CONVERSION"], 2612);
 var LogType = __enum("LogType", ["ERRORS_ONLY", "ERRORS_AND_SETTINGS", "ERRORS_AND_PER_FRAME_INFO"], 3212);
 var KeyframeLabel = __enum("KeyframeLabel", ["NONE"], 0);
 
@@ -715,6 +717,15 @@ PropertyGroup.prototype.addProperty = function (name) {
     var p = { comp: L.__comp, layer: L.__id, kind: r.shape };
     if (r.group !== null && r.group !== undefined) p.group = r.group;
     uid = __call("layer.addShapeItem", p).uid;
+  } else if (r.kind === "existing") {
+    uid = r.uid;
+  } else if (r.kind === "dash") {
+    // Dash/Gap 2 and 3 come as a pair: add pairs until the one asked for exists.
+    var dp = { comp: L.__comp, layer: L.__id, prop: r.stroke };
+    for (var n = 0; n < 3 && !this.property(name); n++) __call("shape.dashes.add", dp);
+    var added = this.property(name);
+    if (!added) throw __err("Can not add \"" + name + "\" to Dashes");
+    return added;
   } else if (r.kind === "animator") {
     uid = __call("layer.addTextAnimator", { comp: L.__comp, layer: L.__id, properties: [] }).animator;
   } else if (r.kind === "animatorProperty") {
@@ -828,10 +839,11 @@ Property.prototype.property = function () { return null; };
   };
   P.__keys = function () { return __get("keys", { comp: this.__layer.__comp, layer: this.__layer.__id, uid: this.__uid }); };
   P.__key = function (i) {
-    var k = this.__keys();
     i = __num(i, "keyIndex");
-    if (i < 1 || i > k.length || Math.floor(i) !== i) throw __err("keyIndex " + i + " is out of range 1.." + k.length);
-    return k[i - 1];
+    // Only the key asked for: fetching the whole list made every key call linear (#814).
+    var r = i >= 1 && Math.floor(i) === i ? __get("keys", { comp: this.__layer.__comp, layer: this.__layer.__id, uid: this.__uid, index: i - 1 }) : null;
+    if (!r || !r.key) throw __err("keyIndex " + i + " is out of range 1.." + (r ? r.count : this.numKeys));
+    return r.key;
   };
   // Script value → engine JSON for `prop.set` / `prop.addKey`.
   P.__toEngine = function (v, info, time) {
@@ -859,8 +871,11 @@ Property.prototype.property = function () { return null; };
     }
     if (info.dims > 1) {
       if (!(v instanceof Array)) throw __err("value must be an array of " + info.dims + " numbers");
+      // After Effects rejects an array of the wrong length instead of truncating or broadcasting it
+      // (#1936). Two values for a 3-D property stay legal, as they are in After Effects: z is 0.
+      if (v.length !== info.dims && !(info.dims === 3 && v.length === 2)) throw __err("Array is not of the correct dimension");
       var o = [];
-      for (var d = 0; d < info.dims; d++) o.push(d < v.length ? __num(v[d]) : (d === 2 ? 0 : __num(v[v.length - 1])));
+      for (var d = 0; d < info.dims; d++) o.push(d < v.length ? __num(v[d]) : 0);
       return o;
     }
     if (v instanceof Array) throw __err("value must be a number, not an array");
@@ -1285,9 +1300,20 @@ AVLayer.prototype.constructor = AVLayer;
   P.sourceRectAtTime = function (t, extents) {
     return __get("sourceRect", { comp: this.__comp, layer: this.__id, time: __num(t, "time"), extents: !!extents });
   };
-  P.sourcePointToComp = function (p) { return p; };
-  P.compPointToSource = function (p) { return p; };
-  P.replaceSource = function () { throw __err("replaceSource is not supported yet"); };
+  // Source ↔ comp points, through the layer's transform and its parents' at the comp's time (#808).
+  function pointIn(layer, p, toComp) {
+    return __get("pointConvert", { comp: layer.__comp, layer: layer.__id, point: [__num(p[0], "point"), __num(p[1], "point")], toComp: toComp, time: layer.containingComp.time });
+  }
+  P.sourcePointToComp = function (p) { return pointIn(this, p, true); };
+  P.compPointToSource = function (p) { return pointIn(this, p, false); };
+  // Replace the layer's source item, keeping every layer property (After Effects'
+  // AVLayer.replaceSource). `fixExpressions` is accepted for compatibility: only AV sources are
+  // replaced, so the property tree and the layer's name stay and expressions keep resolving.
+  P.replaceSource = function (newSource, fixExpressions) {
+    if (!newSource || newSource.__id === undefined) throw __err("replaceSource needs a project item");
+    __call("layer.replaceSource", { comp: this.__comp, layers: [this.__id], item: newSource.__id, fixExpressions: !!fixExpressions });
+    return null;
+  };
   P.openInViewer = function () { __call("layer.openLayer", this.__p1()); return null; };
 })();
 
@@ -1304,6 +1330,14 @@ Object.defineProperty(ShapeLayer.prototype, "source", { get: function () { retur
 function CameraLayer(comp, id) { return this.__init(comp, id, "CameraLayer"); }
 CameraLayer.prototype = Object.create(Layer.prototype);
 CameraLayer.prototype.constructor = CameraLayer;
+// Camera scripts (Google Earth Studio exports among them) key `cameraLayer.position`,
+// `.xRotation` and `.zoom` directly, as on AVLayer: return the live Property objects.
+["pointOfInterest", "position", "orientation", "xRotation", "yRotation", "zRotation"].forEach(function (name) {
+  Object.defineProperty(CameraLayer.prototype, name, { get: function () { return this.transform[name]; } });
+});
+["zoom", "depthOfField", "focusDistance", "aperture", "blurLevel"].forEach(function (name) {
+  Object.defineProperty(CameraLayer.prototype, name, { get: function () { return this.cameraOptions[name]; } });
+});
 
 function LightLayer(comp, id) { return this.__init(comp, id, "LightLayer"); }
 LightLayer.prototype = Object.create(Layer.prototype);
@@ -1481,8 +1515,11 @@ function AVItem() {}
 AVItem.prototype = Object.create(Item.prototype);
 (function () {
   function def(name, get, set) { Object.defineProperty(AVItem.prototype, name, { get: get, set: set }); }
-  def("width", function () { return this.__info().width; }, function (v) { this.__settings({ width: Math.round(__num(v, "width")) }); });
-  def("height", function () { return this.__info().height; }, function (v) { this.__settings({ height: Math.round(__num(v, "height")) }); });
+  // `anchor: 0` (top left): After Effects' width and height setters resize the frame and leave the
+  // layers at their coordinates. Re-anchoring the old frame in the new one belongs to the
+  // Composition Settings dialog, which is what `comp.settings` defaults to (#1942).
+  def("width", function () { return this.__info().width; }, function (v) { this.__settings({ width: Math.round(__num(v, "width")), anchor: 0 }); });
+  def("height", function () { return this.__info().height; }, function (v) { this.__settings({ height: Math.round(__num(v, "height")), anchor: 0 }); });
   def("pixelAspect", function () { return this.__info().pixelAspect; }, function (v) { this.__settings({ pixelAspect: __num(v) }); });
   def("duration", function () { return this.__info().duration; }, function (v) { this.__settings({ duration: __num(v, "duration") }); });
   def("frameRate", function () { return this.__info().frameRate; }, function (v) { this.__settings({ frameRate: __num(v, "frameRate") }); });
@@ -1490,8 +1527,14 @@ AVItem.prototype = Object.create(Item.prototype);
   def("hasVideo", function () { return this.__info().hasVideo; });
   def("hasAudio", function () { return this.__info().hasAudio; });
   def("footageMissing", function () { return !!this.__info().footageMissing; });
-  def("useProxy", function () { return false; });
-  def("proxySource", function () { return null; });
+  def("useProxy", function () { var p = this.__info().proxy; return !!(p && p.enabled); }, function (v) {
+    if (!this.__info().proxy) throw __err("\"" + this.name + "\" has no proxy");
+    __call("file.useProxy", { item: this.__id, on: !!v });
+  });
+  def("proxySource", function () {
+    var p = this.__info().proxy;
+    return p ? { isStill: !!p.isStill, file: p.file ? new File(p.file) : null, hasAlpha: false, toString: function () { return "[object FileSource]"; } } : null;
+  });
   def("isMediaReplacementCompatible", function () { return false; });
   def("time", function () { return 0; });
 })();
@@ -1600,6 +1643,14 @@ CompItem.prototype.constructor = CompItem;
     __call("essential.rename", { comp: this.__id, control: c[i - 1].id, name: String(name) });
     return String(name);
   };
+  // After Effects' CompItem.saveFrameToPng(time, file): Composition ▸ Save Frame As ▸ File at
+  // `time` (comp seconds), behind the scripting file gate like other writes (#816).
+  P.saveFrameToPng = function (time, file) {
+    var f = __str(file);
+    if (!f) throw __err("saveFrameToPng: missing file");
+    __file("write", f, "");
+    __call("comp.saveFrameAs", { comp: this.__id, path: f, time: __num(time, "time") });
+  };
   P.openInEssentialGraphics = function () { __call("comp.openInEssentialGraphics", { comp: this.__id }); };
   P.exportAsMotionGraphicsTemplate = function (overwrite, path) {
     var f = __str(path);
@@ -1623,14 +1674,42 @@ FootageItem.prototype.constructor = FootageItem;
 Object.defineProperty(FootageItem.prototype, "file", {
   get: function () { var f = this.__info().file; return f ? new File(f) : null; },
 });
+// The item's FootageSource: one live object per FootageItem, as in After Effects (#813).
+function FootageSource(item) { this.__item = item; }
+FootageSource.prototype = {
+  constructor: FootageSource,
+  __info: function () { return this.__item.__info(); },
+  get isStill() { return !!this.__info().isStill; },
+  get color() { return this.__info().color; },
+  get file() { var i = this.__info(); return i.kind !== "solid" && i.file ? new File(i.file) : null; },
+  get missingFootagePath() { var i = this.__info(); return i.footageMissing ? i.file : ""; },
+  get loop() { return this.__info().loop; },
+  get hasAlpha() { return false; },
+  get nativeFrameRate() { return this.__info().nativeFrameRate || 0; },
+  get displayFrameRate() { return this.__info().frameRate; },
+  // Interpret Footage ▸ Conform to frame rate; 0 uses the file's own rate.
+  get conformFrameRate() { return this.__info().conformFrameRate || 0; },
+  set conformFrameRate(v) {
+    v = __num(v, "conformFrameRate");
+    if (v < 0) throw __err("conformFrameRate must be 0 or a frame rate");
+    __call("file.interpretFootage", { items: [this.__item.__id], frameRate: v === 0 ? "file" : v });
+  },
+  toString: function () { return this.__info().kind === "solid" ? "[object SolidSource]" : "[object FileSource]"; },
+};
 Object.defineProperty(FootageItem.prototype, "mainSource", {
   get: function () {
-    var i = this.__info();
-    if (i.kind === "solid") return { isStill: true, color: i.color, hasAlpha: false, toString: function () { return "[object SolidSource]"; } };
-    return { isStill: !!i.isStill, file: i.file ? new File(i.file) : null, missingFootagePath: i.footageMissing ? i.file : "", loop: i.loop, hasAlpha: false, toString: function () { return "[object FileSource]"; } };
+    if (!this.__mainSource) Object.defineProperty(this, "__mainSource", { value: new FootageSource(this) });
+    return this.__mainSource;
   },
 });
 FootageItem.prototype.replace = function (f) { __call("file.replaceFootage", { item: this.__id, path: __str(f) }); };
+FootageItem.prototype.replaceWithSequence = function (f, forceAlphabetical) {
+  __call("file.replaceFootage", { item: this.__id, path: __str(f), sequence: true, alphabetical: !!forceAlphabetical });
+};
+// Proxies (footage and comps). A numbered still brings its sequence, so the two setters agree.
+AVItem.prototype.setProxy = function (f) { __call("file.setProxy", { item: this.__id, path: __str(f) }); };
+AVItem.prototype.setProxyWithSequence = function (f) { __call("file.setProxy", { item: this.__id, path: __str(f) }); };
+AVItem.prototype.setProxyToNone = function () { __call("file.setProxyNone", { item: this.__id }); };
 FootageItem.prototype.replaceWithSolid = function (color, name, w, h) {
   __call("file.replaceWithSolid", { item: this.__id, color: [color[0], color[1], color[2]], width: w, height: h });
   if (name !== undefined) this.name = name;
@@ -1820,6 +1899,14 @@ Project.prototype = {
   set workingGamma(v) { __call("file.projectSettings", { workingGamma: __num(v) }); },
   get timeDisplayType() { return this.__info().timeDisplayFrames ? TimeDisplayType.FRAMES : TimeDisplayType.TIMECODE; },
   set timeDisplayType(v) { __call("file.projectSettings", { timeDisplay: v === TimeDisplayType.FRAMES ? "frames" : "timecode" }); },
+  get framesCountType() { return this.__info().displayStartFrame === 1 ? FramesCountType.FC_START_1 : FramesCountType.FC_START_0; },
+  set framesCountType(v) {
+    if (v === FramesCountType.FC_TIMECODE_CONVERSION) throw __err("framesCountType: Timecode Conversion is not supported, use FC_START_0 or FC_START_1");
+    if (v !== FramesCountType.FC_START_0 && v !== FramesCountType.FC_START_1) throw __err("Bad framesCountType value " + v);
+    __call("file.projectSettings", { frameStart: v === FramesCountType.FC_START_1 ? 1 : 0 });
+  },
+  get displayStartFrame() { return this.__info().displayStartFrame; },
+  set displayStartFrame(v) { __call("file.projectSettings", { frameStart: __num(v) }); },
   get expressionEngine() { return "javascript-1.0"; },
   set expressionEngine(v) {},
   item: function (i) {
@@ -1914,6 +2001,7 @@ var app = {
     savePrefAsBool: function () {},
     savePrefAsFloat: function () {},
     reload: function () {},
+    saveToDisk: function () {},
   },
   newProject: function () { __call("file.newProject", {}); return new Project(); },
   open: function (file) {

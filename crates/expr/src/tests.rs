@@ -1166,6 +1166,13 @@ fn sample_image_reads_rendered_pixels() {
     assert_close!(f.num(&code("thisComp.layer(\"B\").sampleImage([-50, -50])"), 0.0), 0.0);
 }
 
+/// A huge sample point saturates the pixel coordinates; it must not overflow the loop bounds.
+#[test]
+fn sample_image_huge_point_is_transparent() {
+    let f = fx();
+    assert_close!(f.num("var c = thisComp.layer(\"B\").sampleImage([1e300, 1e300]); c[3]", 0.0), 0.0);
+}
+
 fn data_item(p: &mut Project, name: &str, text: &str) {
     let f = effectcraft_project::Footage {
         path: format!("/data/{name}"),
@@ -1251,3 +1258,116 @@ fn pending_text_style_baseline_setters_are_visible_to_expression_getters() {
     assert_eq!(x.num("thisComp.layer('Title').text.sourceText.style.setBaselineOption('superscript').isSuperscript ? 1 : 0", 0.0), 1.0);
     assert_eq!(x.text("var s = text.sourceText.style.setSuperscript(true); s.setText(s.isSuperscript ? 'super' : 'normal')", 0.0), "super");
 }
+
+#[test]
+fn layer_source_is_the_layers_source_item() {
+    let mut f = fx();
+    // A solid's source is an item of the solid's size and name (#809).
+    assert_close!(f.num("thisComp.layer('A').source.width", 0.0), 20.0);
+    assert_close!(f.num("thisComp.layer('A').source.height", 0.0), 20.0);
+    assert_close!(f.num("thisComp.layer('A').source.name == 'A' ? 1 : 0", 0.0), 1.0);
+    // Text and shape layers have no source item.
+    assert_close!(f.num("thisComp.layer('Title').source == null ? 1 : 0", 0.0), 1.0);
+    // A precomp layer's source is its composition.
+    let main = f.p.comp(f.cid).unwrap().clone();
+    let other = f.p.items.values().find(|i| i.name == "Other").unwrap().id;
+    let pre = build::layer(&mut f.p, &main, "Pre", LayerSource::Comp { item: other }, (64, 32), None);
+    f.p.comp_mut(f.cid).unwrap().layers.push(pre);
+    assert_close!(f.num("thisComp.layer('Pre').source.width", 0.0), 64.0);
+    assert_close!(f.num("thisComp.layer('Pre').source.numLayers", 0.0), 1.0);
+}
+
+#[test]
+fn layer_control_property_stands_for_its_layer() {
+    let mut f = fx();
+    // Layer A gets a Layer Control ("Map") that points at layer B (#809).
+    let spec = effectcraft_effects::find("ec.control.layer").unwrap();
+    let mut map = group_push(&mut f.p, |ids| effectcraft_effects::instantiate(spec, ids, "Map", [20.0, 20.0]));
+    map.prop_mut("layer").unwrap().value = Value::Layer(Some(f.b.0));
+    f.p.comp_mut(f.cid).unwrap().layers[0].props.sub_mut("effects").unwrap().children.push(map.into());
+    // effect("Map")(1) is the layer itself: its name, index, transform and value.
+    assert_close!(f.num("effect('Map')(1).name == 'B' ? 1 : 0", 0.0), 1.0);
+    assert_close!(f.num("effect('Map')(1).index", 0.0), 2.0);
+    assert_close!(f.num("effect('Map')(1).transform.position[0]", 0.0), 100.0);
+    assert_close!(f.num("effect('Map')(1).transform.scale[0]", 0.0), 100.0);
+    assert_close!(f.num("effect('Map')(1).value.name == 'B' ? 1 : 0", 0.0), 1.0);
+}
+
+#[test]
+fn time_to_frames_rounds_durations_away_from_zero() {
+    let f = fx();
+    // Adobe's public expression reference distinguishes durations from absolute times.
+    // Expected integer counts are literal values, independent of the implementation.
+    for (expression, expected) in [
+        ("timeToFrames(-0.01, 24, true)", -1.0),
+        ("timeToFrames(-0.05, 24, true)", -2.0),
+        ("timeToFrames(0, 24, true)", 0.0),
+        ("timeToFrames(-0.125, 24, true)", -3.0),
+        ("timeToFrames(0.125, 24, true)", 3.0),
+        ("timeToFrames(0.01, 24, true)", 1.0),
+        ("timeToFrames(0.05, 24, true)", 2.0),
+    ] {
+        assert_eq!(f.num(expression, 0.0), expected, "{expression}");
+    }
+}
+
+#[test]
+fn time_to_frames_rounds_absolute_times_toward_negative_infinity() {
+    let f = fx();
+    for (expression, expected) in [
+        ("timeToFrames(-0.01, 24, false)", -1.0),
+        ("timeToFrames(-0.05, 24, false)", -2.0),
+        ("timeToFrames(0, 24, false)", 0.0),
+        ("timeToFrames(-0.125, 24, false)", -3.0),
+        ("timeToFrames(0.125, 24, false)", 3.0),
+        ("timeToFrames(0.01, 24, false)", 0.0),
+        ("timeToFrames(0.05, 24, false)", 1.0),
+    ] {
+        assert_eq!(f.num(expression, 0.0), expected, "{expression}");
+    }
+}
+
+#[test]
+fn time_to_frames_preserves_default_arguments() {
+    let f = fx();
+    // The fixture's composition is 30 fps with displayStartTime = 0.
+    for (expression, evaluation_time, expected) in [
+        ("timeToFrames(0.01, 24)", 0.0, 0.0),
+        ("timeToFrames(-0.01, 24)", 0.0, -1.0),
+        ("timeToFrames(0.05)", 0.0, 1.0),
+        ("timeToFrames(-0.05)", 0.0, -2.0),
+        ("timeToFrames()", 0.0, 0.0),
+        ("timeToFrames()", 0.05, 1.0),
+        ("timeToFrames()", -0.05, -2.0),
+        ("timeToFrames(undefined, 24, true)", 0.05, 2.0),
+        ("timeToFrames(0.05, undefined, true)", 0.0, 2.0),
+    ] {
+        assert_eq!(f.num(expression, evaluation_time), expected, "{expression} at {evaluation_time}s");
+    }
+}
+
+#[test]
+fn time_to_frames_preserves_coercion_and_small_durations() {
+    let f = fx();
+    // Duration rounding must not erase tiny nonzero values; absolute times keep the existing tolerance.
+    for (expression, expected) in [
+        ("timeToFrames('0.05', '24', false)", 1.0),
+        ("timeToFrames('0.05', '24', true)", 2.0),
+        ("timeToFrames('-0.05', '24', true)", -2.0),
+        ("timeToFrames(null, 24, true)", 0.0),
+        ("timeToFrames(0.05, null, true)", 0.0),
+        ("timeToFrames(0.05, 0, true)", 0.0),
+        ("timeToFrames(31 / 24 - 5 / 24, 24, true)", 26.0),
+        ("timeToFrames(5 / 24 - 31 / 24, 24, true)", -26.0),
+        ("timeToFrames(-1e-10, 24, false)", 0.0),
+        ("1 / timeToFrames(-0, 24, true) === Infinity ? 1 : 0", 1.0),
+        ("isNaN(timeToFrames(NaN, 24, true)) ? 1 : 0", 1.0),
+        ("timeToFrames(Infinity, 24, true) === Infinity ? 1 : 0", 1.0),
+        ("timeToFrames(-Infinity, 24, true) === -Infinity ? 1 : 0", 1.0),
+        ("var calls = 0; var t = {valueOf: function () { calls++; return 0.05; }}; timeToFrames(t, 24, true) + 100 * calls", 102.0),
+    ] {
+        assert_eq!(f.num(expression, 0.0), expected, "{expression}");
+    }
+}
+
+mod property_group;

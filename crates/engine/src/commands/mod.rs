@@ -26,6 +26,7 @@ pub mod footage_panel;
 pub(crate) mod frame_export;
 mod frontend;
 mod help;
+mod import_project;
 mod key_labels;
 mod key_transform;
 mod keys_more;
@@ -39,6 +40,7 @@ pub mod markers;
 mod mask;
 pub mod mask_interp;
 pub(crate) mod model3d;
+mod nav_more;
 pub mod paint;
 pub mod panels_cmds;
 pub(crate) mod path_nulls;
@@ -49,7 +51,9 @@ mod prop_groups;
 mod proxy;
 pub mod puppet;
 mod query;
+mod quick_offset;
 mod relink;
+pub(crate) mod relink_moved;
 mod render_queue;
 pub(crate) mod rig3d;
 pub mod roto_cmds;
@@ -175,6 +179,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(paths::specs());
         v.extend(effect::specs());
         v.extend(time::specs());
+        v.extend(nav_more::specs());
         v.extend(render_queue::specs());
         v.extend(help::specs());
         v.extend(query::specs());
@@ -190,9 +195,12 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(focus::specs());
         v.extend(key_labels::specs());
         v.extend(key_transform::specs());
+        v.extend(quick_offset::specs());
         v.extend(file_more::specs());
         v.extend(relink::specs());
+        v.extend(relink_moved::specs());
         v.extend(lottie::specs());
+        v.extend(import_project::specs());
         v.extend(timeline::specs());
         v.extend(comp_more::specs());
         v.extend(frame_export::specs());
@@ -432,6 +440,24 @@ pub fn match_path_of(g: &effectcraft_project::PropGroup, uid: effectcraft_projec
         }
     }
     None
+}
+
+/// Turn `effects/<match name>[#n]/<property>` (as [`match_path_of`] writes it) into a uid path on
+/// `l`. Path parsing splits on `.`, which would cut a match name like `ec.control.slider` apart.
+/// Any other path, or an effect that is not on the layer, comes back unchanged.
+pub(crate) fn resolve_effect_path(l: &Layer, path: &str) -> String {
+    let Some((seg, tail)) = path.strip_prefix("effects/").and_then(|r| r.split_once('/')) else { return path.to_string() };
+    let (match_id, nth) = match seg.rsplit_once('#') {
+        Some((m, n)) if !m.is_empty() => match n.parse::<usize>() {
+            Ok(n) if n >= 1 => (m, n),
+            _ => (seg, 1),
+        },
+        _ => (seg, 1),
+    };
+    match l.effects().and_then(|fx| fx.groups().filter(|g| g.match_id == match_id).nth(nth - 1)) {
+        Some(g) => format!("effects/@{}/{tail}", g.uid),
+        None => path.to_string(),
+    }
 }
 
 /// Selected properties (leaves) of the active comp as (layer, uid); selected groups expand to

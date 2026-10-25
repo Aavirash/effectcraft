@@ -8,6 +8,7 @@
 
 pub mod build;
 pub mod essential;
+mod file_check;
 pub mod limits;
 pub mod props;
 pub mod render_queue;
@@ -49,8 +50,9 @@ pub fn saved_by(text: &str) -> Option<String> {
     serde_json::from_str::<Meta>(text).ok()?.saved_by
 }
 
-/// The compositions that were open when a project file was saved (`activeComp` and `openComps`
-/// next to `savedBy`), so it reopens where it was left (#748). Editor state rather than project
+/// The compositions that were open when a project file was saved and their current times
+/// (`activeComp`, `openComps` and `compTimes` next to `savedBy`), so it reopens where it was left
+/// (#748, #1714). Editor state rather than project
 /// content: opening a comp doesn't make the project unsaved, and it isn't part of
 /// [`Project`]. Older files have none; older versions ignore it.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
@@ -62,6 +64,10 @@ pub struct SavedView {
     /// The open comps (Timeline tabs), in tab order.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub open_comps: Vec<ItemId>,
+    /// Each comp's current time, so a project reopens on the frame it was saved at rather than
+    /// at 0, where its layers may not have started yet (#1714).
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub comp_times: BTreeMap<ItemId, Tick>,
 }
 
 /// The view a project file was saved with ([`SavedView`]); empty for older files. Values that
@@ -73,6 +79,8 @@ pub fn saved_view(text: &str) -> SavedView {
         active_comp: Option<serde_json::Value>,
         #[serde(rename = "openComps", default)]
         open_comps: Option<serde_json::Value>,
+        #[serde(rename = "compTimes", default)]
+        comp_times: Option<serde_json::Value>,
     }
     let Ok(m) = serde_json::from_str::<Meta>(text) else { return SavedView::default() };
     SavedView {
@@ -82,6 +90,11 @@ pub fn saved_view(text: &str) -> SavedView {
             .as_ref()
             .and_then(serde_json::Value::as_array)
             .map_or_else(Vec::new, |a| a.iter().filter_map(serde_json::Value::as_u64).map(ItemId).collect()),
+        comp_times: m
+            .comp_times
+            .as_ref()
+            .and_then(serde_json::Value::as_object)
+            .map_or_else(BTreeMap::new, |o| o.iter().filter_map(|(k, v)| Some((ItemId(k.parse().ok()?), Tick(v.as_i64()?)))).collect()),
     }
 }
 
@@ -467,7 +480,37 @@ pub struct Comp {
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Guide {
     pub vertical: bool,
+    /// Comp pixels, or percent of the comp's width (vertical) / height (horizontal) when
+    /// [`Guide::percent`] is set.
     pub position: f64,
+    /// A percentage guide (After Effects 26.5): `position` is a percent of the comp's size, so the
+    /// guide keeps its relative place when the comp is resized. Absent in older projects.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub percent: bool,
+}
+
+impl Guide {
+    /// The comp's extent along this guide's axis, never zero.
+    fn extent(&self, width: u32, height: u32) -> f64 {
+        f64::from(if self.vertical { width } else { height }).max(1.0)
+    }
+
+    /// The guide's position in comp pixels for a comp of this size.
+    pub fn px(&self, width: u32, height: u32) -> f64 {
+        if self.percent { self.position / 100.0 * self.extent(width, height) } else { self.position }
+    }
+
+    /// Place the guide at `px` comp pixels, keeping its unit.
+    pub fn set_px(&mut self, px: f64, width: u32, height: u32) {
+        self.position = if self.percent { px / self.extent(width, height) * 100.0 } else { px };
+    }
+
+    /// Switch between pixels and percent without moving the guide on the comp.
+    pub fn set_percent(&mut self, percent: bool, width: u32, height: u32) {
+        let px = self.px(width, height);
+        self.percent = percent;
+        self.set_px(px, width, height);
+    }
 }
 
 fn yes() -> bool {
@@ -809,7 +852,12 @@ impl Comp {
     /// Draws the same pixels as `o`: equal but for its layers' Audio, Lock and Shy switches, Hide
     /// Shy Layers and the viewer's Resolution.
     pub fn same_pixels(&self, o: &Comp) -> bool {
-        // Every field (no `..`: a new field must be considered here); the layers last.
+        self.same_settings(o) && self.layers.len() == o.layers.len() && self.layers.iter().zip(&o.layers).all(|(a, b)| a.same_pixels(b))
+    }
+
+    /// [`Self::same_pixels`] but for the layers.
+    fn same_settings(&self, o: &Comp) -> bool {
+        // Every field (no `..`: a new field must be considered here).
         let Comp {
             width,
             height,
@@ -819,7 +867,7 @@ impl Comp {
             display_start,
             background,
             work_area,
-            layers,
+            layers: _,
             markers,
             shutter_angle,
             shutter_phase,
@@ -861,8 +909,78 @@ impl Comp {
             && *global_light == o.global_light
             && *guides == o.guides
             && *essential == o.essential
-            && layers.len() == o.layers.len()
-            && layers.iter().zip(&o.layers).all(|(a, b)| a.same_pixels(b))
+    }
+
+    /// The comp-time span (`in_point..out_point` of every layer changed, added or removed,
+    /// widened by the shutter) outside which `self` draws the same pixels as `o`, so cached
+    /// frames there stay valid (#1641). `None` when the edit can reach any frame: a comp setting,
+    /// a layer reorder, Solo turning on or off, an expression (it reads anything), or a changed
+    /// layer another layer parents to, mattes with or picks in an effect.
+    pub fn changed_span(&self, o: &Comp) -> Option<(Tick, Tick)> {
+        fn reads(g: &PropGroup, changed: &[LayerId]) -> bool {
+            g.children.iter().any(|c| match c {
+                Node::Prop(p) => {
+                    p.expr.is_some()
+                        || std::iter::once(&p.value)
+                            .chain(p.keys.iter().map(|k| &k.value))
+                            .any(|v| matches!(v, Value::Layer(Some(id)) if changed.contains(&LayerId(*id))))
+                }
+                Node::Group(g) => reads(g, changed),
+            })
+        }
+        // Solo hides every other layer at every frame.
+        if !self.same_settings(o) || self.any_solo() != o.any_solo() {
+            return None;
+        }
+        let common = |a: &Comp, b: &Comp| a.layers.iter().map(|l| l.id).filter(|id| b.layer(*id).is_some()).collect::<Vec<_>>();
+        if common(self, o) != common(o, self) {
+            return None;
+        }
+        let mut changed = Vec::new();
+        let mut span: Option<(Tick, Tick)> = None;
+        // Each changed layer comes up from both sides: its old and its new span.
+        for (l, other) in self.layers.iter().map(|l| (l, o.layer(l.id))).chain(o.layers.iter().map(|l| (l, self.layer(l.id)))) {
+            if other.is_some_and(|b| l.same_pixels(b)) {
+                continue;
+            }
+            changed.push(l.id);
+            let (s, e) = (l.in_point.min(l.out_point), l.in_point.max(l.out_point));
+            span = Some(span.map_or((s, e), |(a, b)| (a.min(s), b.max(e))));
+        }
+        let reaches = |l: &Layer| {
+            l.parent.is_some_and(|p| changed.contains(&p)) || l.track_matte.as_ref().is_some_and(|m| changed.contains(&m.layer)) || reads(&l.props, &changed)
+        };
+        if self.layers.iter().chain(&o.layers).any(reaches) {
+            return None;
+        }
+        // A frame at `t` samples cameras, lights and transforms over its shutter,
+        // `t + (phase + angle * 0..=1) / 360` frames, and draws the layers active at `t` itself.
+        let (a, p) = (self.shutter_angle / 360.0, self.shutter_phase / 360.0);
+        let fd = self.frame_duration().seconds();
+        let (before, after) = (Tick::from_seconds_f64(p.max(p + a).max(0.0) * fd), Tick::from_seconds_f64(-p.min(p + a).min(0.0) * fd));
+        span.map(|(s, e)| (s - before, e + after))
+    }
+
+    /// Some layer is soloed: only the soloed layers draw.
+    pub fn any_solo(&self) -> bool {
+        self.layers.iter().any(|l| l.switches.solo && l.source.is_av())
+    }
+
+    /// Draws the same pixels as `o` once plain markers are ignored: they change no pixels. Protected
+    /// time markers with a duration set the timing (Responsive Design), so those still count.
+    pub fn same_pixels_ignoring_markers(&self, o: &Comp) -> bool {
+        let protected =
+            |m: &[Marker]| -> Vec<(Tick, Tick)> { m.iter().filter(|m| m.protected && m.duration > Tick::ZERO).map(|m| (m.time, m.duration)).collect() };
+        if protected(&self.markers) != protected(&o.markers) {
+            return false;
+        }
+        let mut c = self.clone();
+        c.markers = o.markers.clone();
+        for (a, b) in c.layers.iter_mut().zip(&o.layers) {
+            a.markers = b.markers.clone();
+            a.markers_locked = b.markers_locked;
+        }
+        c.same_pixels(o)
     }
 
     /// The comp with those switches and the Resolution at their defaults (borrowed when they
@@ -1158,6 +1276,11 @@ impl Footage {
         self.linear_light && !self.preserve_rgb
     }
 
+    /// How long the footage plays: its duration times Interpret Footage ▸ Loop.
+    pub fn looped_duration(&self) -> Tick {
+        Tick(self.duration.0.saturating_mul(self.loop_count.max(1) as i64))
+    }
+
     /// Source time as the footage's timecode: its frame `frame` from Start Timecode
     /// (`0:00:41:20`), as the Footage panel shows it.
     pub fn timecode(&self, frame: i64) -> String {
@@ -1281,7 +1404,7 @@ impl Item {
     pub fn duration(&self) -> Option<Tick> {
         match &self.kind {
             ItemKind::Comp(c) => Some(c.duration),
-            ItemKind::Footage(f) if f.kind != FootageKind::Still => Some(f.duration),
+            ItemKind::Footage(f) if f.kind != FootageKind::Still => Some(f.looped_duration()),
             _ => None,
         }
     }
@@ -1375,6 +1498,19 @@ impl Project {
     pub fn find_by_name(&self, name: &str) -> Option<&Item> {
         self.items.values().find(|i| i.name == name)
     }
+    /// A numbered name for a copy of `base` that no project item has (Edit ▸ Duplicate): its
+    /// trailing number is dropped and the lowest free one from 2 is added (`Comp 1` → `Comp 2`,
+    /// `Name` → `Name 2`, then `Name 3`). Items for which `ignore` holds don't count.
+    pub fn numbered_item_name(&self, base: &str, ignore: impl Fn(&Item) -> bool) -> String {
+        let stem = base.trim_end_matches(|c: char| c.is_ascii_digit()).trim_end();
+        let taken = |n: &str| self.items.values().any(|i| i.name == n && !ignore(i));
+        (2u64..).map(|k| format!("{stem} {k}")).find(|n| !taken(n)).unwrap_or_default()
+    }
+    /// `base` when no project item has that name, else the next free numbered name as
+    /// [`Project::numbered_item_name`] gives it. Items for which `ignore` holds don't count.
+    pub fn unique_item_name(&self, base: &str, ignore: impl Fn(&Item) -> bool) -> String {
+        if self.items.values().any(|i| i.name == base && !ignore(i)) { self.numbered_item_name(base, ignore) } else { base.to_string() }
+    }
     pub fn folder_named(&self, name: &str) -> Option<ItemId> {
         self.items.values().find(|i| i.is_folder() && i.name == name).map(|i| i.id)
     }
@@ -1382,22 +1518,61 @@ impl Project {
     pub fn comp_of_layer(&self, layer: LayerId) -> Option<ItemId> {
         self.comps().find(|(_, c)| c.layer(layer).is_some()).map(|(id, _)| *id)
     }
+    /// The compositions whose layers use `item` as their source (footage, solid, 3D model or
+    /// precomp), each with how many of its layers do, ordered by comp name then id. Only direct
+    /// layers count, as in After Effects' Project panel ("used 3 times"): a solid inside a precomp
+    /// is used by the precomp, not by the comps that nest it. The total is the sum of the counts.
+    pub fn item_users(&self, item: ItemId) -> Vec<(ItemId, usize)> {
+        let mut users: Vec<(ItemId, String, usize)> = self
+            .items
+            .iter()
+            .filter_map(|(id, it)| {
+                let comp = it.as_comp()?;
+                let n = comp.layers.iter().filter(|l| l.source.item() == Some(item)).count();
+                (n > 0).then(|| (*id, it.name.to_lowercase(), n))
+            })
+            .collect();
+        users.sort_by(|a, b| a.1.cmp(&b.1).then(a.0.cmp(&b.0)));
+        users.into_iter().map(|(id, _, n)| (id, n)).collect()
+    }
     /// Whether comp `inner` is (transitively) nested inside comp `outer` (to prevent cycles).
     pub fn comp_contains(&self, outer: ItemId, inner: ItemId) -> bool {
+        // A walk with a stack and a visited set rather than recursion (#1237): a damaged project
+        // may hold a precomp cycle that doesn't pass `inner` (recursion never ended), a long
+        // chain must not use up the call stack, and comps shared by many paths are visited once
+        // (recursion re-walked them for every path).
         if outer == inner {
             return true;
         }
-        let Some(c) = self.comp(outer) else { return false };
-        c.layers.iter().any(|l| matches!(l.source, LayerSource::Comp { item } if self.comp_contains(item, inner)))
+        let mut seen = std::collections::HashSet::new();
+        let mut stack = vec![outer];
+        while let Some(id) = stack.pop() {
+            if !seen.insert(id) {
+                continue;
+            }
+            let Some(c) = self.comp(id) else { continue };
+            for l in &c.layers {
+                if let LayerSource::Comp { item } = l.source {
+                    if item == inner {
+                        return true;
+                    }
+                    if !seen.contains(&item) {
+                        stack.push(item);
+                    }
+                }
+            }
+        }
+        false
     }
     /// Make sure `next_id` exceeds every id in the project (after loading or merging).
     pub fn fix_next_id(&mut self) {
         let mut m = self.next_id;
         for (id, it) in &self.items {
-            m = m.max(id.0 + 1);
+            // Saturating: a damaged file's ids must not overflow (the import then refuses it).
+            m = m.max(id.0.saturating_add(1));
             if let ItemKind::Comp(c) = &it.kind {
                 for l in &c.layers {
-                    m = m.max(l.id.0 + 1).max(l.props.max_uid() + 1);
+                    m = m.max(l.id.0.saturating_add(1)).max(l.props.max_uid().saturating_add(1));
                 }
             }
         }
@@ -1424,13 +1599,20 @@ impl Project {
             && self.render_prefs == other.render_prefs
     }
     /// The project file's text: the project with the version that wrote it (`savedBy`), checked
-    /// to read back, so a save never writes a file that can't be opened (JSON has no NaN or
-    /// infinity: such a value would be written as `null`).
+    /// to read back, so a save never writes a file that can't be opened. Values JSON can't hold
+    /// (NaN or infinity, written as `null`, and nesting too deep to parse) are refused on every
+    /// save; debug builds also read the text back.
     pub fn to_file_json(&self) -> Result<String, ProjectError> {
         self.to_file_json_with_view(&SavedView::default())
     }
     /// [`Project::to_file_json`] that also records the open compositions ([`SavedView`]).
     pub fn to_file_json_with_view(&self, view: &SavedView) -> Result<String, ProjectError> {
+        if self.schema > SCHEMA_VERSION {
+            return Err(ProjectError::Invalid(format!(
+                "the project can't be saved: it holds a value a project file can't store (project schema {} is newer than this version supports ({SCHEMA_VERSION}))",
+                self.schema
+            )));
+        }
         #[derive(Serialize)]
         struct File<'a> {
             #[serde(rename = "savedBy")]
@@ -1440,8 +1622,11 @@ impl Project {
             #[serde(flatten)]
             project: &'a Project,
         }
-        let text = serde_json::to_string_pretty(&File { saved_by: APP_VERSION, view, project: self })
-            .map_err(|e| ProjectError::Invalid(format!("the project can't be saved: {e}")))?;
+        let file = File { saved_by: APP_VERSION, view, project: self };
+        file_check::check(&file)
+            .map_err(|e| ProjectError::Invalid(format!("the project can't be saved: it holds a value a project file can't store ({e})")))?;
+        let text = serde_json::to_string_pretty(&file).map_err(|e| ProjectError::Invalid(format!("the project can't be saved: {e}")))?;
+        #[cfg(debug_assertions)]
         Project::from_json(&text)
             .map_err(|e| ProjectError::Invalid(format!("the project can't be saved: it holds a value a project file can't store ({e})")))?;
         Ok(text)

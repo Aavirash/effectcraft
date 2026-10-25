@@ -12,6 +12,8 @@ use effectcraft_engine::{ExportJob, ExportResult, Exporter, Importer, Session};
 use effectcraft_project::Footage;
 pub use effectcraft_script as script;
 
+pub mod app_dirs;
+
 struct MediaImporter;
 
 impl Importer for MediaImporter {
@@ -80,7 +82,7 @@ impl Exporter for FileExporter {
 
 /// A new session with media, import, expressions, scripting and export enabled.
 pub fn session() -> Session {
-    Session {
+    let mut s = Session {
         // The desktop app, the CLI and the MCP server share installed Roto Brush models.
         models_dir: config_dir().map(|d| d.join("models")),
         exporter: Some(Arc::new(FileExporter::default())),
@@ -88,34 +90,38 @@ pub fn session() -> Session {
         importer: Some(Arc::new(MediaImporter)),
         expr: Some(Arc::new(effectcraft_expr::Expressions)),
         expr_check: Some(effectcraft_expr::check_syntax),
-        script: Some(effectcraft_script::runner),
-        script_ui: effectcraft_engine::scriptui::ScriptUi { dispatch: Some(effectcraft_script::dispatch_ui), ..Default::default() },
         plugin_loader: effectcraft_plugin::wasm_available().then_some(effectcraft_plugin::loader as effectcraft_engine::PluginLoader),
         ..Default::default()
-    }
+    };
+    effectcraft_script::install(&mut s);
+    s
 }
 
 /// The platform config directory for EffectCraft (`EFFECTCRAFT_CONFIG_DIR` overrides):
 /// `~/Library/Application Support/EffectCraft` (macOS), `%APPDATA%\EffectCraft` (Windows),
-/// `$XDG_CONFIG_HOME/effectcraft` or `~/.config/effectcraft` (Linux and others).
+/// `$XDG_CONFIG_HOME/effectcraft` or `~/.config/effectcraft` (Linux and others). A `portable.txt`
+/// beside the executable puts it in `EffectCraftData` there instead ([`app_dirs`]).
 pub fn config_dir() -> Option<std::path::PathBuf> {
-    use std::path::PathBuf;
-    if let Some(d) = std::env::var_os("EFFECTCRAFT_CONFIG_DIR") {
-        return Some(PathBuf::from(d));
-    }
-    let home = || std::env::var_os("HOME").map(PathBuf::from);
-    if cfg!(target_os = "macos") {
-        return home().map(|h| h.join("Library/Application Support/EffectCraft"));
-    }
-    if cfg!(target_os = "windows") {
-        return std::env::var_os("APPDATA").map(|a| PathBuf::from(a).join("EffectCraft"));
-    }
-    std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from).or_else(|| home().map(|h| h.join(".config"))).map(|c| c.join("effectcraft"))
+    app_dirs::current().dir.clone()
 }
 
 #[cfg(test)]
 mod tests {
     use serde_json::json;
+
+    #[test]
+    fn host_runs_tasks_scheduled_by_panel_handlers() {
+        let mut s = super::session();
+        let result = s.execute("script.run", json!({"code": "var w=new Window('palette','Timer regression'); var b=w.add('button',undefined,'Import'); b.onClick=function(){app.scheduleTask(\"app.project.items.addComp('Scheduled',64,64,1,1,25)\",0,false);};w.show();"})).unwrap();
+        assert_eq!(result["ok"], true, "{result}");
+        s.execute("scriptui.click", json!({"window":"Timer regression","widget":"Import"})).unwrap();
+        assert!(s.project.items.is_empty());
+        let tick = s.execute("script.runTasks", json!({})).unwrap();
+        assert_eq!(tick["ran"], 1, "{tick}");
+        assert_eq!(tick["errors"], json!([]), "{tick}");
+        assert!(s.project.items.values().any(|item| item.name == "Scheduled"));
+        s.execute("scriptui.close", json!({"window":"Timer regression"})).unwrap();
+    }
 
     /// Layer ▸ Camera ▸ Link Focus Distance to Point of Interest / to Layer: the expressions
     /// evaluate to the camera's focus on the target.
@@ -298,7 +304,8 @@ mod tests {
         let mut s = super::session();
         s.exporter = Some(Arc::new(super::FileExporter { sink: Some(Arc::new(move |p: &str, d: Vec<u8>| g.lock().unwrap().push((p.to_string(), d)))) }));
         s.execute("file.openDemoProject", json!({})).unwrap();
-        let dir = "/no-such-dir-effectcraft-sink-test";
+        // Rooted without a drive letter is not absolute on Windows, where the engine joins it to the home drive.
+        let dir = if cfg!(windows) { "C:/no-such-dir-effectcraft-sink-test" } else { "/no-such-dir-effectcraft-sink-test" };
         s.execute(
             "renderQueue.add",
             json!({"format": "gif", "output": format!("{dir}/a.gif"), "resolution": 0.0625, "timeSpan": "custom", "start": 0.0, "end": 0.2}),

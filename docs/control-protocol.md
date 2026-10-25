@@ -6,6 +6,9 @@ The desktop app exposes a control channel for agents, tests and the MCP bridge:
 effectcraft --control 9877        # or EFFECTCRAFT_CONTROL_PORT=9877
 ```
 
+The port must be a number from 1 to 65535, and `--control` overrides the variable. A bad port or an
+unknown option prints an error and the app exits with status 1 before it opens a window.
+
 - **Transport:** TCP on `127.0.0.1` only, one JSON object per line in each direction. Connections are
   persistent; requests on one connection are answered in order.
 - **Request:** `{"id": 1, "method": "engine.execute", "params": {...}}` (`id` is echoed back, `params`
@@ -34,7 +37,8 @@ printf '{"id":1,"method":"engine.execute","params":{"command":"comp.new","params
 |---|---|---|
 | `engine.execute` | `{command, params?}` | The command's result. Every engine command (`effectcraft-cli commands`) runs exactly as it does headless, so it never opens a dialog: `comp.new {}` creates a default comp. UI-only ids (`tool.*`, `view.*`, `window.*`, `playback.*`, `timeline.*`, `app.*`) fall through to the menu dispatcher. Unknown top-level params are rejected, and the error lists the accepted keys. |
 | `ui.menu.invoke` | `{id, params?}` | Like a menu click: commands with empty params may open their dialog (New Composition, Solid Settings, file pickers). |
-| UI commands (via either) | | `timeline.column {column, visible?}` (av, keys, label, num, comment, switches, modes, parent, in, out, duration, stretch), `timeline.sourceName {value?}`, `timeline.search {query}`, `timeline.reveal.<kind>` / `timeline.revealAdd.<kind>` (the property shortcuts and Shift+shortcut: position, scale, rotation, opacity, anchor, effects, masks, feather, levels, animated, and the double-press sets maskPath, maskOpacity, timeRemap, expressions, material, paint, selected, missingEffects, waveform), `timeline.keyAt.<anchor\|position\|scale\|rotation\|opacity>` (Alt+Shift+A/P/S/R/T), `timeline.twirlSelected` (Ctrl/Cmd+`), `timeline.collapseAll`, `flowchart.options {layers?, effects?, solids?, direction?: lr\|tb, comp?}`, `flowchart.graph {comp?}` → `{nodes, edges}`, `window.workspace {name}` (all After Effects workspaces). |
+| Copy a Media Browser source path | `ui.menu.invoke {id: "mediaBrowser.copySourcePath", params: {path}}` | Copies the exact non-empty path string to the clipboard and returns `{path}`. Supports file/folder paths and virtual source identifiers. Missing, empty or non-string paths return an error. |
+| UI commands (via either) | | `timeline.column {column, visible?}` (av, keys, label, num, comment, switches, modes, parent, in, out, duration, stretch), `timeline.sourceName {value?}`, `timeline.search {query}`, `timeline.reveal.<kind>` / `timeline.revealAdd.<kind>` (the property shortcuts and Shift+shortcut: position, scale, rotation, opacity, anchor, effects, masks, feather, levels, animated, and the double-press sets maskPath, maskOpacity, timeRemap, expressions, material, paint, selected, missingEffects, waveform), `timeline.keyAt.<anchor\|position\|scale\|rotation\|opacity>` (Alt+Shift+A/P/S/R/T), `timeline.twirlSelected` ``(Ctrl/Cmd+`)``, `timeline.collapseAll`, `flowchart.options {layers?, effects?, solids?, direction?: lr\|tb, comp?}`, `flowchart.graph {comp?}` → `{nodes, edges}`, `window.workspace {name}` (all After Effects workspaces). |
 | `engine.commands` | `{filter?, enabledOnly?}` | `[{id, label, menu, shortcut, params, enabled, why}]` |
 | `ui.menu.list` | `{}` | The menu tree with enablement. |
 | `render.frame` | `{comp?, time?, max_side?, path?, base64?}` | Renders a comp frame through the session, independent of the viewer zoom or resolution. `comp` is an id or name (default: the active comp), `time` is in comp seconds (default: the CTI), `max_side` caps the longest side (0 = full size). Writes a PNG to `path` (default: a temp file) and returns `{comp, time, width, height, path}`. With `base64: true` it returns `{…, png: "<base64>"}` and writes no file. |
@@ -47,7 +51,7 @@ export formats, parity summary), `jobs.list` (Progress panel jobs, e.g. the back
 `footage.check` after File ▸ Open).
 
 Every engine command is reachable through `engine.execute`, and every interactive widget of every
-panel registers an element id; both are enforced by `crates/ui-egui/tests/ui_agent_audit.rs`.
+panel registers an element id; both are enforced by `crates/ui-egui/tests/it/ui_agent_audit.rs`.
 
 ## UI state
 
@@ -81,6 +85,12 @@ errors. Unreadable, invalid or newer files leave the default workspace available
 preserved for the entire session, including after later layout changes. Load and save errors
 appear in the status message and the nullable
 `workspaceStorageError` field; a failed write remains eligible for retry.
+`window.saveWorkspace`, `window.saveWorkspaceAs` and `window.editWorkspaces` (rename, delete)
+write the file immediately. Through `ui.menu.invoke` they return an error when it isn't written
+(a failed write, a file preserved after a failed load, or no configuration store);
+`engine.execute` hands them to the UI and returns `{frontend}` first, so check
+`workspaceStorageError` there. The changed workspaces still apply for the session, and a later
+save retries them.
 
 ## Input
 
@@ -97,6 +107,13 @@ Points are logical window coordinates. A target is `{id}` (the element's centre;
 | `ui.key` | `{key}`, for example `Space`, `F9`, `Cmd+Z`, `Cmd+Shift+Z`, `PageDown`, `Escape` |
 | `ui.type` | `{text}`: text input into the focused field |
 
+Shortcut presets also accept `Physical+<shortcut>` for a keyboard position, using egui's
+US-position names (for example `Physical+6` and `Physical+Minus` distinguish AZERTY's
+`-` and `)` keys). Physical bindings take precedence over logical bindings for that key
+press. `ui.key` accepts the same notation to test them. Ordinary shortcuts remain layout-aware.
+`time.workAreaStart` and `time.workAreaEnd` navigate to the first and last included work-area
+frames and can be assigned through `shortcuts.set`.
+
 ## Locating things
 
 | Method | Params | Result |
@@ -109,7 +126,7 @@ Points are logical window coordinates. A target is `{id}` (the element's centre;
 
 | Method | Params | Result |
 |---|---|---|
-| `ui.screenshot` | `{path?, panel?, id?}` | `{path, width, height}`: a PNG of the window, or cropped to one panel or element. |
+| `ui.screenshot` | `{path?, panel?, id?}` | `{path, width, height}`: a PNG of the window, or cropped to one panel or element. The panel or element rectangle is resolved when the capture is issued (after the UI settles), so it follows a panel that moved; a panel or id that is not on screen is retried and then reported, never replaced by a whole-window shot. |
 
 Element ids are stable, for example `tools.Selection`, `panel.Timeline`, `panel.tab.EffectControls`,
 `panel.tab.Timeline.<comp>` (one Timeline tab per open comp; `panel.tab.Timeline` is the shown
@@ -118,7 +135,8 @@ one), `panel.tab.Viewer(<n>)` and `viewers.<n>` (View ▸ New Viewer's other Com
 renames it), `viewer.comp`, `viewer.handle.<layer>.<i>`,
 `timeline.layer.<id>.bar`, `timeline.layer.<id>.nestedMarker.<i>` (a precomp's comp markers), `timeline.layer.<id>.twirl`, `timeline.layer.<id>.row` (click selects,
 Enter or a double-click renames, drag reorders), `timeline.prop.<uid>.stopwatch`,
-`timeline.key.<uid>.<frame>`, `timeline.cti`, `effectControls.prop.<uid>.value` (an angle's
+`timeline.key.<uid>.<frame>` (and `timeline.keyAt.<uid>.<ticks>`, exact in layer-time ticks, for
+keys on subframes), `timeline.cti`, `effectControls.prop.<uid>.value` (an angle's
 revolutions are `timeline.prop.<uid>.revolutions`, `effectControls.prop.<uid>.revolutions` and
 `properties.prop.<uid>.revolutions`) and `effects.item.<name>`. The Composition viewer adds `viewer.magnification`, `viewer.resolution`,
 `viewer.roi`, `viewer.grid`, `viewer.channel`, `viewer.exposure`, `viewer.snapshot`,
@@ -134,11 +152,14 @@ Viewer state that agents drive headless too: `view.snapping`, `view.snappingOpti
 `header.snappingOptions`: After Effects' Snap Edges Extended and Snap to Features in Collapsed
 Compositions and Text Layers), `view.channel {channel, colorized?}`,
 `view.exposure {stops | delta}`, `view.resetExposure`, `view.takeSnapshot`, `view.showSnapshot`,
-`view.fastPreviewMode {mode}`, `view.res.full|half|third|quarter|auto {comp?}` and
+`view.fastPreviewMode {mode}` (one mode each, for shortcuts:
+`view.fastPreviews.off|adaptive|draft|fastDraft|wireframe`, and for the channels
+`view.channel.red|green|blue|alpha|redColorized|greenColorized|blueColorized|rgbStraight`), `view.res.full|half|third|quarter|auto {comp?}` and
 `view.res.custom {factor, comp?}` (the comp's Resolution, saved with the project but no undo
 step; `ui.set {viewer: {res}}` sets the active comp's, and `ui.inspect` reports it as
-`ui.viewer.res`), `view.setRegionOfInterest {rect}`, `view.addGuide`,
-`view.moveGuide`, `view.removeGuide`; editing: `shape.newPath` (Pen on shape layers),
+`ui.viewer.res`), `view.setRegionOfInterest {rect}`, `view.addGuide {percent?}`,
+`view.addPercentGuide`, `view.convertGuides {to: percent|pixels, index?}`,
+`view.moveGuide` (comp pixels, whatever the guide's unit), `view.removeGuide`, `effect.setLabel {layer?, effect, label}`; editing: `shape.newPath` (Pen on shape layers),
 `shape.newShape` (the shape tools: a new group in the selected shape layer, else a new shape layer),
 `shape.toolOptions` (the Tools bar's Tool Creates Shape / Mask and Fill and Stroke Options),
 `mask.insertVertex`, `mask.convertVertex`, `mask.deleteVertices`, `path.freeTransform` (masks and

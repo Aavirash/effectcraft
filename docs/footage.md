@@ -58,6 +58,28 @@ sequences, except dropped files (`"drag": true`), which import as stills as in A
 imports stills and a folder's files one by one, and `"alphabetical": true` is Force Alphabetical
 Order.
 
+## Importing another project
+
+File ▸ Import ▸ EffectCraft Project… (or an `.ecproj` / `.ecprojx` file given to File ▸ Import)
+merges that project into the open one, inside a folder named after the file, as After Effects
+imports an `.aep`. Every item, layer and property id moves past the open project's, so precomps,
+parents, track mattes, Layer Control values, Essential Graphics and tracker targets keep pointing
+at the right things. It is one undo step. Footage paths relative to the imported project resolve
+next to it.
+
+Agents: `file.importProject {"path": "/projects/titles.ecproj"}` returns the comps, the root comps,
+`primaryComp` (the only root comp, if there is one) and any missing media.
+
+## Finding a layer's source in the Project panel
+
+Right-click a layer in the Timeline or Composition panel and choose **Reveal Layer Source in
+Project** (also Layer ▸ Reveal ▸ Reveal Layer Source in Project). The Project panel opens, its
+search is cleared, the folders holding the source open, and the source item is selected.
+
+Layers whose image is generated inside the composition — text, shape, null, camera, light and
+3D primitive layers — have no Project item, so the command is not offered for them. Adjustment
+layers do have one: the solid that backs them.
+
 ## Interpret Footage
 
 Select a footage item in the Project panel and choose **File ▸ Interpret Footage ▸ Main…**
@@ -95,11 +117,39 @@ vectors, positions and IDs are never the picture. EXtractoR reads every other la
 
 ## Replacing and reloading
 
+Importing a layered file as a composition refreshes the decoded sources used by its layers,
+including files overwritten at the same path and byte size.
+
+- **Replace a layer's source** without rebuilding the layer: Alt-drag (Option-drag on macOS) a
+  footage item, composition or solid from the Project panel onto a layer in the Timeline. The
+  layer keeps its name, timing, transforms, keyframes, expressions, effects, masks, switches,
+  parenting and track matte; only its source changes. A source with audio adds Audio properties
+  when the layer has none. To replace several selected layers with the selected Project item, press
+  Ctrl+Alt+/ (Cmd+Opt+/). Compositions, footage and solids are interchangeable; folders, data files
+  and 3D models are not sources, and a composition can't be nested in itself. Alt-dragging onto a
+  layer is one layer at a time, as in After Effects.
+  Agents: `layer.replaceSource {"item": id, "layers": [ids]}`.
 - **File ▸ Replace Footage ▸ File…** (Ctrl+H) points the item at another file. Pick a numbered
   file to replace it with that file's whole sequence (`file.replaceFootage {"path": …,
   "sequence": false}` for one frame).
+- **Replace with Precomposition (used N times)**, right-clicking a footage item or solid in the
+  Project panel, puts the item in a new composition of its size,
+  pixel aspect and frame rate, in the same folder, and switches every layer in every composition
+  that used the item to that composition. Layers keep their timing, transforms, effects and
+  masks, and the item stays in the project. The composition lasts as long as the footage, or as
+  the longest layer that showed a still or solid. One undo step (`file.replaceWithPrecomp
+  {"item"?}`).
+- **Relinking moved files.** `footage.relink {"item": id, "path": …}` points a missing item at
+  its file's new location, keeping its interpretation, and relinks every other missing item that
+  was in the same place relative to it (the whole folder moved, a drive was renamed, a project
+  made on Windows opened on macOS); File ▸ Replace Footage on a missing item does the same. One
+  undo step; `footage.missing` lists what is still missing.
+- **A project moved with its footage** finds it again on open: the footage check that runs after
+  File ▸ Open tries each missing file at the same place under the project's new folder, without
+  marking the project modified.
 - **File ▸ Reload Footage** (Ctrl+Alt+L) reads the files again. A sequence picks up frames
-  added to its folder (a render still in progress) and keeps its interpretation.
+  added to its folder (a render still in progress) and keeps its interpretation; a still is
+  read as its one file, even when numbered files sit next to it.
 
 **File ▸ Dependencies ▸ Relink Missing Footage…** searches a chosen folder and its subfolders
 for missing source files on the desktop. It relinks unique exact filenames whose decoded type,

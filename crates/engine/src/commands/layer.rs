@@ -4,8 +4,8 @@ use effectcraft_color::{BlendMode, Label};
 use effectcraft_keyframe::{Justify, TextDoc, Value as KV};
 use effectcraft_project::build::{self, Ids};
 use effectcraft_project::{
-    Comp, FrameBlend, GroupKind, ItemId, ItemKind, Layer, LayerId, LayerSource, MaskMode, MatteKind, Node, Project, PropGroup, Quality, Solid, TrackMatte,
-    limits,
+    Comp, FootageKind, FrameBlend, GroupKind, ItemId, ItemKind, Layer, LayerId, LayerSource, MaskMode, MatteKind, Node, Project, PropGroup, Quality, Solid,
+    TrackMatte, limits,
 };
 use effectcraft_time::Tick;
 use serde_json::{Value, json};
@@ -200,7 +200,14 @@ fn new_text(s: &mut Session, p: &Value) -> Result<Value> {
         let n = doc.char_len();
         let id = insert_layer(proj, st, cid, l)?;
         if edit {
-            st.text_edit = Some(super::text_edit::TextEdit { layer: id, anchor: 0, caret: n, created: true, ..Default::default() });
+            st.text_edit = Some(super::text_edit::TextEdit {
+                layer: id,
+                anchor: 0,
+                caret: n,
+                created: true,
+                session: super::text_edit::next_edit_session(),
+                ..Default::default()
+            });
         }
         Ok(id)
     })?;
@@ -283,7 +290,7 @@ fn add_item(s: &mut Session, p: &Value) -> Result<Value> {
                 &serde_json::json!({"comp": cid.0, "item": item.0, "time": f_p(p, "time"), "index": p.get("index"), "position": p.get("position")}),
             );
         }
-        ItemKind::Footage(f) => (LayerSource::Footage { item }, (f.width, f.height), Some(f.duration)),
+        ItemKind::Footage(f) => (LayerSource::Footage { item }, (f.width, f.height), Some(f.looped_duration())),
         ItemKind::Solid(so) => (LayerSource::Solid { item }, (so.width, so.height), None),
         ItemKind::Folder => return Err(bad("layer.addItem", "folders can't be layers")),
     };
@@ -305,6 +312,103 @@ fn add_item(s: &mut Session, p: &Value) -> Result<Value> {
         insert_layer_at(proj, st, cid, l, index)
     })?;
     Ok(json!({"layer": id.0}))
+}
+
+/// A layer whose source is an item (footage, precomposition or solid), as in After Effects'
+/// Replace Source. Text, shape, null, camera, light and 3D model layers have no AVItem source to
+/// replace.
+fn replaceable_layer(l: &Layer) -> bool {
+    matches!(l.source, LayerSource::Footage { .. } | LayerSource::Comp { .. } | LayerSource::Solid { .. })
+}
+
+/// The source a Project item gives a layer, or why it can't replace one.
+fn replacement_source(item: ItemId, it: &effectcraft_project::Item) -> Result<LayerSource> {
+    const CMD: &str = "layer.replaceSource";
+    match &it.kind {
+        ItemKind::Comp(_) => Ok(LayerSource::Comp { item }),
+        ItemKind::Footage(f) if f.kind == FootageKind::Data => {
+            Err(bad(CMD, "data files can't be layer sources; read them in expressions with footage(\"name\").sourceData"))
+        }
+        ItemKind::Footage(f) if f.kind == FootageKind::Model => Err(bad(CMD, "3D model items can't replace a 2D layer source; add them as 3D layers")),
+        ItemKind::Footage(_) => Ok(LayerSource::Footage { item }),
+        ItemKind::Solid(_) => Ok(LayerSource::Solid { item }),
+        ItemKind::Folder => Err(bad(CMD, "folders can't be layer sources")),
+    }
+}
+
+/// Whether a source brings audio properties (precompositions always can; footage when it has an
+/// audio stream).
+fn source_has_audio(project: &Project, source: &LayerSource) -> bool {
+    match source {
+        LayerSource::Comp { .. } => true,
+        LayerSource::Footage { item } => project.item(*item).is_some_and(|i| matches!(&i.kind, ItemKind::Footage(f) if f.has_audio)),
+        _ => false,
+    }
+}
+
+fn has_replace_source(s: &Session) -> std::result::Result<(), String> {
+    has_comp(s)?;
+    let c = s.active_comp().ok_or("no composition")?;
+    if !s.state.selected_layers.iter().filter_map(|l| c.layer(*l)).any(replaceable_layer) {
+        return Err("select a footage, composition or solid layer".into());
+    }
+    if s.state.project_selection.is_empty() {
+        return Err("select a footage item, a composition or a solid in the Project panel".into());
+    }
+    Ok(())
+}
+
+/// Replace the source of the selected (or `layers`) AV layers with a Project item, as After
+/// Effects' Alt-drag and Ctrl+Alt+/ do. The layer keeps every property: name, timing, transforms,
+/// keyframes, expressions, effects, masks, switches, parenting and track matte. Only its source
+/// changes; precompositions bring their Essential Properties group through `sync_project`, and a
+/// source with audio adds an Audio group when the layer has none.
+fn replace_source(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "layer.replaceSource";
+    let (cid, ids) = layers_p(s, p)?;
+    let ids = unlocked(s, cid, ids, CMD)?;
+    if ids.is_empty() {
+        return Err(bad(CMD, "select a layer first"));
+    }
+    let item = match p.get("item") {
+        Some(Value::Number(n)) => ItemId(n.as_u64().ok_or_else(|| bad(CMD, "item: a project item id"))?),
+        Some(Value::String(name)) => s.project.find_by_name(name).map(|i| i.id).ok_or_else(|| bad(CMD, format!("no item `{name}`")))?,
+        _ => *s.state.project_selection.first().ok_or_else(|| bad(CMD, "select a footage item, a composition or a solid in the Project panel"))?,
+    };
+    let it = s.project.item(item).ok_or_else(|| bad(CMD, format!("no item {}", item.0)))?;
+    let source = replacement_source(item, it)?;
+    let comp = s.project.comp(cid).ok_or(EngineError::NoComp)?;
+    for lid in &ids {
+        let l = comp.layer(*lid).ok_or_else(|| bad(CMD, "no such layer"))?;
+        if !replaceable_layer(l) {
+            return Err(bad(CMD, format!("“{}” has no source item to replace", l.name)));
+        }
+    }
+    if let LayerSource::Comp { item: new } = &source
+        && s.project.comp_contains(*new, cid)
+    {
+        return Err(bad(CMD, "a composition can't contain itself"));
+    }
+    let has_audio = source_has_audio(&s.project, &source);
+    let source_for_edit = source.clone();
+    s.edit("Replace Layer Source", None, |proj, _| {
+        for lid in &ids {
+            let needs_audio = has_audio && proj.comp(cid).and_then(|c| c.layer(*lid)).is_some_and(|l| l.props.sub("audio").is_none());
+            let audio = if needs_audio {
+                let mut next = Ids(&mut proj.next_id);
+                Some(build::audio(&mut next))
+            } else {
+                None
+            };
+            let l = layer_mut(proj, cid, *lid)?;
+            l.source = source_for_edit.clone();
+            if let Some(audio) = audio {
+                l.props.children.push(audio.into());
+            }
+        }
+        Ok(())
+    })?;
+    Ok(json!({"layers": ids.iter().map(|l| l.0).collect::<Vec<_>>(), "item": item.0}))
 }
 
 fn select(s: &mut Session, p: &Value) -> Result<Value> {
@@ -417,6 +521,10 @@ fn set_switch_others(s: &mut Session, cid: ItemId, ids: &[LayerId], name: &str, 
         let applies = |l: &Layer| match name {
             "audio" => l.props.sub("audio").is_some(),
             "lock" | "locked" => true,
+            // Every layer has a Video switch (it hides a null's outline in the viewer and turns a
+            // camera or light off), as the Timeline's eye cell shows; track mattes keep theirs off
+            // by design.
+            "video" | "eye" => !mattes.contains(&l.id),
             _ => l.source.is_av() && !mattes.contains(&l.id),
         };
         let mut alone = true;
@@ -647,6 +755,28 @@ impl ParentFix {
                     }
                 }
             }
+            // Cameras and lights aim with Point of Interest: move it by the same parent-space
+            // change, so a two-node rig keeps its world frame (#1010, #1020).
+            if let Some(pr) = tr.get_mut("poi") {
+                pr.value = map_position(&pr.value);
+                for key in &mut pr.keys {
+                    key.value = map_position(&key.value);
+                    for tangent in [&mut key.spatial_in, &mut key.spatial_out] {
+                        let v = m.apply_vec(effectcraft_geom::Vec3::from(*tangent));
+                        *tangent = [v.x, v.y, v.z];
+                    }
+                }
+                if let Some(factor) = position_speed
+                    .filter(|_| pr.spatial)
+                    .filter(|factor| pr.keys.iter().flat_map(|key| key.in_ease.iter().chain(&key.out_ease)).all(|ease| (ease.speed * *factor).is_finite()))
+                {
+                    for key in &mut pr.keys {
+                        for ease in key.in_ease.iter_mut().chain(&mut key.out_ease) {
+                            ease.speed *= factor;
+                        }
+                    }
+                }
+            }
             if let Some((orientation, factor)) = self.pose_3d {
                 if let Some(pr) = tr.get_mut("orientation") {
                     pr.value = KV::Vec3(orientation);
@@ -743,13 +873,15 @@ fn uniform_parent_pose(m: effectcraft_geom::Mat4, orientation: [f64; 3]) -> Opti
         return Some((orientation, factor));
     }
     let r = (rotation * Mat4::orientation(Vec3::from(orientation))).0;
-    let sy = (-r[2][0]).clamp(-1.0, 1.0);
-    let y = sy.asin();
-    let (x, z) = if (1.0 - sy * sy).sqrt() > 1e-9 { (r[2][1].atan2(r[2][2]), r[1][0].atan2(r[0][0])) } else { ((-r[1][2]).atan2(r[1][1]), 0.0) };
+    // atan2 rather than asin: near ±90 degrees asin loses precision, while cos(y) stays exact.
+    let cy = r[0][0].hypot(r[1][0]);
+    let y = (-r[2][0]).atan2(cy);
+    let (x, z) = if cy > 1e-9 { (r[2][1].atan2(r[2][2]), r[1][0].atan2(r[0][0])) } else { ((-r[1][2]).atan2(r[1][1]), 0.0) };
     Some(([x.to_degrees(), y.to_degrees(), z.to_degrees()], factor))
 }
 
-/// A parent change retains 2D transforms and the world-space anchor of 3D AV layers. Position is
+/// A parent change retains 2D transforms and the world-space anchor of 3D layers (Position,
+/// and Point of Interest for two-node cameras and lights). Position is
 /// re-expressed in the new parent's space (`None`: the composition), evaluated at the current
 /// time.
 pub(crate) fn parent_fixes(s: &Session, cid: ItemId, ids: &[LayerId], parent: Option<LayerId>) -> Vec<ParentFix> {
@@ -793,7 +925,10 @@ pub(crate) fn parent_fixes(s: &Session, cid: ItemId, ids: &[LayerId], parent: Op
         })
     };
     if let Some(inv) = space_3d(parent).inverse().filter(|m| m.0.iter().flatten().all(|v| v.is_finite())) {
-        for layer in comp.layers.iter().filter(|l| ids.contains(&l.id) && l.is_3d() && !l.is_camera() && !l.is_light() && l.parent != parent) {
+        // Cameras and lights compensate like 3D layers (Position, and Point of Interest for
+        // two-node rigs), so parenting keeps the world frame (#1010, #1020). They have no
+        // Scale, so `pose_3d` below stays `None` and Orientation is kept as authored.
+        for layer in comp.layers.iter().filter(|l| ids.contains(&l.id) && l.is_3d() && l.parent != parent) {
             let m = inv * space_3d(layer.parent);
             if m.0.iter().flatten().all(|v| v.is_finite()) {
                 let pose_3d = layer.transform().and_then(|tr| {
@@ -919,6 +1054,14 @@ fn timing(s: &mut Session, p: &Value) -> Result<Value> {
                     let d = t - l.out_point;
                     shift(l, d);
                 }
+                "moveInToStart" => {
+                    let d = Tick::ZERO - l.in_point;
+                    shift(l, d);
+                }
+                "moveOutToEnd" => {
+                    let d = comp_dur - l.out_point;
+                    shift(l, d);
+                }
                 "trimInToTime" => l.in_point = t.min(l.out_point - fd),
                 "trimOutToTime" => l.out_point = t.max(l.in_point + fd),
                 _ => {
@@ -951,6 +1094,20 @@ fn timing(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(Value::Null)
 }
 
+/// `p` with `key` set.
+fn with(p: &Value, key: &str, v: Value) -> Value {
+    let mut p = if p.is_object() { p.clone() } else { json!({}) };
+    p[key] = v;
+    p
+}
+
+/// Move the layers `frames` frames in time (Alt+Page Up / Page Down, with Shift ten frames).
+fn move_frames(s: &mut Session, p: &Value, frames: i64) -> Result<Value> {
+    let (cid, _) = layers_p(s, p)?;
+    let delta = s.project.comp(cid).ok_or(EngineError::NoComp)?.frame_rate.tick_of(frames).seconds();
+    timing(s, &with(p, "delta", json!(delta)))
+}
+
 /// Slip edit: move a layer's source (footage or precomp) under its fixed in and out points, like
 /// dragging the source-duration bar in After Effects. `delta` in seconds or `frames`; positive
 /// moves the source later. Clamped so the source still covers the in–out span. Keyframes and
@@ -972,7 +1129,7 @@ fn slip(s: &mut Session, p: &Value) -> Result<Value> {
         }
         let dur = match &l.source {
             LayerSource::Footage { item } => match s.project.item(*item).map(|i| &i.kind) {
-                Some(ItemKind::Footage(f)) if f.kind != effectcraft_project::FootageKind::Still => Some(Tick(f.duration.0 * f.loop_count.max(1) as i64)),
+                Some(ItemKind::Footage(f)) if f.kind != effectcraft_project::FootageKind::Still => Some(f.looped_duration()),
                 _ => None,
             },
             LayerSource::Comp { item } => s.project.comp(*item).map(|c| c.duration),
@@ -1324,6 +1481,9 @@ fn set_text(s: &mut Session, p: &Value) -> Result<Value> {
         }
         s.bump();
     }
+    // A changed Source Text is handled by `Session::edit`: its boundary clamps the selection and
+    // starts a new IME epoch only when the CTI document actually changed, so an identical text
+    // write stays a no-op and keeps the editor's owner.
     s.edit("Edit Text", merge_p(p), |proj, _| {
         let l = layer_mut(proj, cid, lid)?;
         let lt = l.layer_time(t);
@@ -1577,9 +1737,28 @@ pub fn specs() -> Vec<CommandSpec> {
             has_comp,
             add_item
         ),
+        cmd!(
+            "layer.replaceSource",
+            "Replace Layer Source",
+            [],
+            Some("Cmd+Alt+/"),
+            "{comp?, layers?, layer?, item?: id|name (default the Project panel selection), fixExpressions?: bool (accepted for After Effects compatibility)} → {layers, item}",
+            has_replace_source,
+            replace_source
+        ),
         cmd!("layer.select", "Select Layers", [], None, "{layers: [id|name|#n], add?, toggle?}", has_comp, select),
         cmd!("layer.selectNext", "Select Next Layer", [], Some("Cmd+ArrowDown"), "{add?}", has_comp, select_next),
         cmd!("layer.selectPrevious", "Select Previous Layer", [], Some("Cmd+ArrowUp"), "{add?}", has_comp, select_prev),
+        cmd!("layer.extendSelectionNext", "Extend Selection to Next Layer", [], Some("Cmd+Shift+ArrowDown"), "{}", has_comp, |s, _| select_step(
+            s,
+            &json!({"add": true}),
+            1
+        )),
+        cmd!("layer.extendSelectionPrevious", "Extend Selection to Previous Layer", [], Some("Cmd+Shift+ArrowUp"), "{}", has_comp, |s, _| select_step(
+            s,
+            &json!({"add": true}),
+            -1
+        )),
         cmd!(
             "layer.setSwitch",
             "Layer Switch",
@@ -1607,17 +1786,29 @@ pub fn specs() -> Vec<CommandSpec> {
             "Layer Timing",
             [],
             None,
-            "{layers?, op?: moveInToTime|moveOutToTime|trimInToTime|trimOutToTime, delta?, start?, in?, out?, inDelta?, outDelta? (seconds, per layer), merge?}",
+            "{layers?, op?: moveInToTime|moveOutToTime|moveInToStart|moveOutToEnd|trimInToTime|trimOutToTime, delta?, start?, in?, out?, inDelta?, outDelta? (seconds, per layer), merge?}",
             has_layers,
             timing
         ),
+        cmd!("layer.moveInToStart", "Move Layer In Point to Beginning of Comp", [], Some("Alt+Home"), "{layers?}", has_layers, |s, p| timing(
+            s,
+            &with(p, "op", json!("moveInToStart"))
+        )),
+        cmd!("layer.moveOutToEnd", "Move Layer Out Point to End of Comp", [], Some("Alt+End"), "{layers?}", has_layers, |s, p| timing(
+            s,
+            &with(p, "op", json!("moveOutToEnd"))
+        )),
+        cmd!("layer.moveEarlier", "Move Layers 1 Frame Earlier", [], Some("Alt+PageUp"), "{layers?}", has_layers, |s, p| move_frames(s, p, -1)),
+        cmd!("layer.moveLater", "Move Layers 1 Frame Later", [], Some("Alt+PageDown"), "{layers?}", has_layers, |s, p| move_frames(s, p, 1)),
+        cmd!("layer.moveEarlier10", "Move Layers 10 Frames Earlier", [], Some("Alt+Shift+PageUp"), "{layers?}", has_layers, |s, p| move_frames(s, p, -10)),
+        cmd!("layer.moveLater10", "Move Layers 10 Frames Later", [], Some("Alt+Shift+PageDown"), "{layers?}", has_layers, |s, p| move_frames(s, p, 10)),
         cmd!("layer.slip", "Slip Edit", [], None, "{layers?, delta? (seconds) | frames?, merge?}", has_layers, slip),
-        cmd!("layer.slipBack", "Slip Edit 1 Frame Earlier", [], Some("Alt+PageUp"), "{layers?}", has_layers, |s, p| {
+        cmd!("layer.slipBack", "Slip Edit 1 Frame Earlier", [], None, "{layers?}", has_layers, |s, p| {
             let mut p = p.clone();
             p["frames"] = json!(-1);
             slip(s, &p)
         }),
-        cmd!("layer.slipForward", "Slip Edit 1 Frame Later", [], Some("Alt+PageDown"), "{layers?}", has_layers, |s, p| {
+        cmd!("layer.slipForward", "Slip Edit 1 Frame Later", [], None, "{layers?}", has_layers, |s, p| {
             let mut p = p.clone();
             p["frames"] = json!(1);
             slip(s, &p)

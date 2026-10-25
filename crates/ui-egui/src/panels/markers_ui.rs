@@ -126,6 +126,8 @@ pub fn dialog(app: &mut EffectcraftApp, ctx: &egui::Context, t: &Tokens) {
     let (mut ok, mut cancel, mut delete) = (false, false, false);
     // Cmd+Backspace (Ctrl elsewhere) is Delete, in a text field too.
     let delete_key = super::dialogs::ui_command_key(ctx, egui::Key::Backspace);
+    // Cmd+Enter (Ctrl elsewhere) is OK, also in Comment, where Enter types a new line.
+    let ok_key = super::dialogs::ui_command_key(ctx, egui::Key::Enter);
     let title = d.title.clone();
     super::dialogs::modal(ctx, &title, vec2(520.0, 560.0), t, |ui| {
         egui::Grid::new("marker-grid").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
@@ -222,7 +224,7 @@ pub fn dialog(app: &mut EffectcraftApp, ctx: &egui::Context, t: &Tokens) {
     app.dialog_state.marker = d.clone();
     delete |= delete_key && !ok && !cancel;
     // Enter is OK, unless a text field has it.
-    if ok || (!cancel && !delete && super::dialogs::ui_enter(ctx)) {
+    if ok || (!cancel && !delete && (ok_key || super::dialogs::ui_enter(ctx))) {
         if let Err(e) = app.session.execute("markers.set", draft_params(&d)) {
             app.ui.status = e.to_string();
         }
@@ -242,7 +244,7 @@ pub fn dialog(app: &mut EffectcraftApp, ctx: &egui::Context, t: &Tokens) {
 // ---------------------------------------------------------------- timeline drawing + gestures
 
 fn drag_state_id() -> egui::Id {
-    egui::Id::new("marker-drag")
+    egui::Id::unique("marker-drag")
 }
 
 /// Snap `t` (comp seconds) to the CTI, the work area and other marker times within 8 px.
@@ -299,7 +301,7 @@ fn marker(app: &mut EffectcraftApp, ui: &mut egui::Ui, p: &egui::Painter, comp: 
         p.text(pos2(x + 7.0, y0 + h / 2.0), Align2::LEFT_CENTER, m.comment.lines().next().unwrap_or_default(), Tokens::ui(10.0), t.text);
     }
     let hit = Rect::from_min_max(pos2(x - 5.0, y0 - 1.0), pos2(x + 5.0, y1));
-    let id = egui::Id::new(("marker", r.layer, r.index));
+    let id = egui::Id::unique(("marker", r.layer, r.index));
     let resp = ui.interact(hit, id, Sense::click_and_drag());
     app.auto.add(&r.auto_id(), hit, if m.comment.is_empty() { "marker" } else { &m.comment });
     let tip = if m.comment.is_empty() { "Marker".to_string() } else { m.comment.clone() };
@@ -389,7 +391,7 @@ pub(crate) fn comp_markers(app: &mut EffectcraftApp, ui: &mut egui::Ui, comp: &C
 /// one undo step. Dropped back on the bin or outside the time graph's width, nothing is added.
 pub(crate) fn marker_bin(app: &mut EffectcraftApp, ui: &mut egui::Ui, comp: &Comp, tm: TMap, bin: Rect, strip: Rect) {
     let t = app.tokens;
-    let resp = ui.interact(bin, egui::Id::new("marker-bin"), Sense::drag()).on_hover_text(tr("Composition marker bin: drag a marker to the time ruler"));
+    let resp = ui.interact(bin, egui::Id::unique("marker-bin"), Sense::drag()).on_hover_text(tr("Composition marker bin: drag a marker to the time ruler"));
     app.auto.add("timeline.markerBin", bin, "Composition marker bin");
     let hot = resp.hovered() || resp.dragged();
     if hot {
@@ -434,7 +436,7 @@ fn nested_markers(app: &mut EffectcraftApp, ui: &mut egui::Ui, p: &egui::Painter
         return;
     }
     // Where they land, once per revision (with time remapping that samples the layer's frames).
-    let (key, rev) = (egui::Id::new(("nested-markers", cid.0, layer.id.0)), app.session.revision);
+    let (key, rev) = (egui::Id::unique(("nested-markers", cid.0, layer.id.0)), app.session.revision);
     let cached = ui.ctx().data(|d| d.get_temp::<(u64, Vec<(Tick, usize)>)>(key)).filter(|(r, _)| *r == rev);
     let at = cached.map(|(_, v)| v).unwrap_or_else(|| {
         let v: Vec<(Tick, usize)> =
@@ -455,7 +457,7 @@ fn nested_markers(app: &mut EffectcraftApp, ui: &mut egui::Ui, p: &egui::Painter
         }
         let hit = Rect::from_min_max(pos2(x - 5.0, y0 - 1.0), pos2(x + 5.0, r.max.y - 3.0));
         let tip = if m.comment.is_empty() { format!("Marker in {name}") } else { format!("{} (marker in {name})", m.comment) };
-        let resp = ui.interact(hit, egui::Id::new(("nested-marker", layer.id.0, i)), Sense::click()).on_hover_text(&tip);
+        let resp = ui.interact(hit, egui::Id::unique(("nested-marker", layer.id.0, i)), Sense::click()).on_hover_text(&tip);
         app.auto.add(&format!("timeline.layer.{}.nestedMarker.{i}", layer.id.0), hit, &tip);
         if resp.double_clicked() {
             let opened =
@@ -518,6 +520,20 @@ mod tests {
         assert_eq!(app.session.execute("markers.list", json!({})).unwrap()[0]["chapter"], "Entered");
         open_dialog(&mut app, MarkerRef { layer: None, index: 0 }).unwrap();
         // Also from a focused text field: Tab to one, then press the key.
+        for _ in 0..40 {
+            if ctx.egui_wants_keyboard_input() {
+                break;
+            }
+            crate::panels::dialogs::press_key(&mut app, &ctx, egui::Key::Tab, egui::Modifiers::NONE);
+        }
+        assert!(ctx.egui_wants_keyboard_input(), "a text field has focus");
+        // Cmd+Enter is OK from a focused text field, without typing a new line into it.
+        app.dialog_state.marker.chapter = "Cmd".into();
+        crate::panels::dialogs::press_key(&mut app, &ctx, egui::Key::Enter, egui::Modifiers::COMMAND);
+        assert!(app.dialog.is_none());
+        let m = &app.session.execute("markers.list", json!({})).unwrap()[0];
+        assert_eq!((m["chapter"].as_str(), m["comment"].as_str()), (Some("Cmd"), Some("hello")));
+        open_dialog(&mut app, MarkerRef { layer: None, index: 0 }).unwrap();
         for _ in 0..40 {
             if ctx.egui_wants_keyboard_input() {
                 break;
