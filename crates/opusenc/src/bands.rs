@@ -96,12 +96,24 @@ pub fn exp_rotation_inv(x: &mut [f32], len: usize, k: usize, spread: usize) {
     }
 }
 
+/// Relative slack for the pulse-candidate filter in [`pvq_search`]: far above the f32 rounding of
+/// the filter score (a few 1e-7), far below the spread of real scores.
+const PVQ_SCORE_SLACK: f32 = 1e-5;
+
 /// Greedy PVQ search: the integer vector `y` with `sum |y| = k` closest in direction to `x`.
 pub fn pvq_search(x: &[f32], k: usize, y: &mut [i32]) {
     let n = x.len();
     y[..n].fill(0);
-    let abs: Vec<f32> = x.iter().map(|v| v.abs()).collect();
-    let sum: f32 = abs.iter().sum();
+    // `abs`, `dy` (2 y + 1, infinite in the padding) and the per-pass scores `score`, each padded to
+    // whole 8-lane chunks.
+    let np = n.next_multiple_of(8);
+    let mut buf = vec![0f32; 3 * np];
+    let (abs, rest) = buf.split_at_mut(np);
+    let (dy, score) = rest.split_at_mut(np);
+    for (a, v) in abs.iter_mut().zip(x) {
+        *a = v.abs();
+    }
+    let sum: f32 = abs[..n].iter().sum();
     if !sum.is_finite() || sum <= 1e-15 {
         y[0] = k as i32;
         return;
@@ -113,30 +125,69 @@ pub fn pvq_search(x: &[f32], k: usize, y: &mut [i32]) {
         // Pre-project onto the pyramid (rounding down) and place the rest greedily.
         let r = (k as f32 - 1.0) / sum;
         for j in 0..n {
-            let p = (abs[j] * r).floor() as i32;
+            // Non-negative and at most k, so the truncating cast is the floor.
+            let p = (abs[j] * r) as i32;
             y[j] = p;
             placed += p as usize;
             xy += abs[j] * p as f32;
             yy += (p * p) as f32;
         }
     }
+    for j in 0..np {
+        dy[j] = if j < n { 2.0 * y[j] as f32 + 1.0 } else { f32::INFINITY };
+    }
     while placed < k {
+        // Vectorisable scores (xy + |x_j|)^2 / (yy + 2 y_j + 1) and their maximum.
+        for ((sc, &a), &d) in score.iter_mut().zip(abs.iter()).zip(dy.iter()) {
+            let t = xy + a;
+            *sc = t * t / (yy + d);
+        }
+        let mut lane_max = [0f32; 8];
+        for c in score.as_chunks::<8>().0 {
+            for i in 0..8 {
+                lane_max[i] = if c[i] > lane_max[i] { c[i] } else { lane_max[i] };
+            }
+        }
+        let top = lane_max.iter().fold(0f32, |m, &v| if v > m { v } else { m });
+        // The exact cross-multiplied test below, in index order with the first maximum winning, only
+        // matters for entries within rounding distance of the top score: every other entry is beaten
+        // by the top one whenever it is reached and never beats it afterwards. Running the test on
+        // those alone therefore picks the same pulse as running it on all of them.
+        let filter = top > 1e-30 && top.is_finite();
+        let lo = top * (1.0 - PVQ_SCORE_SLACK);
+        // Usually exactly one entry qualifies; its index falls out of a lane-wise count.
+        let mut count = [0u32; 8];
+        let mut index = [0u32; 8];
+        for (ci, c) in score.as_chunks::<8>().0.iter().enumerate() {
+            for i in 0..8 {
+                let hit = u32::from(c[i] >= lo);
+                count[i] += hit;
+                index[i] += hit * (ci * 8 + i) as u32;
+            }
+        }
         let mut best = 0usize;
-        let mut best_num = -1f32;
-        let mut best_den = 1f32;
-        for j in 0..n {
-            let num = xy + abs[j];
-            let num = num * num;
-            let den = yy + 2.0 * y[j] as f32 + 1.0;
-            if num * best_den > best_num * den {
-                best_num = num;
-                best_den = den;
-                best = j;
+        if filter && count.iter().sum::<u32>() == 1 {
+            best = index.iter().sum::<u32>() as usize;
+        } else {
+            let mut best_num = -1f32;
+            let mut best_den = 1f32;
+            for j in 0..n {
+                if !filter || score[j] >= lo {
+                    let num = xy + abs[j];
+                    let num = num * num;
+                    let den = yy + 2.0 * y[j] as f32 + 1.0;
+                    if num * best_den > best_num * den {
+                        best_num = num;
+                        best_den = den;
+                        best = j;
+                    }
+                }
             }
         }
         xy += abs[best];
         yy += 2.0 * y[best] as f32 + 1.0;
         y[best] += 1;
+        dy[best] = 2.0 * y[best] as f32 + 1.0;
         placed += 1;
     }
     for j in 0..n {
@@ -573,6 +624,89 @@ mod tests {
             }
         }
         assert!(checked > 100, "{checked}");
+    }
+
+    /// The scalar greedy search the vectorised one replaced.
+    fn pvq_search_ref(x: &[f32], k: usize, y: &mut [i32]) {
+        let n = x.len();
+        y[..n].fill(0);
+        let abs: Vec<f32> = x.iter().map(|v| v.abs()).collect();
+        let sum: f32 = abs.iter().sum();
+        if !sum.is_finite() || sum <= 1e-15 {
+            y[0] = k as i32;
+            return;
+        }
+        let mut placed = 0usize;
+        let mut xy = 0f32;
+        let mut yy = 0f32;
+        if k > n / 2 {
+            let r = (k as f32 - 1.0) / sum;
+            for j in 0..n {
+                let p = (abs[j] * r).floor() as i32;
+                y[j] = p;
+                placed += p as usize;
+                xy += abs[j] * p as f32;
+                yy += (p * p) as f32;
+            }
+        }
+        while placed < k {
+            let mut best = 0usize;
+            let mut best_num = -1f32;
+            let mut best_den = 1f32;
+            for j in 0..n {
+                let num = xy + abs[j];
+                let num = num * num;
+                let den = yy + 2.0 * y[j] as f32 + 1.0;
+                if num * best_den > best_num * den {
+                    best_num = num;
+                    best_den = den;
+                    best = j;
+                }
+            }
+            xy += abs[best];
+            yy += 2.0 * y[best] as f32 + 1.0;
+            y[best] += 1;
+            placed += 1;
+        }
+        for j in 0..n {
+            if x[j] < 0.0 {
+                y[j] = -y[j];
+            }
+        }
+    }
+
+    #[test]
+    fn pvq_search_matches_scalar_reference() {
+        let mut state = 0x9e3779b97f4a7c15u64;
+        let mut rnd = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state >> 40) as f32 / (1u64 << 24) as f32 * 2.0 - 1.0
+        };
+        let mut a = vec![0i32; 200];
+        let mut b = vec![0i32; 200];
+        let mut cases = 0;
+        for round in 0..6000 {
+            let n = 1 + (round * 37 + (rnd().abs() * 176.0) as usize) % 176;
+            let k = 1 + (rnd().abs() * 127.0) as usize;
+            let scale = [1.0f32, 1e-9, 1e6, 3e-3][round % 4];
+            let x: Vec<f32> = (0..n)
+                .map(|_| match round % 6 {
+                    0 => rnd(),
+                    1 => if rnd() > 0.8 { rnd() } else { 0.0 },
+                    2 => (rnd() * 4.0).round() / 4.0,
+                    3 => if rnd() > 0.0 { 1.0 } else { -1.0 },
+                    4 => rnd().powi(5),
+                    _ => if rnd() > 0.95 { 3.0 * rnd() } else { 1e-4 * rnd() },
+                } * scale)
+                .collect();
+            pvq_search(&x, k, &mut a);
+            pvq_search_ref(&x, k, &mut b);
+            assert_eq!(a[..n], b[..n], "n={n} k={k} round={round}");
+            cases += 1;
+        }
+        assert_eq!(cases, 6000);
     }
 
     #[test]
