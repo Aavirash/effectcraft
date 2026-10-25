@@ -171,10 +171,14 @@ fn the_watcher_notices_a_footage_file_changed_on_disk() {
     .unwrap();
     w.set_focused(true);
     w.set_watched(footage_reload::watched(&s));
-    let next = |w: &footage_reload::Watcher| {
+    // Report `n`: the worker stores the stamps and then wakes the interface, so wait for the
+    // wake too, not only for the stamps.
+    let next = |w: &footage_reload::Watcher, n: usize| {
         let t0 = Instant::now();
         loop {
-            if let Some(stamps) = w.take() {
+            if wakes.load(Ordering::SeqCst) >= n
+                && let Some(stamps) = w.take()
+            {
                 return stamps;
             }
             assert!(t0.elapsed() < Duration::from_secs(10), "the watcher never reported");
@@ -182,14 +186,14 @@ fn the_watcher_notices_a_footage_file_changed_on_disk() {
         }
     };
     // First look: remembered, nothing to reload.
-    assert_eq!(footage_reload::apply_stamps(&mut s, next(&w)).unwrap(), json!({"files": 0, "reloaded": 0}));
+    assert_eq!(footage_reload::apply_stamps(&mut s, next(&w, 1)).unwrap(), json!({"files": 0, "reloaded": 0}));
     assert_eq!(wakes.load(Ordering::SeqCst), 1);
     std::thread::sleep(fast * 15);
     assert!(w.take().is_none(), "an unchanged file is never reported");
     assert_eq!(wakes.load(Ordering::SeqCst), 1, "and never wakes the interface");
     // Saved in another app: reported once, reloaded, shown.
     save(&path, &flat(GREEN, true));
-    assert_eq!(footage_reload::apply_stamps(&mut s, next(&w)).unwrap(), json!({"files": 1, "reloaded": 1}));
+    assert_eq!(footage_reload::apply_stamps(&mut s, next(&w, 2)).unwrap(), json!({"files": 1, "reloaded": 1}));
     assert!(near(pixel(&s, cid, 32, 24), GREEN));
     assert_eq!(wakes.load(Ordering::SeqCst), 2);
     std::thread::sleep(fast * 10);
