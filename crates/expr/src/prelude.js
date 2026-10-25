@@ -1056,11 +1056,11 @@ Markers.prototype = {
 // ---------------------------------------------------------------------------------------------
 // Unqualified names: thisLayer / thisProperty attributes and the `this*` objects. They're
 // accessors on the global object; assigning one (`var width = 10`) shadows it for the current
-// evaluation only.
+// evaluation only. They can't be deleted or redefined, so an expression can't take one away from
+// the evaluations after it.
 
 function __global(name, get) {
   Object.defineProperty(globalThis, name, {
-    configurable: true,
     get: function () { return name in __S.vars ? __S.vars[name] : get(); },
     set: function (v) { __S.vars[name] = v; },
   });
