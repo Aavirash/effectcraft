@@ -564,25 +564,26 @@ function Layer(c, l) {
 
 // Layer `l` of comp `c`, made once per runtime: a callable Layer is dearer to make than a plain
 // object, so it is kept, and its info (`__info`) is read again in each evaluation.
-// The kept layers are out of an expression's reach, and bounded like the runtime's scripts: once
+// The kept layers are out of an expression's reach (their maps have no prototype, so a change to
+// `Object.prototype` doesn't reach them either), and bounded like the runtime's scripts: once
 // `max` are kept, the layers after them aren't, and the next evaluation starts over
 // (`__layersTrim`, so a layer stays the same object for a whole evaluation).
 var __layer, __layersTrim;
 (function () {
-  var layers = {}, kept = 0, max = 4096;
+  var layers = Object.create(null), kept = 0, max = 4096;
   __layer = function (c, l) {
     // By comp, then layer: a `c + ':' + l` key costs more to build than the lookup saves.
     var m = layers[c], f = m && m[l];
     if (f) return f;
     f = new Layer(c, l);
     if (kept < max) {
-      (m || (layers[c] = {}))[l] = f;
+      (m || (layers[c] = Object.create(null)))[l] = f;
       kept++;
     }
     return f;
   };
   __layersTrim = function () {
-    if (kept >= max) { layers = {}; kept = 0; }
+    if (kept >= max) { layers = Object.create(null); kept = 0; }
   };
 })();
 
