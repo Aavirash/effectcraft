@@ -163,7 +163,7 @@ impl<'a> Decider<'a> {
             lambda,
             lambda_sad: lambda.sqrt(),
             half: match refr {
-                Some(rf) => [(8, 0), (0, 8), (8, 8)].map(|(fx, fy)| subpel_plane(&rf.planes[0], g.width, g.height, fx, fy, bd)),
+                Some(rf) => half_planes(&rf.planes[0], g.width, g.height, bd),
                 None => Default::default(),
             },
         }
