@@ -595,7 +595,10 @@ fn free_transform_drag_undoes_in_one_step() {
     for k in [90, 90, 90, 90] {
         s.execute("path.freeTransform", json!({"layer": l, "scale": k, "merge": "viewer-drag-1"})).unwrap();
     }
-    assert_ne!(mask_path(&s, l, m), before);
+    let after = mask_path(&s, l, m);
+    assert_ne!(after, before);
     s.execute("edit.undo", json!({})).unwrap();
     assert_eq!(mask_path(&s, l, m), before, "one undo reverts the whole drag");
+    s.execute("edit.redo", json!({})).unwrap();
+    assert_eq!(mask_path(&s, l, m), after, "redo restores the whole drag");
 }
