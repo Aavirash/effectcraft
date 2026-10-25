@@ -418,3 +418,18 @@ fn a_resting_pointer_does_not_override_the_arrow_keys() {
     assert!(shown(&h, "Keyboard Shortcuts"), "Right opened Edit with the pointer still on File");
     assert!(!shown(&h, "Open Project"));
 }
+
+/// Leaving the window keeps the menu open, and coming back in over another title switches to it
+/// (#1290): egui reports no pointer movement for that first position.
+#[test]
+fn pointer_reentering_over_another_title_switches_menus() {
+    let mut h = harness();
+    let (file, edit) = (rect(&h, "menu.File"), rect(&h, "menu.Edit"));
+    click_at(&mut h, file.center());
+    h.input_mut().events.push(Event::PointerGone);
+    h.run_steps(2);
+    assert!(shown(&h, "Open Project"), "leaving the window kept File open");
+    move_to(&mut h, edit.center());
+    assert!(shown(&h, "Keyboard Shortcuts"), "coming back over Edit opened it");
+    assert!(!shown(&h, "Open Project"), "and closed File");
+}
