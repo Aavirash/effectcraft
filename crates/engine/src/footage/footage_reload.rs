@@ -430,6 +430,15 @@ mod watcher_tests {
         }
     }
 
+    /// Wait (at most 10 s) until `ready`: a slow machine's worker gets there late, never early.
+    fn wait_until(what: &str, mut ready: impl FnMut() -> bool) {
+        let t0 = std::time::Instant::now();
+        while !ready() {
+            assert!(t0.elapsed() < Duration::from_secs(10), "{what} within 10 s");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
     fn start(disk: &Arc<Disk>, focused: Duration, unfocused: Duration) -> Option<(Watcher, Arc<AtomicUsize>)> {
         let wakes = Arc::new(AtomicUsize::new(0));
         let counter = Arc::clone(&wakes);
@@ -455,8 +464,7 @@ mod watcher_tests {
         w.set_watched(["/a.psd".to_string()].into());
         assert_eq!(wait_for(&w, &wakes, 1), vec![("/a.psd".to_string(), Some((10, 1)))]);
         let looked = disk.looks.load(Ordering::SeqCst);
-        std::thread::sleep(TICK * 15);
-        assert!(disk.looks.load(Ordering::SeqCst) > looked + 3, "it keeps stamping while the window is in front");
+        wait_until("it keeps stamping while the window is in front", || disk.looks.load(Ordering::SeqCst) > looked + 3);
         assert_eq!(wakes.load(Ordering::SeqCst), 1, "an unchanged file is no wakeup");
         assert!(w.take().is_none());
         disk.set("/a.psd", (12, 2));
@@ -499,10 +507,11 @@ mod watcher_tests {
         w.set_watched(["/d.psd".to_string()].into());
         assert_eq!(wait_for(&w, &wakes, 2), vec![("/d.psd".to_string(), Some((2, 2)))], "the set is reported whole, so the session forgets /c.psd");
         w.set_watched(BTreeSet::new());
-        std::thread::sleep(TICK * 3);
+        // The worker may already be past its wait with the old set: that one round of stamps
+        // (one file) can still come, and nothing after it.
         let looked = disk.looks.load(Ordering::SeqCst);
         std::thread::sleep(TICK * 10);
-        assert_eq!(disk.looks.load(Ordering::SeqCst), looked, "nothing watched, nothing stamped");
+        assert!(disk.looks.load(Ordering::SeqCst) <= looked + 1, "nothing watched, nothing stamped");
         let result = Arc::downgrade(&w.result);
         drop(w);
         let t0 = std::time::Instant::now();
