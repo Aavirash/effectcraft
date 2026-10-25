@@ -157,6 +157,60 @@ fn instance3d_needs_a_3d_layer() {
 }
 
 #[test]
+fn instance3d_creates_every_selected_copy_in_one_undo() {
+    let mut s = session();
+    let a = s.execute("layer.new3dPrimitive", json!({"kind": "cube", "width": 120, "height": 120, "depth": 120})).unwrap()["layer"].as_u64().unwrap();
+    let b = s.execute("layer.new3dPrimitive", json!({"kind": "cube", "width": 120, "height": 120, "depth": 120})).unwrap()["layer"].as_u64().unwrap();
+    let r = s.execute("layer.create", json!({"op": "instance3d", "layers": [a, b]})).unwrap();
+    let copies = r["layers"].as_array().unwrap();
+    assert_eq!(copies.len(), 2);
+    let (ia, ib) = (copies[0].as_u64().unwrap(), copies[1].as_u64().unwrap());
+    let comp = cid(&s);
+    assert_ne!(ia, ib);
+    assert_ne!(layer_in(&s, comp, ia).name, layer_in(&s, comp, ib).name, "each copy has a name of its own");
+    // Both sources are off, both copies selected, above their sources in the stack.
+    assert!(!layer_in(&s, comp, a).switches.video && !layer_in(&s, comp, b).switches.video);
+    let mut sel = s.state.selected_layers.clone();
+    let mut want = vec![LayerId(ia), LayerId(ib)];
+    sel.sort_by_key(|l| l.0);
+    want.sort_by_key(|l| l.0);
+    assert_eq!(sel, want);
+    let c = s.active_comp().unwrap();
+    let pos = |id: u64| c.layers.iter().position(|l| l.id.0 == id).unwrap();
+    assert!(pos(ia) < pos(a) && pos(ib) < pos(b), "the copies sit above their sources");
+    // One undo removes both copies and switches both models back on; one redo returns them.
+    s.execute("edit.undo", json!({})).unwrap();
+    let c = s.active_comp().unwrap();
+    assert!(c.layer(LayerId(ia)).is_none() && c.layer(LayerId(ib)).is_none(), "one undo removes every instance");
+    assert!(layer_in(&s, comp, a).switches.video && layer_in(&s, comp, b).switches.video);
+    s.execute("edit.redo", json!({})).unwrap();
+    let c = s.active_comp().unwrap();
+    assert!(c.layer(LayerId(ia)).is_some() && c.layer(LayerId(ib)).is_some(), "one redo returns every instance");
+    assert!(!layer_in(&s, comp, a).switches.video && !layer_in(&s, comp, b).switches.video);
+}
+
+#[test]
+fn instance3d_in_a_mixed_selection_only_takes_the_models() {
+    let mut s = session();
+    let model = triangle_model(&mut s);
+    let solid = s.execute("layer.newSolid", json!({"color": "#808080", "width": 100, "height": 100})).unwrap()["layer"].as_u64().unwrap();
+    let r = s.execute("layer.create", json!({"op": "instance3d", "layers": [model, solid]})).unwrap();
+    let copies = r["layers"].as_array().unwrap();
+    assert_eq!(copies.len(), 1, "only the model gets a copy: {r}");
+    let copy = copies[0].as_u64().unwrap();
+    let comp = cid(&s);
+    assert!(!layer_in(&s, comp, model).switches.video, "the model is switched off");
+    assert!(layer_in(&s, comp, solid).switches.video, "the plain solid is untouched");
+    let skipped = r["skipped"].as_array().unwrap();
+    assert_eq!(skipped.len(), 1);
+    assert!(skipped[0].as_str().unwrap().contains("not a 3D model layer"), "{skipped:?}");
+    // The copy references the model, not the solid.
+    let l = layer_in(&s, comp, copy);
+    let g = l.effects().unwrap().groups().next().unwrap().clone();
+    assert_eq!(g.get("layer").unwrap().value, KV::Layer(Some(model)));
+}
+
+#[test]
 fn instance3d_shows_nothing_outside_the_source_layer_range() {
     let mut s = session();
     let model = triangle_model(&mut s);
