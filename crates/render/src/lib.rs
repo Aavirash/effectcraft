@@ -1510,12 +1510,17 @@ impl<'a> Renderer<'a> {
         let s = self.opts.scale;
         let w = ((ctx.comp.width as f64 * s).ceil() as u32).max(1);
         let h = ((ctx.comp.height as f64 * s).ceil() as u32).max(1);
+        let mut canvas = Image::new(w, h);
+        // Outside the layer's in/out points there is nothing to read: the copy is transparent
+        // there, like any other layer reference (the 3D pipelines don't gate on the range).
+        if !layer.is_active_at(ctx.time) {
+            return Buf { img: canvas, offset: [0.0; 2], scale: s };
+        }
         let mut solo = layer.clone();
         solo.track_matte = None;
         solo.blend_mode = effectcraft_color::BlendMode::Normal;
         solo.preserve_transparency = false;
         solo.switches.video = true;
-        let mut canvas = Image::new(w, h);
         three_d::compose::draw_run(self, ctx, &[&solo], &mut canvas);
         Buf { img: canvas, offset: [0.0; 2], scale: s }
     }

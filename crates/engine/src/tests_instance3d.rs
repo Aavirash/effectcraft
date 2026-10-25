@@ -155,3 +155,25 @@ fn instance3d_needs_a_3d_layer() {
     s.execute("layer.setSwitch", json!({"layers": [text], "switch": "threeD", "value": true})).unwrap();
     assert!(s.execute_checked("layer.create", json!({"op": "instance3d", "layers": [text]})).is_err());
 }
+
+#[test]
+fn instance3d_shows_nothing_outside_the_source_layer_range() {
+    let mut s = session();
+    let model = triangle_model(&mut s);
+    // The model's range ends at 1 s; the comp runs to 2 s.
+    let comp = cid(&s);
+    s.edit("trim", None, |p, _| {
+        p.comp_mut(comp).unwrap().layer_mut(LayerId(model)).unwrap().out_point = Tick::from_seconds_f64(1.0);
+        Ok(())
+    })
+    .unwrap();
+    s.execute("layer.select", json!({"layers": [model]})).unwrap();
+    let r = s.execute("layer.create", json!({"op": "instance3d"})).unwrap();
+    let _copy = r["layers"][0].as_u64().unwrap();
+    // Inside the model's range the copy shows it, transparent around it.
+    let inside = s.render(comp, Tick::from_seconds_f64(0.5), RenderOpts::default());
+    assert!(px(&inside, 320, 180)[3] > 0.9, "the copy shows the model: {:?}", px(&inside, 320, 180));
+    // After its out point the source has nothing to read: the copy is transparent.
+    let outside = s.render(comp, Tick::from_seconds_f64(1.5), RenderOpts::default());
+    assert!(outside.data.iter().all(|p| p[3] < 1e-3), "transparent after the source's out point: {:?}", px(&outside, 320, 180));
+}
