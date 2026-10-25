@@ -1641,6 +1641,18 @@ const SIMPLIFIED_CHINESE: &[(&str, &str)] = &[
     ("Total Offset", "总偏移"),
     ("Per Layer", "每个图层"),
     ("Track", "跟踪"),
+    ("Shortcut", "快捷键"),
+    ("Range", "范围"),
+    ("Play From", "从以下位置播放"),
+    ("Frame Rate", "帧速率"),
+    ("Resolution", "分辨率"),
+    ("Overlays", "叠加"),
+    ("Layer Controls", "图层控制"),
+    ("Loop", "循环"),
+    ("Cache Before Playback", "播放前缓存"),
+    ("Pre-roll", "预卷"),
+    ("Post-roll", "后卷"),
+    ("If caching, play cached frames", "缓存时播放已缓存帧"),
 ];
 
 const TRADITIONAL_CHINESE: &[(&str, &str)] = &[
@@ -2327,6 +2339,18 @@ const TRADITIONAL_CHINESE: &[(&str, &str)] = &[
     ("Total Offset", "總偏移"),
     ("Per Layer", "每個圖層"),
     ("Track", "追蹤"),
+    ("Shortcut", "快速鍵"),
+    ("Range", "範圍"),
+    ("Play From", "從下列位置播放"),
+    ("Frame Rate", "影格速率"),
+    ("Resolution", "解析度"),
+    ("Overlays", "覆疊"),
+    ("Layer Controls", "圖層控制"),
+    ("Loop", "循環"),
+    ("Cache Before Playback", "播放前快取"),
+    ("Pre-roll", "預卷"),
+    ("Post-roll", "後卷"),
+    ("If caching, play cached frames", "快取時播放已快取影格"),
 ];
 
 /// Ukrainian (uk): original translations of the same interface rows as the Chinese catalogs.
@@ -5518,6 +5542,43 @@ mod tests {
 
     /// A row that translates nothing, repeats a source string, or changes the number of values the
     /// English source carries is a bug in the catalog itself.
+    #[test]
+    fn the_preview_panel_labels_are_translated() {
+        // The Preview panel draws these from a local closure, a check table and a roll tuple, none of
+        // which the call-shape scan sees; they had no rows at all.
+        for key in [
+            "Shortcut",
+            "Range",
+            "Play From",
+            "Frame Rate",
+            "Resolution",
+            "Overlays",
+            "Layer Controls",
+            "Loop",
+            "Cache Before Playback",
+            "Pre-roll",
+            "Post-roll",
+            "If caching, play cached frames",
+        ] {
+            for (name, table) in [("Simplified", SIMPLIFIED_CHINESE), ("Traditional", TRADITIONAL_CHINESE)] {
+                let value = table.iter().find(|(k, _)| *k == key).map(|(_, v)| *v);
+                assert!(value.is_some_and(|v| !v.is_empty()), "{key} has no {name} row");
+            }
+        }
+        // A row is not a translation until the panel asks for it: the labels drawn one by one carry
+        // `tr(..)`, and the table and the roll tuple wrap the text they read at the call.
+        let source = include_str!("../panels/misc.rs");
+        for literal in ["Shortcut", "Range", "Play From", "Frame Rate", "Resolution", "Full Screen", "If caching, play cached frames"] {
+            assert!(source.contains(&format!("tr(\"{literal}\")")), "{literal} is drawn without asking the catalog");
+        }
+        for call in ["check_row(app, ui, &p, pos2(cx, cy), key, tr(text), on)", "Align2::LEFT_CENTER, tr(text),"] {
+            assert!(source.contains(call), "{call} no longer asks the catalog");
+        }
+        for table in ["\"Overlays\"", "\"Layer Controls\"", "\"Loop\"", "\"Cache Before Playback\"", "\"Pre-roll\"", "\"Post-roll\""] {
+            assert!(source.contains(table), "{table} is not in the panel");
+        }
+    }
+
     #[test]
     fn catalogs_are_unique_and_keep_the_english_shape() {
         // Grouped by language: a source listed in two tables of one language is still a repeat.
