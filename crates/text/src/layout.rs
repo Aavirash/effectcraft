@@ -637,7 +637,10 @@ fn paragraph(
     para: &ParagraphStyle,
     width: Option<f32>,
 ) -> Vec<ParaLine> {
-    let rtl_para = para.rtl == Some(true);
+    let default_level = para.rtl.map(|r| if r { Level::rtl() } else { Level::ltr() });
+    let bidi = BidiInfo::new(text, default_level);
+    // The resolved paragraph direction: an unset direction follows the text.
+    let rtl_para = bidi.paragraphs.first().map_or(para.rtl == Some(true), |p| p.level.is_rtl());
     let margins_for = |first: bool| -> (f32, f32) {
         let fi = if first { para.indent_first } else { 0.0 };
         if rtl_para { (para.indent_end, para.indent_start + fi) } else { (para.indent_start + fi, para.indent_end) }
@@ -654,9 +657,8 @@ fn paragraph(
         let st = &runs[si].1;
         first_ascent(primaries[si].face, st.size).unwrap_or_else(|| fonts::face(primaries[si].face).metrics(st.size).ascent)
     };
-    // `rtl` is the resolved paragraph direction (an unset direction follows the text).
-    let eff_align = |last: bool, rtl: bool| -> Align {
-        if rtl && width.is_none() && para.align == Align::Justify {
+    let eff_align = |last: bool| -> Align {
+        if rtl_para && width.is_none() && para.align == Align::Justify {
             // Right-to-left point text with a justified paragraph sits flush at its start, the
             // right (After Effects 2026, every justify code; left-to-right not measured).
             Align::Right
@@ -680,16 +682,14 @@ fn paragraph(
             descent: pm.descent,
             first: style_first(si),
             advance: runs[si].1.line_advance(),
-            align: eff_align(true, rtl_para),
+            align: eff_align(true),
             avail: avail_for(true),
             margins: margins_for(true),
             underline: None,
         }];
     }
-    let default_level = para.rtl.map(|r| if r { Level::rtl() } else { Level::ltr() });
-    let bidi = BidiInfo::new(text, default_level);
     let pinfo = &bidi.paragraphs[0];
-    let base_rtl = pinfo.level.is_rtl();
+    let base_rtl = rtl_para;
     // per char: (byte, char, shaped char, face, rtl, form, run)
     let chars: Vec<(usize, char, char, FaceId, bool, Form, usize)> = text
         .char_indices()
@@ -862,7 +862,7 @@ fn paragraph(
     let mut out = Vec::new();
     for (li, r) in ranges.into_iter().enumerate() {
         let last = li + 1 == nlines;
-        let align = eff_align(last, base_rtl);
+        let align = eff_align(last);
         let avail = avail_for(li == 0);
         let (ce, tw) = trailing_ws(&r);
         let hang = hang_of(&r, ce);
@@ -1627,6 +1627,21 @@ mod tests {
         };
         let (right, got) = (at(Align::Right), at(Align::Justify));
         assert!((got.0 - right.0).abs() < 1e-3 && (got.1 - right.1).abs() < 1e-3, "{got:?} vs right-aligned {right:?}");
+    }
+
+    /// Indents follow the resolved direction too: detected right-to-left text puts its start
+    /// indent on the right, as an explicit right-to-left paragraph does.
+    #[test]
+    fn detected_rtl_text_takes_its_indents_on_the_rtl_sides() {
+        let text = "\u{5d0}\u{5d1}\u{5d2} \u{5d3}\u{5d4}";
+        let s = st(30.0);
+        let at = |rtl: Option<bool>| {
+            let p = ParagraphStyle { align: Align::Justify, justify_last: Align::Left, indent_start: 20.0, rtl, ..Default::default() };
+            let l = layout_rich_uncached(text, &[(0..text.len(), s.clone())], &[p]);
+            (l.lines[0].x, l.lines[0].x + l.lines[0].width)
+        };
+        let (explicit, detected) = (at(Some(true)), at(None));
+        assert!((detected.0 - explicit.0).abs() < 1e-3 && (detected.1 - explicit.1).abs() < 1e-3, "{detected:?} vs {explicit:?}");
     }
 
     /// Only the first line's own runs decide whether box text starts at the font ascent: a
