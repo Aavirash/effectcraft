@@ -158,9 +158,12 @@ comp to Advanced 3D in the same undo step, as in After Effects. Shading is physi
 GGX specular, Smith–Schlick geometry, Schlick Fresnel, Lambert diffuse, after Karis 2013):
 parallel, spot and point lights with After Effects' falloffs, ambient lights, image-based
 light from an Environment light whose Source (or the comp's Environment Layer, Layer ▸
-Environment Layer) is an equirectangular image (cosine irradiance map; roughness-indexed mip
+Environment Layer, or a flat default environment of the light's colour × intensity when
+there is neither) is an equirectangular image (cosine irradiance map; roughness-indexed mip
 chain with the split-sum environment BRDF fit), and percentage-closer-filtered shadow maps
-(spot: perspective, parallel: orthographic over the scene, point: six cube faces). Cards keep
+(spot: perspective, parallel: orthographic over the scene, point: six cube faces). An
+Environment light only lights Advanced 3D comps, so adding one (or changing a light's type to
+it) switches a Classic 3D comp to Advanced 3D, as model layers do. Cards keep
 Material Options (Accepts Lights/Shadows, Casts Shadows On/Only, Ambient, Diffuse, Specular);
 models and primitives add Base Color, Metallic, Roughness, Emissive. Rasterisation runs at 2×2
 supersampling with a reversed-Z depth buffer; opaque triangles resolve visibility first, the

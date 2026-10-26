@@ -177,11 +177,28 @@ fn falloff_and_shadow_options_show_only_for_lights_that_have_them() {
     invoke(&mut h, "layer.newLight", json!({}));
     for k in LightKind::ALL {
         choose(&mut h, k);
-        let shown = !matches!(k, LightKind::Ambient | LightKind::Environment);
-        for label in ["Falloff", "Casts Shadows", "Shadow Darkness"] {
-            assert_eq!(h.query_by_label(label).is_some(), shown, "{label} for {}", k.label());
+        let falloff = !matches!(k, LightKind::Ambient | LightKind::Environment);
+        let shadows = k != LightKind::Ambient;
+        assert_eq!(h.query_by_label("Falloff").is_some(), falloff, "Falloff for {}", k.label());
+        for label in ["Casts Shadows", "Shadow Darkness"] {
+            assert_eq!(h.query_by_label(label).is_some(), shadows, "{label} for {}", k.label());
         }
     }
+}
+
+/// An Environment light created through the dialog takes a Casts Shadows tick, like the other
+/// light types (only Ambient has none) — #2436.
+#[test]
+fn an_environment_light_created_with_casts_shadow_takes_it() {
+    let mut h = harness();
+    invoke(&mut h, "layer.newLight", json!({}));
+    choose(&mut h, LightKind::Environment);
+    h.get_by_label("Casts Shadows").click();
+    ok(&mut h);
+    let id = last_layer(&h);
+    assert_eq!(kind(&h, id), LightKind::Environment);
+    assert!(layer(&h, id).props.prop("lightOptions/castsShadows").unwrap().value.as_bool());
+    assert!(layer(&h, id).props.prop("lightOptions/falloff").is_none(), "but no Falloff");
 }
 
 #[test]

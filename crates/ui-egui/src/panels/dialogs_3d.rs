@@ -44,10 +44,16 @@ pub struct LightDraft {
 
 const FALLOFFS: [&str; 3] = ["None", "Smooth", "Inverse Square Clamped"];
 
-/// Whether a light type has Falloff and Shadows options. Ambient and Environment lights come
-/// from no one place, so they have neither.
+/// Whether a light type has Falloff options: Ambient and Environment lights come from no one
+/// place, so they have none — an environment light shines from every direction at once.
 fn falls_off(kind: LightKind) -> bool {
     !matches!(kind, LightKind::Ambient | LightKind::Environment)
+}
+
+/// Whether a light type has Shadows options. Every light but Ambient can cast shadows,
+/// Environment lights included (their image-based light occludes) — as in After Effects (#2436).
+fn casts_shadows(kind: LightKind) -> bool {
+    kind != LightKind::Ambient
 }
 
 fn comp_w(app: &EffectcraftApp) -> f64 {
@@ -306,6 +312,8 @@ pub fn light(app: &mut EffectcraftApp, ctx: &egui::Context, t: &Tokens) {
                     ui.add(crate::widgets::drag_value(egui::DragValue::new(&mut d.falloff_distance).range(0.0..=100000.0).suffix(" px")));
                     ui.end_row();
                 }
+            }
+            if casts_shadows(d.kind) {
                 ui.label(tr("Shadows"));
                 ui.checkbox(&mut d.casts_shadows, tr("Casts Shadows"));
                 ui.end_row();
@@ -318,7 +326,7 @@ pub fn light(app: &mut EffectcraftApp, ctx: &egui::Context, t: &Tokens) {
             }
         });
         ui.add_space(14.0);
-        if falls_off(d.kind) {
+        if casts_shadows(d.kind) {
             ui.label(egui::RichText::new(tr("Note: Shadows are only cast from layers with Cast Shadows enabled.")).font(Tokens::ui(11.0)).color(t.text_dim));
             ui.add_space(8.0);
         }
@@ -343,6 +351,8 @@ pub fn light(app: &mut EffectcraftApp, ctx: &egui::Context, t: &Tokens) {
             p["falloff"] = json!(d.falloff);
             p["radius"] = json!(d.radius);
             p["falloffDistance"] = json!(d.falloff_distance);
+        }
+        if casts_shadows(kind) {
             p["castsShadows"] = json!(d.casts_shadows);
             p["shadowDarkness"] = json!(d.shadow_darkness);
             p["shadowDiffusion"] = json!(d.shadow_diffusion);

@@ -935,10 +935,14 @@ pub(crate) fn build_at(r: &Renderer, ctx: &EvalCtx, sub: Option<&EvalCtx>, run: 
         let (ls, amb, env) = lights(ctx, lin);
         b.s.lights = ls;
         b.s.ambient = amb;
-        if let Some((src, k, rot)) = env
-            && let Some((w, h, d)) = env_pixels(r, ctx, src, lin)
-        {
-            add_environment(&mut b, w, h, d, k, rot);
+        if let Some((src, k, rot)) = env {
+            match env_pixels(r, ctx, src, lin) {
+                Some((w, h, d)) => add_environment(&mut b, w, h, d, k, rot),
+                // No Source and no Environment Layer: a flat default environment, as After
+                // Effects does — the light's colour × intensity light the scene from every
+                // direction (#2436).
+                None => add_environment(&mut b, 8, 4, vec![[1.0, 1.0, 1.0, 1.0]; 32], k, rot),
+            }
         }
         if r.opts.shadows() {
             super::raster::shadow_maps(&mut b.s, r.opts.draft);

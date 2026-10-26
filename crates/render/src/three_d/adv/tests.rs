@@ -337,6 +337,45 @@ fn cards_and_environment_light() {
     assert_eq!(lit.data[80 * 120 + 110][3], 0.0);
 }
 
+/// An Environment light with no Source and no Environment Layer lights the scene with a flat
+/// default environment of its colour × intensity, as After Effects does (#2436) — not nothing
+/// at all.
+#[test]
+fn environment_light_without_a_source_lights_the_scene() {
+    let (mut p, cid) = project(120, 90);
+    let sid = p.add_item(
+        "S",
+        Default::default(),
+        None,
+        ItemKind::Solid(effectcraft_project::Solid { color: [0.5, 0.5, 0.5], width: 60, height: 40, pixel_aspect: 1.0 }),
+    );
+    add(&mut p, cid, LayerSource::Solid { item: sid }, |l| l.switches.three_d = true);
+    let unlit = render(&p, cid);
+    let c = unlit.data[20 * 120 + 30];
+    assert!((c[0] - 0.5).abs() < 0.01 && c[3] > 0.99, "unlit card keeps its colour: {c:?}");
+    // No Source, no Environment Layer: the light still lights the card (a flat white
+    // environment at the light's colour × intensity; a card's Material Options shade it).
+    add(&mut p, cid, LayerSource::Light { kind: LightKind::Environment }, |_| {});
+    let lit = render(&p, cid);
+    let c2 = lit.data[20 * 120 + 30];
+    assert!((c2[0] - c[0]).abs() > 0.05 && c2[3] > 0.99, "the light has an effect: {c2:?} vs {c:?}");
+    // The light's parameters drive it: half intensity darkens towards zero intensity's black.
+    set(p.comp_mut(cid).unwrap().layers.first_mut().unwrap(), "lightOptions/intensity", Value::Scalar(50.0));
+    let half = render(&p, cid);
+    let c3 = half.data[20 * 120 + 30];
+    assert!(c3[0] < c2[0] - 0.02, "half intensity lights less: {c3:?} vs {c2:?}");
+    set(p.comp_mut(cid).unwrap().layers.first_mut().unwrap(), "lightOptions/intensity", Value::Scalar(0.0));
+    let dark = render(&p, cid);
+    let c4 = dark.data[20 * 120 + 30];
+    assert!(c4[0] < 0.02 && c4[3] > 0.99, "zero intensity lights nothing: {c4:?}");
+    // And its colour tints the light red.
+    set(p.comp_mut(cid).unwrap().layers.first_mut().unwrap(), "lightOptions/intensity", Value::Scalar(100.0));
+    set(p.comp_mut(cid).unwrap().layers.first_mut().unwrap(), "lightOptions/color", Value::Color([1.0, 0.0, 0.0, 1.0]));
+    let red = render(&p, cid);
+    let c5 = red.data[20 * 120 + 30];
+    assert!(c5[0] > 0.15 && c5[1] < 0.05 && c5[2] < 0.05, "red environment: {c5:?}");
+}
+
 #[test]
 fn depth_of_field_blurs_out_of_focus_surfaces() {
     let mut img = Image::new(64, 64);
