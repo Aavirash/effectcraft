@@ -7,7 +7,7 @@
 //!   Templates dialog) must have **zero** findings.
 //! * Every other panel is counted and printed (run with `--nocapture`), and checked against
 //!   [`BASELINE`], a ratchet that can only shrink: fixing a panel lowers its number, and a number
-//!   must never go up. When a panel's count falls, lower its entry (the test says so).
+//!   must never go up. When a panel's count falls, the test fails until its entry is lowered.
 //!
 //! What this does not measure: how a real screen reader speaks the tree (none was run), colour
 //! contrast, focus order or keyboard operation (the `ui_*_keyboard.rs` tests cover those), or
@@ -317,6 +317,8 @@ fn collect() -> Report {
         h.run_steps(3);
         let name = format!("{}:default", p.id());
         let Some(rect) = panel_rect(&h, p) else {
+            // A panel with a baseline entry must be looked at, or its allowance would pass unchecked.
+            assert!(!BASELINE.iter().any(|(k, ..)| *k == name), "{name} has a BASELINE entry but was not drawn");
             r.rows.push((format!("{name} (not drawn)"), 0, 0, 0));
             continue;
         };
@@ -371,15 +373,19 @@ fn fixed_panels_have_no_unnamed_or_roleless_controls_and_the_others_do_not_get_w
         }
     }
 
+    // The ratchet: a count above its entry is a regression, a count below it must be written back
+    // (else the old, higher allowance would let a later regression through).
+    let mut off = vec![];
     for (name, n, unnamed, _) in &report.rows {
         if FIXED.contains(&group(name)) {
             continue;
         }
         let (allowed, allowed_unnamed) = BASELINE.iter().find(|(k, ..)| k == name).map_or((0, 0), |(_, v, u)| (*v, *u));
-        assert!(*n <= allowed, "{name}: {n} findings, the baseline allows {allowed}; a panel must not get worse");
-        assert!(*unnamed <= allowed_unnamed, "{name}: {unnamed} unnamed controls, the baseline allows {allowed_unnamed}; a panel must not get worse");
-        if *n < allowed || *unnamed < allowed_unnamed {
-            println!("note: {name} improved to {n} findings ({unnamed} unnamed); lower its BASELINE entry from {allowed} ({allowed_unnamed})");
+        if *n > allowed || *unnamed > allowed_unnamed {
+            off.push(format!("{name}: {n} findings ({unnamed} unnamed), the baseline allows {allowed} ({allowed_unnamed}); a panel must not get worse"));
+        } else if *n < allowed || *unnamed < allowed_unnamed {
+            off.push(format!("{name}: improved to {n} findings ({unnamed} unnamed); lower its BASELINE entry to ({n}, {unnamed})"));
         }
     }
+    assert!(off.is_empty(), "{} scenarios do not match BASELINE:\n{}", off.len(), off.join("\n"));
 }
