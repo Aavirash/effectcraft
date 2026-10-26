@@ -527,69 +527,129 @@ pub enum DocAction {
     Close(u64),
 }
 
-const DOC_PAD: f32 = 8.0;
-const DOC_SWATCH: f32 = 14.0;
+/// Room around a tab's label, as craft-ui gives its dock tabs.
+const TAB_PADDING: f32 = 24.0;
+/// Width of the » button that lists the comp tabs with no room in the strip.
+const DOC_OVERFLOW: f32 = 22.0;
+/// Room for the × after the shown comp's name.
 const DOC_CLOSE: f32 = 16.0;
 
-fn doc_width(ui: &egui::Ui, doc: &DocTab) -> f32 {
-    let label = ui.painter().layout_no_wrap(doc.title.clone(), Tokens::ui(12.0), egui::Color32::WHITE).size().x;
-    DOC_PAD + DOC_SWATCH + label + if doc.active { DOC_CLOSE } else { 0.0 } + DOC_PAD
+/// A comp tab's text: the label swatch, then the name, as the panel tabs with a swatch show it.
+fn doc_job(doc: &DocTab, font: &egui::FontId, color: egui::Color32) -> egui::text::LayoutJob {
+    let mut job = egui::text::LayoutJob::default();
+    job.append("\u{25a0} ", 0.0, egui::TextFormat::simple(font.clone(), doc.swatch));
+    job.append(&doc.title, 0.0, egui::TextFormat::simple(font.clone(), color));
+    job
 }
 
-/// The width the comp tabs ask for in the Timeline's tab strip.
-pub fn doc_tabs_width(ui: &egui::Ui, docs: &[DocTab]) -> f32 {
-    docs.iter().map(|d| doc_width(ui, d)).sum()
+/// The width of one line of `job` at the fonts' current size.
+fn text_width(ctx: &egui::Context, job: egui::text::LayoutJob) -> f32 {
+    ctx.fonts_mut(|f| f.layout_job(job)).size().x
 }
 
-/// Draw the Timeline's comp tabs into `strip` (in its group header): the comp's label swatch, its
-/// name, and × on the shown one. Tabs past the strip's end are left out; Shift+, and Shift+. step
-/// through every open comp. Automation: `panel.tab.Timeline.<comp>`, and `panel.tab.Timeline.close`
-/// for the shown comp's ×.
-pub fn doc_tabs(ui: &mut egui::Ui, strip: Rect, docs: &[DocTab], t: &Tokens, reg: &mut crate::automation::Registry) -> Vec<DocAction> {
+/// Whether comp tab `doc` carries the ×: the comp the Timeline shows, while it is the group's
+/// shown panel.
+fn has_close(doc: &DocTab, selected: bool) -> bool {
+    selected && doc.active
+}
+
+/// The width each comp tab asks for in the Timeline group's tab row.
+pub fn doc_widths(ctx: &egui::Context, docs: &[DocTab], selected: bool, font: &egui::FontId) -> Vec<f32> {
+    docs.iter().map(|d| text_width(ctx, doc_job(d, font, egui::Color32::WHITE)) + TAB_PADDING + if has_close(d, selected) { DOC_CLOSE } else { 0.0 }).collect()
+}
+
+/// Draw the Timeline's comp tabs into `strip`, the part of the Timeline group's tab row after its
+/// panel tabs. Each is a tab like the panel tabs: the comp's label swatch and name, and × on the
+/// shown comp while the Timeline is the group's shown panel (`selected`). Tabs that do not fit go
+/// to a » menu at the end; the shown comp's tab always stays in the row. Shift+, and Shift+. step
+/// through every open comp. Automation: `panel.tab.Timeline.<comp>`, `panel.tab.Timeline.close`
+/// for the shown comp's ×, `panel.tab.Timeline.more` for », and `panel.tab.Timeline.more.<comp>`
+/// for its items.
+pub fn doc_tabs(
+    ui: &mut egui::Ui,
+    strip: Rect,
+    docs: &[DocTab],
+    selected: bool,
+    style: &craft_ui::docking::DockStyle,
+    reg: &mut crate::automation::Registry,
+) -> Vec<DocAction> {
     let mut out = Vec::new();
-    let painter = ui.painter().clone();
-    let mut x = strip.min.x;
+    let timeline = PanelKind::Timeline.id();
+    let widths = doc_widths(ui.ctx(), docs, selected, &style.font);
+    let active = docs.iter().position(|d| d.active).unwrap_or(0);
+    let fit = craft_ui::tabs::fit_whole(&widths, active, strip.width(), DOC_OVERFLOW);
+    let clip = strip.intersect(ui.clip_rect());
     let mid = strip.center().y;
-    for doc in docs {
-        let w = doc_width(ui, doc);
-        if x + w > strip.max.x {
-            break;
-        }
-        let tab = Rect::from_min_size(pos2(x, strip.min.y), vec2(w, strip.height()));
-        let resp = ui.interact(tab, egui::Id::unique(("comp-tab", doc.id)), Sense::click());
-        reg.add_response(&format!("panel.tab.{}.{}", PanelKind::Timeline.id(), doc.id), &resp, &doc.title);
-        if doc.active {
-            painter.rect_filled(tab, 0.0, t.panel_bg);
-        }
-        let sw = Rect::from_center_size(pos2(tab.min.x + DOC_PAD + 5.0, mid), vec2(9.0, 9.0));
-        painter.rect_filled(sw, 1.0, doc.swatch);
-        let color = if doc.active || resp.hovered() { t.tab_text_active } else { t.tab_text };
-        let galley = painter.layout_no_wrap(doc.title.clone(), Tokens::ui(12.0), color);
-        let label_x = tab.min.x + DOC_PAD + DOC_SWATCH;
-        let label_w = galley.size().x;
-        painter.galley(pos2(label_x, mid - galley.size().y / 2.0), galley, color);
-        if doc.active {
-            painter.line_segment([pos2(label_x, strip.max.y - 3.0), pos2(label_x + label_w, strip.max.y - 3.0)], Stroke::new(1.0, t.tab_text_active));
-            let cr = Rect::from_center_size(pos2(label_x + label_w + DOC_CLOSE / 2.0 + 2.0, mid), vec2(10.0, 10.0));
-            let close = ui.interact(cr.expand(2.0), egui::Id::unique(("comp-tab-close", doc.id)), Sense::click());
-            let cc = if close.hovered() { t.tab_text_active } else { t.tab_text };
+    let mut x = strip.min.x;
+    for (index, width) in &fit.shown {
+        let Some(doc) = docs.get(*index) else { continue };
+        let tab = Rect::from_min_size(pos2(x, strip.min.y), vec2(*width, strip.height()));
+        x += width;
+        let on = selected && doc.active;
+        let color = if on { style.text } else { style.inactive_text };
+        let close = has_close(doc, selected);
+        let mut job = doc_job(doc, &style.font, color);
+        job.wrap = egui::text::TextWrapping {
+            max_width: (tab.width() - TAB_PADDING - if close { DOC_CLOSE } else { 0.0 }).max(0.0),
+            max_rows: 1,
+            break_anywhere: true,
+            overflow_character: Some('\u{2026}'),
+        };
+        let galley = ui.fonts_mut(|f| f.layout_job(job));
+        let label_end = tab.min.x + TAB_PADDING * 0.5 + galley.size().x;
+        let resp = craft_ui::tabs::Tab::new(egui::Id::unique(("comp-tab", doc.id)), &doc.title, on).focus_stroke(Stroke::new(1.0, style.accent)).show_at(
+            ui,
+            tab,
+            |ui, response| {
+                let painter = ui.painter().with_clip_rect(tab.intersect(clip));
+                painter.rect_filled(tab, 0.0, if on || response.hovered() { style.active_background } else { style.tab_background });
+                painter.galley(pos2(tab.min.x + TAB_PADDING * 0.5, mid - galley.size().y * 0.5), galley.clone(), color);
+            },
+        );
+        let resp = if galley.elided { resp.on_hover_text(&doc.title) } else { resp };
+        reg.add_response(&format!("panel.tab.{timeline}.{}", doc.id), &resp, &doc.title);
+        if close {
+            let cr = Rect::from_center_size(pos2(label_end + DOC_CLOSE / 2.0, mid), vec2(10.0, 10.0));
+            let hit = ui.interact(cr.expand(2.0), egui::Id::unique(("comp-tab-close", doc.id)), Sense::click());
+            hit.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, hit.enabled(), "Close"));
+            let cc = if hit.hovered() { style.text } else { style.inactive_text };
             let k = 3.5;
+            let painter = ui.painter().with_clip_rect(tab.intersect(clip));
             painter.line_segment([cr.center() + vec2(-k, -k), cr.center() + vec2(k, k)], Stroke::new(1.2, cc));
             painter.line_segment([cr.center() + vec2(-k, k), cr.center() + vec2(k, -k)], Stroke::new(1.2, cc));
-            reg.add_response(&format!("panel.tab.{}.close", PanelKind::Timeline.id()), &close, "Close");
-            crate::widgets::focus_outline(ui, &close, t);
-            if close.clicked() {
+            reg.add_response(&format!("panel.tab.{timeline}.close"), &hit, "Close");
+            if hit.clicked() {
                 out.push(DocAction::Close(doc.id));
             }
         }
-        crate::widgets::focus_outline(ui, &resp, t);
         if resp.clicked() {
             out.push(DocAction::Activate(doc.id));
         }
         if resp.middle_clicked() {
             out.push(DocAction::Close(doc.id));
         }
-        x += w;
+    }
+    if !fit.overflow.is_empty() && fit.overflow_width > 0.0 {
+        let more = Rect::from_min_size(pos2(x, strip.min.y), vec2(fit.overflow_width, strip.height()));
+        let resp = ui.interact(more, egui::Id::unique("comp-tabs-more"), Sense::click());
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, resp.enabled(), "More compositions"));
+        reg.add_response(&format!("panel.tab.{timeline}.more"), &resp, "More compositions");
+        let color = if resp.hovered() { style.text } else { style.inactive_text };
+        ui.painter().with_clip_rect(more.intersect(clip)).text(more.center(), Align2::CENTER_CENTER, "\u{bb}", style.font.clone(), color);
+        egui::Popup::menu(&resp).show(|ui| {
+            egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
+                for index in &fit.overflow {
+                    let Some(doc) = docs.get(*index) else { continue };
+                    let item = ui.button(doc_job(doc, &style.font, style.text));
+                    item.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, item.enabled(), &doc.title));
+                    reg.add_response(&format!("panel.tab.{timeline}.more.{}", doc.id), &item, &doc.title);
+                    if item.clicked() {
+                        out.push(DocAction::Activate(doc.id));
+                        ui.close();
+                    }
+                }
+            });
+        });
     }
     out
 }

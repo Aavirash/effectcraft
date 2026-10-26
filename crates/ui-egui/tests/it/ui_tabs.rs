@@ -424,3 +424,45 @@ fn a_tab_dropped_on_a_frame_joins_it() {
 fn group_of(w: &Workspace, p: PanelKind) -> Option<Vec<PanelKind>> {
     Some(w.group_of(p)).filter(|g| !g.is_empty())
 }
+
+fn has(h: &Harness<'_, EffectcraftApp>, id: &str) -> bool {
+    h.state().auto.previous.iter().chain(h.state().auto.elements.iter()).any(|e| e.id == id)
+}
+
+#[test]
+fn open_comps_are_tabs_in_the_timeline_row_and_the_rest_are_in_its_overflow_menu() {
+    let mut s = Session::default();
+    let names = ["Opening Titles", "Lower Third Left", "Lower Third Right", "Product Shot", "End Card Wide", "Logo Sting Short"];
+    let comps: Vec<u64> = names
+        .iter()
+        .map(|name| s.execute("comp.new", json!({"name": name, "width": 320, "height": 180, "duration": 4})).unwrap()["comp"].as_u64().unwrap())
+        .collect();
+    s.state.open_comps = vec![ItemId(comps[0])];
+    s.state.active_comp = Some(ItemId(comps[0]));
+    let mut h = Harness::builder().with_size(egui::vec2(1000.0, 800.0)).build_eframe(|_| EffectcraftApp::new(s));
+    h.run_steps(3);
+    let alone = rect(&h, "panel.tab.RenderQueue");
+    h.state_mut().session.state.open_comps = comps.iter().map(|c| ItemId(*c)).collect();
+    h.run_steps(3);
+    // The panel tabs keep their width; the comp tabs follow them in the same row, in order.
+    let (tl, rq) = (rect(&h, "panel.tab.Timeline"), rect(&h, "panel.tab.RenderQueue"));
+    assert!((rq.width() - alone.width()).abs() < 0.5, "Render Queue {rq:?} was {alone:?}");
+    let shown: Vec<u64> = comps.iter().copied().filter(|c| has(&h, &format!("panel.tab.Timeline.{c}"))).collect();
+    assert!(shown.contains(&comps[0]) && shown.len() < comps.len(), "{shown:?}");
+    let mut x = rq.max.x;
+    for c in &shown {
+        let tab = rect(&h, &format!("panel.tab.Timeline.{c}"));
+        assert!(tl.y_range().contains(tab.center().y) && tab.min.x >= x - 0.5, "comp {c} at {tab:?} after x {x}");
+        x = tab.max.x;
+    }
+    // A comp with no room is in the » menu; picking it shows it, and its tab joins the row.
+    let hidden = comps.iter().copied().find(|c| !shown.contains(c)).unwrap();
+    let more = rect(&h, "panel.tab.Timeline.more");
+    assert!(more.min.x >= x - 0.5 && tl.y_range().contains(more.center().y), "{more:?}");
+    click_n(&mut h, more.center(), 1);
+    let item = rect(&h, &format!("panel.tab.Timeline.more.{hidden}"));
+    click_n(&mut h, item.center(), 1);
+    assert_eq!(h.state().session.state.active_comp, Some(ItemId(hidden)));
+    assert_eq!(open_comps(&h), comps);
+    assert!(has(&h, &format!("panel.tab.Timeline.{hidden}")));
+}

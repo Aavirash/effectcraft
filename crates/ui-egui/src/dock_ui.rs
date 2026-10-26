@@ -436,13 +436,13 @@ impl EffectcraftApp {
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(body).id_salt("effectcraft-dock-area"));
         child.set_clip_rect(body.intersect(ui.clip_rect()));
         let docs = self.tab_docs();
-        let doc_width = dock::doc_tabs_width(ui, &docs);
         let ime = NativeIme::new(&layout.floating, &self.unpublished_viewports);
         let mut content = EffectContent {
             titles: self.tab_titles(),
             swatches: self.tab_swatches(),
             docs,
-            doc_width,
+            ctx: ctx.clone(),
+            style: style.clone(),
             app: self,
             tokens: t,
             doc_actions: Vec::new(),
@@ -632,8 +632,9 @@ struct EffectContent<'a> {
     titles: Vec<(PanelKind, String)>,
     swatches: Vec<(PanelKind, egui::Color32)>,
     docs: Vec<DocTab>,
-    /// The width the comp tabs take in the Timeline's tab strip.
-    doc_width: f32,
+    /// Measures the comp tabs for their width in the tab row.
+    ctx: egui::Context,
+    style: DockStyle,
     doc_actions: Vec<DocAction>,
     /// Viewer locks clicked.
     locks: Vec<PanelKind>,
@@ -750,8 +751,12 @@ fn window_bodies(window: &Floating<PanelKind>) -> usize {
 impl EffectContent<'_> {
     fn header_width(&self, active: PanelKind, strip_width: f32) -> f32 {
         let lock = if has_lock(active) { LOCK_W } else { 0.0 };
-        let docs = if active == PanelKind::Timeline && !self.docs.is_empty() { self.doc_width } else { 0.0 };
-        (docs + lock + MENU_W).min(strip_width * 2.0 / 3.0).max(MENU_W)
+        (lock + MENU_W).min(strip_width * 2.0 / 3.0).max(MENU_W)
+    }
+
+    /// Whether the group of `panels` shows comp tabs: it holds the Timeline and comps are open.
+    fn has_doc_tabs(&self, panels: &[PanelKind]) -> bool {
+        panels.contains(&PanelKind::Timeline) && !self.docs.is_empty()
     }
 }
 
@@ -785,8 +790,8 @@ impl DockContent<PanelKind> for EffectContent<'_> {
     }
 
     /// The tab names what the panel shows ("Composition Intro"), after the label swatch of its
-    /// comp or layer. With comps open, the Timeline's own tab is just "Timeline"; its comp tabs
-    /// are in the group header.
+    /// comp or layer. With comps open, the Timeline's own tab is just "Timeline"; each comp has a
+    /// tab of its own after the group's panel tabs.
     fn label(&mut self, _ui: &egui::Ui, panel: &PanelKind, logical: &str, font: &egui::FontId, color: egui::Color32) -> egui::WidgetText {
         let title = self.titles.iter().find(|(p, _)| p == panel).map_or(logical, |(_, s)| s.as_str());
         let Some((_, swatch)) = self.swatches.iter().find(|(p, _)| p == panel) else { return title.into() };
@@ -800,23 +805,17 @@ impl DockContent<PanelKind> for EffectContent<'_> {
         self.header_width(*active, strip_width)
     }
 
-    /// The Timeline's comp tabs, the viewer lock and the ≡ panel menu of the shown panel.
+    /// The viewer lock and the ≡ panel menu of the shown panel.
     fn group_header(&mut self, ui: &mut egui::Ui, _panels: &[PanelKind], active: &PanelKind, _floating: bool) {
         let t = self.tokens;
         let header = ui.max_rect();
         let menu = Rect::from_min_max(pos2((header.max.x - MENU_W).max(header.min.x), header.min.y), header.max);
-        let mut end = menu.min.x;
         if has_lock(*active) {
-            let lock = Rect::from_center_size(pos2(end - LOCK_W / 2.0, header.center().y), vec2(14.0, 14.0));
-            end -= LOCK_W;
+            let lock = Rect::from_center_size(pos2(menu.min.x - LOCK_W / 2.0, header.center().y), vec2(14.0, 14.0));
             let locked = self.app.ui.locked_tabs.contains(&active.id());
             if dock::lock_button(ui, lock, *active, locked, &t, &mut self.app.auto) {
                 self.locks.push(*active);
             }
-        }
-        if *active == PanelKind::Timeline && !self.docs.is_empty() {
-            let strip = Rect::from_min_max(header.min, pos2(end.max(header.min.x), header.max.y));
-            self.doc_actions.extend(dock::doc_tabs(ui, strip, &self.docs, &t, &mut self.app.auto));
         }
         let rect = Rect::from_center_size(menu.center(), vec2(18.0, 18.0));
         let response = ui.interact(rect, egui::Id::unique(("panel-menu-button", active.id())), Sense::click());
@@ -828,6 +827,21 @@ impl DockContent<PanelKind> for EffectContent<'_> {
         if response.clicked() {
             self.app.ui.focused = *active;
             self.menu = Some((*active, rect.left_bottom()));
+        }
+    }
+
+    fn group_extra_tabs_width(&self, panels: &[PanelKind], active: &PanelKind, _floating: bool) -> f32 {
+        if !self.has_doc_tabs(panels) {
+            return 0.0;
+        }
+        dock::doc_widths(&self.ctx, &self.docs, *active == PanelKind::Timeline, &self.style.font).iter().sum()
+    }
+
+    /// The Timeline's comp tabs, after its group's panel tabs whichever panel is shown.
+    fn group_extra_tabs(&mut self, ui: &mut egui::Ui, panels: &[PanelKind], active: &PanelKind, _floating: bool) {
+        if self.has_doc_tabs(panels) {
+            let selected = *active == PanelKind::Timeline;
+            self.doc_actions.extend(dock::doc_tabs(ui, ui.max_rect(), &self.docs, selected, &self.style, &mut self.app.auto));
         }
     }
 }
