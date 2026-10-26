@@ -1050,6 +1050,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-quit"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=1e6f127844ec61b3b8afdcc2bb76e7cfe470153f#1e6f127844ec61b3b8afdcc2bb76e7cfe470153f"
+dependencies = [
+ "dispatch2",
+ "egui",
+ "objc2 0.6.5",
+ "objc2-app-kit 0.3.2",
+]
+
+[[package]]
 name = "craft-ui"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=1e6f127844ec61b3b8afdcc2bb76e7cfe470153f#1e6f127844ec61b3b8afdcc2bb76e7cfe470153f"
@@ -1777,6 +1788,7 @@ name = "effectcraft-ui-egui"
 version = "0.17.0"
 dependencies = [
  "chrono",
+ "craft-quit",
  "craft-ui",
  "craft-update",
  "effectcraft-color",

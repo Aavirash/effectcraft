@@ -2219,6 +2219,9 @@ impl EffectcraftApp {
         self.apply_gpu_failure(ctx);
         if self.gpu_failure_applied == Some(true) {
             self.close_after_device_loss(ctx);
+            // On macOS the app quits through `-[NSApplication terminate:]` instead of closing the
+            // window while AppKit's run loop is running (#341).
+            craft_quit::on_close_request(ctx);
             return;
         }
         // Focus comes from the fresh viewport copy; a full pass's `InputState::focused` is only a
@@ -2286,7 +2289,9 @@ impl EffectcraftApp {
             self.command_inbox = Some(rx);
         }
         // A close request (the window's button, Quit, `app.quit`) must be answered while hidden.
-        panels::unsaved::on_close_requested(self, ctx);
+        // On macOS a close that nothing held open quits through `-[NSApplication terminate:]`
+        // (#341).
+        panels::unsaved::close_or_quit(self, ctx);
         let title = panels::unsaved::window_title(self);
         if title != self.window_title {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
