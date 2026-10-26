@@ -172,6 +172,16 @@ pub struct EnvInfo {
     pub intensity: f32,
     /// Radians about the vertical axis.
     pub rotation: f32,
+    /// Unit direction from the scene towards the environment's dominant (radiance-weighted)
+    /// bright region — the direction its shadow is cast from, like a parallel light's
+    /// `to_light`. `[0; 3]` when the image is directionless (uniform): no shadow then.
+    pub sun: [f32; 3],
+    /// Shadow map index into [`Scene::shadows`]: 0 marked (assigned by `raster::shadow_maps`),
+    /// -1 casts no shadow. Gated by the light's Cast Shadows.
+    pub shadow: i32,
+    pub shadow_darkness: f32,
+    /// The light's Shadow Diffusion (the penumbra width the shadow map's PCF widens to).
+    pub shadow_diffusion: f32,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -670,9 +680,20 @@ fn card_layer(r: &Renderer, ctx: &EvalCtx, layer: &Layer, b: &mut Builder) {
     }
 }
 
-/// Evaluated lights: (scene lights, ambient sum, environment light (layer, intensity × colour,
-/// rotation)).
-fn lights(ctx: &EvalCtx, lin: bool) -> (Vec<Light>, [f32; 3], Option<(Option<u64>, [f32; 3], f32)>) {
+/// The evaluated Environment light: its image source, intensity × colour, rotation, and
+/// shadow settings (After Effects' Light Settings shows Cast Shadows for Environment lights).
+#[derive(Clone, Copy)]
+struct EnvLight {
+    src: Option<u64>,
+    color: [f32; 3],
+    rot: f32,
+    casts_shadows: bool,
+    shadow_darkness: f64,
+    shadow_diffusion: f64,
+}
+
+/// Evaluated lights: (scene lights, ambient sum, environment light).
+fn lights(ctx: &EvalCtx, lin: bool) -> (Vec<Light>, [f32; 3], Option<EnvLight>) {
     let mut out = vec![];
     let mut ambient = [0.0f32; 3];
     let mut env = None;
@@ -693,7 +714,14 @@ fn lights(ctx: &EvalCtx, lin: bool) -> (Vec<Light>, [f32; 3], Option<(Option<u64
                 if env.is_none() {
                     let src = g.get("source").and_then(|p| ctx.value(layer, p).as_layer());
                     let rot = ctx.f(layer, g, "rotation", 0.0).to_radians() as f32;
-                    env = Some((src, color, rot));
+                    env = Some(EnvLight {
+                        src,
+                        color,
+                        rot,
+                        casts_shadows: ctx.b(layer, g, "castsShadows"),
+                        shadow_darkness: ctx.f(layer, g, "shadowDarkness", 100.0).clamp(0.0, 100.0) / 100.0,
+                        shadow_diffusion: ctx.f(layer, g, "shadowDiffusion", 0.0).max(0.0),
+                    });
                 }
             }
             _ => {
@@ -783,8 +811,47 @@ pub fn irradiance_map(sw: u32, sh: u32, src: &[[f32; 4]], w: u32, h: u32) -> Vec
     out
 }
 
+/// The environment image's dominant direction: the radiance-weighted mean texel direction
+/// (solid-angle weighted, rotation applied), or `[0; 3]` when the image is directionless
+/// (a uniform environment cancels to zero). The mean of a single bright spot on black points
+/// straight at it; a gradient points somewhere between its ends.
+fn dominant_direction(w: u32, h: u32, d: &[[f32; 4]], rot: f32) -> [f32; 3] {
+    use super::shade::equirect_dir;
+    let (mut x, mut y, mut z) = (0.0f32, 0.0f32, 0.0f32);
+    let mut weight = 0.0f32;
+    for (i, p) in d.iter().enumerate() {
+        let (tx, ty) = ((i % w as usize) as u32, (i / w as usize) as u32);
+        let (u, v) = ((tx as f32 + 0.5) / w as f32, (ty as f32 + 0.5) / h as f32);
+        // Luminance × solid angle (∝ sin θ).
+        let lum = (p[0] + p[1] + p[2]) * (v * std::f32::consts::PI).sin();
+        let dir = equirect_dir(u, v, rot);
+        x += dir[0] * lum;
+        y += dir[1] * lum;
+        z += dir[2] * lum;
+        weight += lum.abs();
+    }
+    // Under 1 % directional, the image is uniform to the eye: no dominant region to shadow from.
+    let len = (x * x + y * y + z * z).sqrt();
+    if weight <= 1e-9 || len < weight * 0.01 {
+        return [0.0; 3];
+    }
+    [x / len, y / len, z / len]
+}
+
 /// Prefilter an environment image into the scene's textures.
-pub(crate) fn add_environment(b: &mut Builder, w: u32, h: u32, data: Vec<[f32; 4]>, intensity: [f32; 3], rotation: f32) {
+pub(crate) fn add_environment(
+    b: &mut Builder,
+    w: u32,
+    h: u32,
+    data: Vec<[f32; 4]>,
+    intensity: [f32; 3],
+    rotation: f32,
+    casts_shadows: bool,
+    shadow_darkness: f64,
+    shadow_diffusion: f64,
+) {
+    // The shadow direction from the full-resolution image, before the mip chain averages it.
+    let sun = dominant_direction(w, h, &data, rotation);
     // Radiance level 0 at most 1024 wide.
     let (mut w, mut h, mut d) = (w, h, data);
     while w > 1024 {
@@ -820,7 +887,18 @@ pub(crate) fn add_environment(b: &mut Builder, w: u32, h: u32, data: Vec<[f32; 4
             }
         }
     }
-    b.s.env = Some(EnvInfo { radiance: first, mips: levels, irradiance: ii, intensity: k, rotation });
+    b.s.env = Some(EnvInfo {
+        radiance: first,
+        mips: levels,
+        irradiance: ii,
+        intensity: k,
+        rotation,
+        sun,
+        // Marked; `raster::shadow_maps` assigns the map (a directionless image casts none).
+        shadow: if casts_shadows { 0 } else { -1 },
+        shadow_darkness: shadow_darkness as f32,
+        shadow_diffusion: shadow_diffusion as f32,
+    });
 }
 
 /// The environment layer's pixels as linear straight RGBA.
@@ -935,13 +1013,24 @@ pub(crate) fn build_at(r: &Renderer, ctx: &EvalCtx, sub: Option<&EvalCtx>, run: 
         let (ls, amb, env) = lights(ctx, lin);
         b.s.lights = ls;
         b.s.ambient = amb;
-        if let Some((src, k, rot)) = env {
-            match env_pixels(r, ctx, src, lin) {
-                Some((w, h, d)) => add_environment(&mut b, w, h, d, k, rot),
-                // No Source and no Environment Layer: a flat default environment, as After
-                // Effects does — the light's colour × intensity light the scene from every
-                // direction (#2436).
-                None => add_environment(&mut b, 8, 4, vec![[1.0, 1.0, 1.0, 1.0]; 32], k, rot),
+        if let Some(env) = env {
+            match env_pixels(r, ctx, env.src, lin) {
+                Some((w, h, d)) => add_environment(&mut b, w, h, d, env.color, env.rot, env.casts_shadows, env.shadow_darkness, env.shadow_diffusion),
+                // No Source and no Environment Layer: a flat default environment of the light's
+                // colour × intensity — After Effects "uses a default environment map" for an
+                // Environment light — so the light always lights the scene per its parameters.
+                // A uniform environment has no dominant region, so it casts no shadow (#2436).
+                None => add_environment(
+                    &mut b,
+                    8,
+                    4,
+                    vec![[1.0, 1.0, 1.0, 1.0]; 32],
+                    env.color,
+                    env.rot,
+                    env.casts_shadows,
+                    env.shadow_darkness,
+                    env.shadow_diffusion,
+                ),
             }
         }
         if r.opts.shadows() {
@@ -950,6 +1039,9 @@ pub(crate) fn build_at(r: &Renderer, ctx: &EvalCtx, sub: Option<&EvalCtx>, run: 
             // Settings ▸ 3D ▸ Realtime Shadows in Draft off: draft renders skip shadows.
             for l in &mut b.s.lights {
                 l.shadow = -1;
+            }
+            if let Some(e) = &mut b.s.env {
+                e.shadow = -1;
             }
         }
     }

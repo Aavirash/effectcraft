@@ -44,14 +44,15 @@ pub struct LightDraft {
 
 const FALLOFFS: [&str; 3] = ["None", "Smooth", "Inverse Square Clamped"];
 
-/// Whether a light type has Falloff options: Ambient and Environment lights come from no one
-/// place, so they have none — an environment light shines from every direction at once.
+/// Whether a light type has Falloff options (distance attenuation): image-based Environment
+/// lights and Ambient come from no one place, so they have none.
 fn falls_off(kind: LightKind) -> bool {
     !matches!(kind, LightKind::Ambient | LightKind::Environment)
 }
 
-/// Whether a light type has Shadows options. Every light but Ambient can cast shadows,
-/// Environment lights included (their image-based light occludes) — as in After Effects (#2436).
+/// Whether a light type has Shadows options in the dialog. After Effects' Light Settings shows
+/// Cast Shadows (with Shadow Darkness and Diffusion) for every light but Ambient — an
+/// Environment light's shadow comes from its image, not a falloff.
 fn casts_shadows(kind: LightKind) -> bool {
     kind != LightKind::Ambient
 }
@@ -315,7 +316,8 @@ pub fn light(app: &mut EffectcraftApp, ctx: &egui::Context, t: &Tokens) {
             }
             if casts_shadows(d.kind) {
                 ui.label(tr("Shadows"));
-                ui.checkbox(&mut d.casts_shadows, tr("Casts Shadows"));
+                let cb = ui.checkbox(&mut d.casts_shadows, tr("Casts Shadows"));
+                app.auto.add_response("dialog.light.casts", &cb, "Casts Shadows");
                 ui.end_row();
                 ui.label(tr("Shadow Darkness"));
                 ui.add_enabled(d.casts_shadows, crate::widgets::drag_value(egui::DragValue::new(&mut d.shadow_darkness).range(0.0..=100.0).suffix(" %")));

@@ -214,9 +214,11 @@ Things that tripped up a long agent-driven session (a multi-scene 3D piece built
   image that metallic surfaces reflect. Set its `lightOptions/source` to a footage, comp or solid
   layer by layer id; with no source it uses the comp's Environment Layer (`layer.environment`),
   or a flat default environment of the light's colour × intensity when there is none — either
-  way the light brightens the scene, and it has `castsShadows`/`shadowDarkness`/`shadowDiffusion`
-  like the other lights. It only lights Advanced 3D comps, so creating one (or changing a light's
-  type to Environment) switches a Classic 3D comp to Advanced 3D
+  way the light brightens the scene. It has `castsShadows`/`shadowDarkness`/`shadowDiffusion`
+  like the other lights: Cast Shadows shades the scene from the image's dominant bright region
+  (a flat or otherwise uniform environment has none, so it casts no shadow). It only lights
+  Advanced 3D comps, so creating one (or changing a light's type to Environment) switches a
+  Classic 3D comp to Advanced 3D
   ([#261](https://github.com/storytold/effectcraft/issues/261),
   [#2436](https://github.com/storytold/effectcraft/issues/2436)).
 

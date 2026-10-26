@@ -92,10 +92,10 @@ pub(crate) fn use_advanced_3d(proj: &mut effectcraft_project::Project, cid: Item
 }
 
 /// Tell the user when [`use_advanced_3d`] changed the comp's renderer.
-pub(crate) fn report_switch(s: &mut Session, cid: ItemId, switched: bool, because: &str) {
+pub(crate) fn report_switch(s: &mut Session, cid: ItemId, switched: bool, why: &str) {
     if switched {
         let name = s.project.item(cid).map_or("the composition", |i| i.name.as_str()).to_string();
-        s.toast(format!("\"{name}\" now uses the Advanced 3D renderer, which {because}"));
+        s.toast(format!("\"{name}\" now uses the Advanced 3D renderer, {why}"));
     }
 }
 
@@ -162,7 +162,7 @@ pub(crate) fn new_model(s: &mut Session, p: &Value) -> Result<Value> {
         let id = insert_layer_at(proj, st, cid, l, index)?;
         Ok((id, use_advanced_3d(proj, cid)?))
     })?;
-    report_switch(s, cid, switched, "draws 3D models");
+    report_switch(s, cid, switched, "which draws 3D models");
     Ok(json!({"layer": id.0, "item": item.0, "advanced3d": true}))
 }
 
@@ -232,7 +232,7 @@ fn new_primitive(s: &mut Session, p: &Value) -> Result<Value> {
         let id = insert_layer(proj, st, cid, l)?;
         Ok((id, use_advanced_3d(proj, cid)?))
     })?;
-    report_switch(s, cid, switched, "draws 3D models");
+    report_switch(s, cid, switched, "which draws 3D models");
     Ok(json!({"layer": id.0, "kind": kind.label(), "advanced3d": true}))
 }
 

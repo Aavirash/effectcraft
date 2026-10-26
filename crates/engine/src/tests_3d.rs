@@ -1,6 +1,6 @@
 //! 3D commands: cameras, lights, views, camera tools (with undo/redo), and the 3D demo comp.
 
-use effectcraft_project::{AutoOrient, LayerSource, LightKind};
+use effectcraft_project::{AutoOrient, LayerSource, LightKind, Renderer};
 use effectcraft_render::three_d::View3D;
 use serde_json::json;
 
@@ -148,41 +148,43 @@ fn deleting_a_source_layer_clears_the_reference() {
     assert!(s.active_comp().unwrap().layer(effectcraft_project::LayerId(sky)).is_some());
 }
 
-/// An Environment light only lights Advanced 3D comps, so adding one (or changing a light's type
-/// to Environment) switches a Classic 3D comp to it in the same undo step, with a toast, as
-/// model layers do (#2436).
+/// #2436: only the Advanced 3D renderer lights with Environment lights, and new comps are
+/// Classic 3D, so one had no visible effect. Adding one (or changing a light into one) switches
+/// the comp to Advanced 3D (in the same undo step, with a toast), as After Effects does.
 #[test]
-fn environment_light_switches_classic_comps_to_advanced_3d() {
+fn environment_lights_switch_classic_comps_to_advanced_3d() {
     let toasts = |s: &mut Session| -> Vec<String> {
         s.drain_events().into_iter().filter_map(|e| if let crate::Event::Toast { message, .. } = e { Some(message) } else { None }).collect()
     };
     let mut s = session();
     let text = s.execute("layer.newText", json!({"text": "Hi"})).unwrap()["layer"].as_u64().unwrap();
-    assert_eq!(s.active_comp().unwrap().renderer, effectcraft_project::Renderer::Classic3D);
+    assert_eq!(s.active_comp().unwrap().renderer, Renderer::Classic3D);
     toasts(&mut s);
     let r = s.execute("layer.newLight", json!({"kind": "Environment"})).unwrap();
     assert_eq!(r["advanced3d"], true);
-    assert_eq!(s.active_comp().unwrap().renderer, effectcraft_project::Renderer::Advanced3D);
-    assert!(toasts(&mut s).iter().any(|m| m.contains("Advanced 3D")), "the switch is explained");
+    assert_eq!(s.active_comp().unwrap().renderer, Renderer::Advanced3D);
+    // As with Composition Settings: the text layer gets Geometry Options.
+    assert!(s.active_comp().unwrap().layer(effectcraft_project::LayerId(text)).unwrap().props.sub("geometryOptions").is_some());
+    assert!(toasts(&mut s).iter().any(|m| m.contains("Advanced 3D")));
     // A second Environment light leaves the comp (and the user) alone.
     s.execute("layer.newLight", json!({"kind": "Environment"})).unwrap();
     assert!(toasts(&mut s).is_empty());
-    // One undo step removes the light and the switch together.
+    // Undoing the creations takes the lights and the switch back together.
     s.undo();
-    assert_eq!(s.active_comp().unwrap().layers.len(), 2, "the second light is gone, the first stays");
-    assert_eq!(s.active_comp().unwrap().renderer, effectcraft_project::Renderer::Advanced3D, "the first light's switch still stands");
     s.undo();
-    assert_eq!(s.active_comp().unwrap().layers.len(), 1);
-    assert_eq!(s.active_comp().unwrap().renderer, effectcraft_project::Renderer::Classic3D);
-    assert!(s.active_comp().unwrap().layer(effectcraft_project::LayerId(text)).is_some());
-    // Changing a light's type to Environment switches too, and undoes back.
+    assert_eq!(s.active_comp().unwrap().renderer, Renderer::Classic3D);
+    assert_eq!(layer_count(&s), 1);
+    // Changing a light to Environment switches too, and undoes with the type.
     let spot = s.execute("layer.newLight", json!({"kind": "Spot"})).unwrap()["layer"].as_u64().unwrap();
-    assert_eq!(s.active_comp().unwrap().renderer, effectcraft_project::Renderer::Classic3D);
+    assert_eq!(s.active_comp().unwrap().renderer, Renderer::Classic3D);
     s.execute("layer.lightSettings", json!({"layer": spot, "kind": "Environment"})).unwrap();
-    assert_eq!(s.active_comp().unwrap().renderer, effectcraft_project::Renderer::Advanced3D);
+    assert_eq!(s.active_comp().unwrap().renderer, Renderer::Advanced3D);
     s.undo();
-    assert_eq!(s.active_comp().unwrap().renderer, effectcraft_project::Renderer::Classic3D);
+    assert_eq!(s.active_comp().unwrap().renderer, Renderer::Classic3D);
     assert_eq!(s.active_comp().unwrap().layer(effectcraft_project::LayerId(spot)).unwrap().source, LayerSource::Light { kind: LightKind::Spot });
+    // Other light types never switch it.
+    s.execute("layer.newLight", json!({"kind": "Point"})).unwrap();
+    assert_eq!(s.active_comp().unwrap().renderer, Renderer::Classic3D);
     // Switching back to Classic 3D with an Environment light in the comp explains itself.
     s.execute("layer.newLight", json!({"kind": "Environment"})).unwrap();
     toasts(&mut s);
@@ -202,8 +204,10 @@ fn environment_light_takes_shadow_options_but_no_falloff() {
     assert!(prop(&s, env, "lightOptions/castsShadows").as_bool());
     assert_eq!(prop(&s, env, "lightOptions/shadowDarkness").as_f64(), 60.0);
     assert_eq!(prop(&s, env, "lightOptions/shadowDiffusion").as_f64(), 12.0);
-    let l = s.active_comp().unwrap().layer(effectcraft_project::LayerId(env)).unwrap();
-    assert!(l.props.prop("lightOptions/falloff").is_none(), "an environment light has no Falloff");
+    assert!(
+        s.active_comp().unwrap().layer(effectcraft_project::LayerId(env)).unwrap().props.prop("lightOptions/falloff").is_none(),
+        "an environment light has no Falloff"
+    );
     // The shadow values carry over when the type changes, both ways.
     s.execute("layer.lightSettings", json!({"layer": env, "kind": "Spot", "coneAngle": 70})).unwrap();
     assert!(prop(&s, env, "lightOptions/castsShadows").as_bool());

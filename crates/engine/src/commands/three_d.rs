@@ -228,16 +228,16 @@ fn new_light(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let name = str_p(p, "name").unwrap_or("Light 1").to_string();
     let t = time_p(s, p, Some(&comp));
+    // Only the Advanced 3D renderer lights with Environment lights, so adding one switches a
+    // Classic 3D comp to it, like After Effects (inside the adding edit: one undo step).
     let env = kind == LightKind::Environment;
     let (id, switched) = s.edit("New Light", None, |proj, st| {
         let mut l = build::layer(proj, &comp, &name, LayerSource::Light { kind }, (comp.width, comp.height), None);
         apply_light(&mut l, p, t, "layer.newLight")?;
         let id = insert_layer(proj, st, cid, l)?;
-        // An Environment light's image-based light only exists in Advanced 3D, so adding one
-        // switches a Classic 3D comp to it, as model layers do (#2436).
-        Ok((id, env && use_advanced_3d(proj, cid)?))
+        Ok((id, if env { use_advanced_3d(proj, cid)? } else { false }))
     })?;
-    report_switch(s, cid, switched, "lights Environment lights");
+    report_switch(s, cid, switched, "which Environment lights need to light the scene");
     Ok(json!({"layer": id.0, "advanced3d": env}))
 }
 
@@ -257,11 +257,9 @@ fn light_settings(s: &mut Session, p: &Value) -> Result<Value> {
     let switched = s.edit("Light Settings", None, |proj, _| {
         let old = proj.comp(cid).and_then(|c| c.layer(lid)).cloned().ok_or(EngineError::NoComp)?;
         let mut l = old.clone();
-        let mut env = false;
         if let Some(k) = kind
             && old.source != (LayerSource::Light { kind: k })
         {
-            env = k == LightKind::Environment;
             // Light Type change: rebuild the light's groups, carrying over shared values.
             let fresh = build::layer(proj, &comp, &old.name, LayerSource::Light { kind: k }, (comp.width, comp.height), None);
             l.source = fresh.source.clone();
@@ -296,12 +294,13 @@ fn light_settings(s: &mut Session, p: &Value) -> Result<Value> {
             l.name = n.clone();
         }
         apply_light(&mut l, p, t, "layer.lightSettings")?;
+        // The resulting kind (kept or changed to): an Environment light in a Classic 3D comp
+        // switches it, like adding one does.
+        let env = matches!(l.source, LayerSource::Light { kind: LightKind::Environment });
         *layer_mut(proj, cid, lid)? = l;
-        // Changing the type to Environment: its image-based light only exists in Advanced 3D,
-        // so the comp switches to it, as model layers do (#2436).
-        Ok(env && use_advanced_3d(proj, cid)?)
+        Ok(if env { use_advanced_3d(proj, cid)? } else { false })
     })?;
-    report_switch(s, cid, switched, "lights Environment lights");
+    report_switch(s, cid, switched, "which Environment lights need to light the scene");
     Ok(Value::Null)
 }
 

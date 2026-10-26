@@ -656,7 +656,8 @@ pub fn light_options(ids: &mut Ids, kind: LightKind) -> PropGroup {
         // The environment image: a layer (footage, comp…) mapped as an equirectangular panorama;
         // none = the comp's Environment Layer, or a flat default environment of the light's
         // colour × intensity when there is none. No Falloff: an environment light shines from
-        // every direction at once (#2436).
+        // every direction at once. Environment lights cast shadows too (After Effects' Light
+        // Settings shows Cast Shadows for them; not for Ambient) (#2436).
         return g
             .with(ids.prop("source", "Source", Value::Layer(None)).with_ui(ParamUi::Layer))
             .with(ids.prop("rotation", "Environment Rotation", Value::Scalar(0.0)).with_ui(ParamUi::Angle))
