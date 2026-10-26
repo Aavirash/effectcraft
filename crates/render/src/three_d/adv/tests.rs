@@ -472,6 +472,60 @@ fn a_uniform_environment_casts_no_shadow() {
     assert_eq!(casting.data, off.data, "a directionless image casts no shadow");
 }
 
+/// #2436: the default environment (no Source, no Environment Layer) is level-preserving and
+/// directional — its dominant region points up and toward the initial camera, so a
+/// shadow-casting Environment light casts shadows out of the box, like After Effects' default.
+#[test]
+fn default_environment_keeps_the_level_and_points_up() {
+    let (w, h, d) = scene::default_environment();
+    assert_eq!((w, h), (8, 4));
+    let (mut mean, mut weight) = (0.0f32, 0.0f32);
+    for (i, p) in d.iter().enumerate() {
+        let v = ((i / w as usize) as f32 + 0.5) / h as f32;
+        let sa = (v * PI).sin();
+        mean += (p[0] + p[1] + p[2]) / 3.0 * sa;
+        weight += sa;
+    }
+    assert!((mean / weight - 1.0).abs() < 0.01, "level-preserving mean: {}", mean / weight);
+    let sun = dominant_direction(w, h, &d, 0.0);
+    assert!(sun[1] < -0.5, "the key is up: {sun:?}");
+    assert!(sun[2] < -0.3, "the key is toward the camera: {sun:?}");
+    assert!(sun[0].abs() < 0.1, "symmetric left-right: {sun:?}");
+}
+
+/// #2436: with no Source and no Environment Layer, the Environment light's default environment
+/// casts shadows like After Effects' default environment map — a sphere shadows the plane behind
+/// it; Cast Shadows off lights the floor evenly.
+#[test]
+fn the_default_environment_casts_shadows() {
+    let (mut p, cid) = project(200, 150);
+    // The floor facing the camera, a sphere in front of it casting shadows only.
+    add(&mut p, cid, LayerSource::Primitive { kind: PrimitiveKind::Plane }, |l| {
+        set(l, "geometryOptions/width", Value::Scalar(400.0));
+        set(l, "geometryOptions/height", Value::Scalar(400.0));
+        set(l, "transform/position", Value::Vec3([100.0, 75.0, 120.0]));
+        set(l, "materialOptions/baseColor", Value::Color([1.0, 1.0, 1.0, 1.0]));
+    });
+    add(&mut p, cid, LayerSource::Primitive { kind: PrimitiveKind::Sphere }, |l| {
+        set(l, "geometryOptions/radius", Value::Scalar(30.0));
+        set(l, "transform/position", Value::Vec3([100.0, 60.0, 50.0]));
+        set(l, "materialOptions/castsShadows", Value::Enum(2));
+    });
+    add(&mut p, cid, LayerSource::Light { kind: LightKind::Environment }, |l| {
+        set(l, "lightOptions/castsShadows", Value::Bool(true));
+    });
+    let img = render(&p, cid);
+    let (mid, side) = (img.data[120 * 200 + 100], img.data[120 * 200 + 30]);
+    assert!(mid[3] > 0.99 && side[3] > 0.99, "the floor covers both: {mid:?} {side:?}");
+    assert!(mid[0] < side[0] * 0.5, "the default environment shadows the sphere onto the floor: {mid:?} vs {side:?}");
+    // Cast Shadows off: the floor is lit everywhere.
+    let comp = p.comp_mut(cid).unwrap();
+    set(&mut comp.layers[0], "lightOptions/castsShadows", Value::Bool(false));
+    let img = render(&p, cid);
+    let mid = img.data[120 * 200 + 100];
+    assert!(mid[0] > side[0] * 0.8, "no shadow without Cast Shadows: {mid:?} vs {side:?}");
+}
+
 #[test]
 fn depth_of_field_blurs_out_of_focus_surfaces() {
     let mut img = Image::new(64, 64);

@@ -927,6 +927,41 @@ fn env_pixels(r: &Renderer, ctx: &EvalCtx, src: Option<u64>, lin: bool) -> Optio
     Some((img.width, img.height, data))
 }
 
+/// The default environment when the light has no Source and no Environment Layer: a soft studio
+/// gradient, bright above and toward the initial camera, dark below and behind it — After
+/// Effects "uses a default environment map" for an Environment light too, and its default
+/// casts shadows out of the box. The solid-angle-weighted mean is 1, so the light's colour ×
+/// intensity still sets the overall level, like the flat default it replaces; the light's
+/// Rotation turns the key around the scene (#2436).
+pub(crate) fn default_environment() -> (u32, u32, Vec<[f32; 4]>) {
+    use super::shade::{dot, equirect_dir};
+    // The key region's centre: three quarters up, two thirds toward the viewer (the default
+    // camera looks +z from -z).
+    let key = [0.0f32, -0.75, -0.66];
+    let (w, h) = (8u32, 4u32);
+    let mut data = Vec::with_capacity((w * h) as usize);
+    let (mut mean, mut weight) = (0.0f32, 0.0f32);
+    for y in 0..h {
+        let v = (y as f32 + 0.5) / h as f32;
+        let sa = (v * std::f32::consts::PI).sin();
+        for x in 0..w {
+            let u = (x as f32 + 0.5) / w as f32;
+            let l = 0.5 + 0.9 * dot(equirect_dir(u, v, 0.0), key).max(0.0);
+            data.push([l, l, l, 1.0]);
+            mean += l * sa;
+            weight += sa;
+        }
+    }
+    // Keep the flat default's level: scale the gradient to a weighted mean of exactly 1.
+    let k = if mean.is_finite() && mean > 1e-6 { weight / mean } else { 1.0 };
+    for p in &mut data {
+        for c in 0..3 {
+            p[c] *= k;
+        }
+    }
+    (w, h, data)
+}
+
 /// Supersampling factor: 2×2 unless draft or very large.
 fn ssaa_for(r: &Renderer, out: (u32, u32)) -> u32 {
     if r.opts.draft || (out.0 as u64 * out.1 as u64) > 8_000_000 { 1 } else { 2 }
@@ -1019,21 +1054,14 @@ pub(crate) fn build_at(r: &Renderer, ctx: &EvalCtx, sub: Option<&EvalCtx>, run: 
         if let Some(env) = env {
             match env_pixels(r, ctx, env.src, lin) {
                 Some((w, h, d)) => add_environment(&mut b, w, h, d, env.color, env.rot, env.casts_shadows, env.shadow_darkness, env.shadow_diffusion),
-                // No Source and no Environment Layer: a flat default environment of the light's
-                // colour × intensity — After Effects "uses a default environment map" for an
-                // Environment light — so the light always lights the scene per its parameters.
-                // A uniform environment has no dominant region, so it casts no shadow (#2436).
-                None => add_environment(
-                    &mut b,
-                    8,
-                    4,
-                    vec![[1.0, 1.0, 1.0, 1.0]; 32],
-                    env.color,
-                    env.rot,
-                    env.casts_shadows,
-                    env.shadow_darkness,
-                    env.shadow_diffusion,
-                ),
+                // No Source and no Environment Layer: the default environment, a soft studio
+                // gradient of the light's colour × intensity — After Effects "uses a default
+                // environment map" for an Environment light — so the light always lights the
+                // scene per its parameters, and its dominant region casts shadows (#2436).
+                None => {
+                    let (w, h, d) = default_environment();
+                    add_environment(&mut b, w, h, d, env.color, env.rot, env.casts_shadows, env.shadow_darkness, env.shadow_diffusion)
+                }
             }
         }
         if r.opts.shadows() {
