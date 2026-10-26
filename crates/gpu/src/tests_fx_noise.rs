@@ -23,6 +23,24 @@ fn pt(x: f64, y: f64) -> Value {
 }
 
 #[test]
+fn median_kernel_selection_preserves_physical_gpu_path() {
+    use crate::fx_noise::MedianKernel;
+    for backend in [wgpu::Backend::Vulkan, wgpu::Backend::Metal, wgpu::Backend::Dx12, wgpu::Backend::Gl, wgpu::Backend::BrowserWebGpu] {
+        for device_type in
+            [wgpu::DeviceType::DiscreteGpu, wgpu::DeviceType::IntegratedGpu, wgpu::DeviceType::VirtualGpu, wgpu::DeviceType::Cpu, wgpu::DeviceType::Other]
+        {
+            let selected = MedianKernel::for_adapter(backend, device_type);
+            let expected =
+                if backend == wgpu::Backend::Vulkan && device_type == wgpu::DeviceType::Cpu { MedianKernel::Software2 } else { MedianKernel::Private64 };
+            assert_eq!(selected, expected, "{backend:?} {device_type:?}");
+        }
+    }
+    assert_eq!(MedianKernel::Private64.rows_per_workgroup(), 64);
+    assert_eq!(MedianKernel::Software2.rows_per_workgroup(), 2);
+    assert_eq!(MedianKernel::Software2.workgroup_storage(), 16_384);
+}
+
+#[test]
 fn medians() {
     effect_case("ec.noise.median", &[("radius", n(2.0))]);
     effect_case("ec.noise.median", &[("radius", n(5.0)), ("operateOnAlpha", on())]);
@@ -204,6 +222,28 @@ fn echo_and_posterize_time() {
 }
 
 #[test]
+fn echo_after_star_burst_preserves_the_stars() {
+    for depth in [BitDepth::Bpc8, BitDepth::Bpc32] {
+        for operator in 0..7 {
+            for posterize in [false, true] {
+                let mut s = Scene::new(depth);
+                let mut l = s.solid([1.0; 3], 97, 61);
+                s.effect(&mut l, "ec.sim.ccstarburst", &[("gridSpacing", n(8.0)), ("size", n(40.0))]);
+                s.effect(&mut l, "ec.time.echo", &[("numberOfEchoes", n(2.0)), ("echoTime", n(-0.1)), ("decay", n(0.6)), ("echoOperator", e(operator))]);
+                if posterize {
+                    s.effect(&mut l, "ec.time.posterizetime", &[("frameRate", n(4.0))]);
+                }
+                s.push(l);
+                let t = Tick::from_seconds_f64(0.6);
+                let label = format!("Star Burst + Echo {operator} posterize={posterize} {depth:?}");
+                check(&label, compare_at(&s, opts(), t), 0.0);
+                check(&format!("{label} half"), compare_at(&s, RenderOpts { scale: 0.5, ..opts() }, t), 0.0);
+            }
+        }
+    }
+}
+
+#[test]
 fn median_levels_match_cpu_division() {
     let Some(g) = crate::tests::gpu() else { return };
     let mut image = effectcraft_raster::Image::new(512, 1);
@@ -215,8 +255,17 @@ fn median_levels_match_cpu_division() {
         // A monotone row's median is its centre, including repeated edges. Exercise both
         // the bisection and sliding-histogram kernels at every quantised level.
         let mut enc = crate::context::Enc::new(&g.ctx);
+        let started = std::time::Instant::now();
         let median = crate::fx_noise::median_image(&mut enc, &input, radius, false);
-        let actual = enc.download(&median).unwrap();
+        let actual = enc.download(&median).unwrap_or_else(|| {
+            panic!(
+                "median download radius {radius}; elapsed={:?}, health={:?}, unavailable={:?}, transfers={:?}",
+                started.elapsed(),
+                g.ctx.check_health(),
+                g.ctx.unavailable_kernels(),
+                g.ctx.transfer_stats()
+            )
+        });
         for (level, (want, got)) in image.data.iter().zip(&actual.data).enumerate() {
             assert_eq!(got, want, "radius {radius}, level {level}");
         }
@@ -251,7 +300,16 @@ fn dust_strict_threshold_boundaries() {
             let buf = effectcraft_effects::Buf { img, offset: [0.0; 2], scale: 1.0 };
             let cpu = (spec.render)(&ctx(), buf.clone());
             assert_eq!(cpu.img.data[24] != original, replaced, "CPU radius {radius}, threshold {threshold}");
-            let gpu = effectcraft_render::Accelerator::effects(g, &[effectcraft_render::FxStep { spec, ctx: ctx() }], &buf, None).unwrap();
+            let started = std::time::Instant::now();
+            let gpu = effectcraft_render::Accelerator::effects(g, &[effectcraft_render::FxStep { spec, ctx: ctx() }], &buf, None).unwrap_or_else(|| {
+                panic!(
+                    "dust radius {radius}, threshold {threshold}; elapsed={:?}, health={:?}, unavailable={:?}, transfers={:?}",
+                    started.elapsed(),
+                    g.ctx.check_health(),
+                    g.ctx.unavailable_kernels(),
+                    g.ctx.transfer_stats()
+                )
+            });
             assert_eq!(gpu.img.data[24], cpu.img.data[24], "radius {radius}, threshold {threshold}");
         }
     }

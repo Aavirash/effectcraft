@@ -37,8 +37,9 @@ impl ViewerMap {
     }
 }
 
+/// The `egui::Id` under which the last pass's `ViewerMap` is published.
 fn map_id() -> egui::Id {
-    egui::Id::new("viewer-map")
+    egui::Id::unique("viewer-map")
 }
 
 pub fn comp_to_screen(ctx: &egui::Context, p: [f32; 2]) -> Option<Pos2> {
@@ -53,7 +54,7 @@ pub fn screen_to_comp(ctx: &egui::Context, p: Pos2) -> Option<[f64; 2]> {
 
 /// The fit magnification from the last frame.
 pub fn last_fit(ctx: &egui::Context) -> f32 {
-    ctx.data(|d| d.get_temp::<f32>(egui::Id::new("viewer-fit"))).unwrap_or(0.5)
+    ctx.data(|d| d.get_temp::<f32>(egui::Id::unique("viewer-fit"))).unwrap_or(0.5)
 }
 
 /// What a drag in the viewer is doing.
@@ -207,7 +208,7 @@ enum Gesture {
 
 /// Pen tool path in progress: (layer, mask uid).
 fn pen_id() -> egui::Id {
-    egui::Id::new("viewer-pen")
+    egui::Id::unique("viewer-pen")
 }
 
 use super::viewer_overlays::{self as ov, VertexHit};
@@ -610,7 +611,7 @@ fn aux_views(
             (app.session.revision, cid.0, t.0, i, scale.to_bits(), format!("{cam:?}")).hash(&mut h);
             h.finish()
         };
-        let id = egui::Id::new(("viewer-aux", i));
+        let id = egui::Id::unique(("viewer-aux", i));
         let cached: Option<(u64, egui::TextureHandle)> = ctx.data(|d| d.get_temp(id));
         let tex = match cached {
             Some((k, tex)) if k == key => tex,
@@ -662,7 +663,7 @@ fn aux_views(
 fn pane_selector(app: &mut EffectcraftApp, ui: &mut egui::Ui, pane: usize, area: Rect, current: View3D) -> Option<View3D> {
     let t = app.tokens;
     let r = Rect::from_min_size(area.min + vec2(6.0, 6.0), vec2(124.0, 20.0));
-    let pid = egui::Id::new(("viewer-pane-view", pane));
+    let pid = egui::Id::unique(("viewer-pane-view", pane));
     let response = widgets::dropdown(ui, r, crate::i18n::tr(current.label()), &t, pid);
     if response.clicked() {
         let open = widgets::popup_is_open(ui, pid);
@@ -717,7 +718,7 @@ fn locked_pane(app: &mut EffectcraftApp, ui: &mut egui::Ui, full: Rect, bg: Colo
         (app.session.revision, lv.comp.0, t.0, scale.to_bits(), dc_key).hash(&mut h);
         h.finish()
     };
-    let id = egui::Id::new("viewer-locked");
+    let id = egui::Id::unique("viewer-locked");
     let cached: Option<(u64, egui::TextureHandle)> = ctx.data(|d| d.get_temp(id));
     let tex = match cached {
         Some((k, tex)) if k == key => tex,
@@ -744,7 +745,7 @@ fn locked_pane(app: &mut EffectcraftApp, ui: &mut egui::Ui, full: Rect, bg: Colo
     app.auto.add("viewer.locked", r, &label);
     // Close the locked viewer.
     let close = Rect::from_min_size(pos2(r.max.x - 26.0, r.min.y + 4.0), vec2(20.0, 20.0));
-    let resp = ui.interact(close, egui::Id::new("viewer-locked-close"), Sense::click());
+    let resp = ui.interact(close, egui::Id::unique("viewer-locked-close"), Sense::click());
     p.text(close.center(), Align2::CENTER_CENTER, "\u{00d7}", Tokens::ui(14.0), if resp.hovered() { Color32::WHITE } else { Color32::from_white_alpha(170) });
     app.auto.add("viewer.locked.close", close, "Close Locked Viewer");
     if resp.clicked() {
@@ -769,6 +770,13 @@ pub(crate) fn checker(p: &egui::Painter, r: Rect) {
     }
 }
 
+/// Draw the Composition viewer in `rect` and handle its input for one pass.
+/// Publishes the fit magnification and `ViewerMap`, requests and draws the frame, then paints the nav breadcrumbs,
+/// view layout, guides/grid, layer boxes, handles, anchors, 3D gizmos, motion paths, masks, puppet pins and tracker
+/// overlays and records their automation regions. Pointer and drop gestures run engine commands
+/// (move/scale/rotate/anchor/camera/shape/mask/guide edits, picks, marquees); failures worth showing go to
+/// `app.ui.status`, while per-frame drag updates ignore errors so a gesture is not aborted mid-drag. With no active
+/// composition it draws `empty_state` and returns.
 pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
     let t = app.tokens;
     let ctx = ui.ctx().clone();
@@ -793,7 +801,7 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
         let name = app.session.project.item(oc).map(|i| i.name.clone()).unwrap_or_default();
         let g = p.layout_no_wrap(name.clone(), Tokens::ui(11.5), t.text);
         let r = Rect::from_min_size(pos2(x, nav.min.y + 3.0), vec2(g.size().x + 16.0, 18.0));
-        let resp = ui.interact(r, egui::Id::new(("nav", oc.0)), Sense::click());
+        let resp = ui.interact(r, egui::Id::unique(("nav", oc.0)), Sense::click());
         let active = oc == cid;
         p.rect_filled(
             r,
@@ -835,7 +843,7 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
     let fit = ((area.width() - 40.0) / cw).min((area.height() - 40.0) / ch).max(0.01);
     // Fit up to 100% follows the panel's size like Fit does, and stops at 100%.
     let fit = if app.ui.viewer.fit_up_to_100 { fit.min(1.0 / ctx.pixels_per_point()) } else { fit };
-    ctx.data_mut(|d| d.insert_temp(egui::Id::new("viewer-fit"), fit));
+    ctx.data_mut(|d| d.insert_temp(egui::Id::unique("viewer-fit"), fit));
     let zoom = app.ui.viewer.zoom.unwrap_or(fit);
     let center = area.center() + vec2(app.ui.viewer.pan[0], app.ui.viewer.pan[1]);
     // On the physical pixel grid, so at 100 % every comp pixel covers exactly one screen pixel
@@ -856,7 +864,7 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
         // Queue the frame on screen before any prefetch.
         app.request_frame_urgent(cid, comp.frame_rate.frame_at(app.session.time()), scale);
     }
-    crate::tick_playback(app, &ctx, scale);
+    crate::note_viewer_scale(app, scale);
     let time = app.session.time();
     let frame = comp.frame_rate.frame_at(time);
     let key = app.frame_key(cid, frame, scale);
@@ -976,6 +984,8 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
     let selected = app.session.state.selected_layers.clone();
     // Bounding-box handles: (layer, handle, screen point, its resize cursor).
     let mut handle_hits: Vec<(LayerId, usize, Pos2, egui::CursorIcon)> = Vec::new();
+    // 3D gizmo arrows: (layer, grabbable screen segment, position change per comp px in x and y).
+    let mut axis_hits: Vec<(LayerId, [Pos2; 2], [f64; 3], [f64; 3])> = Vec::new();
     let mut vertex_hits: Vec<VertexHit> = Vec::new();
     let mut vertex_marks: Vec<ov::VertexMark> = Vec::new();
     let mut key_hits: Vec<ov::KeyHit> = Vec::new();
@@ -996,7 +1006,25 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
         // Layer Handles and Paths.
         let hs = app.session.prefs.general.path_point_size as f32 + 2.0;
         let label_handles = app.session.prefs.appearance.use_label_color_for_handles;
-        for l in comp.layers.iter().filter(|l| selected.contains(&l.id) && l.is_active_at(time)) {
+        // Nulls are rig controls: their outlines remain visible without selection (#1642).
+        // Keep this separate from selected layers so they gain no handles, anchors or paths. Solo
+        // scope matches picking (`selectable_layers`), so a null that can't be clicked isn't drawn.
+        let any_solo = comp.layers.iter().any(|l| l.switches.solo && l.source.is_av());
+        for l in comp.layers.iter().filter(|l| {
+            matches!(l.source, LayerSource::Null) && !selected.contains(&l.id) && l.is_active_at(time) && l.switches.video && (!any_solo || l.switches.solo)
+        }) {
+            let outline = layer_outline(&ectx, l);
+            if outline.len() > 2 {
+                let col = if label_handles { t.label(l.label) } else { t.accent };
+                painter.add(egui::Shape::closed_line(outline.into_iter().map(|p| map.to_screen(p)).collect(), Stroke::new(1.0, col)));
+            }
+        }
+        // The eye hides a layer's pixels, not its controls: a selected AV layer keeps its box,
+        // handles, anchor, motion path and mask/shape paths so it stays editable over the visible
+        // artwork (#1769). Nulls, cameras and lights have no pixels and disappear from the viewer
+        // when hidden (#1332/#1642). Picking still uses `selectable_layers`, so a hidden layer is
+        // selected from the Timeline; its controls are interactive once selected.
+        for l in comp.layers.iter().filter(|l| selected.contains(&l.id) && l.is_active_at(time) && (l.switches.video || l.source.is_av())) {
             let col = if label_handles { t.label(l.label) } else { t.accent };
             // Motion path of animated position (keyframes and spatial tangents are draggable).
             ov::motion_path(app, &painter, &map, &ectx, l, col, &mut key_hits, &mut motion_frames);
@@ -1027,6 +1055,14 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
                         painter.add(egui::Shape::closed_line(sq, Stroke::new(1.0, col.gamma_multiply(0.6))));
                     }
                 }
+            }
+            // Path editing keeps vertices and tangents visible without the layer's transform
+            // box competing with them (#1220). The path's own free-transform box is separate.
+            let editing_path = paths.iter().any(|p| {
+                p.layer == l.id && (app.ui.tool.is_pen() || (app.ui.tool == Tool::Selection && sel_vertices.iter().any(|v| v.layer == l.id && v.mask == p.uid)))
+            });
+            if editing_path {
+                continue;
             }
             let Some((m, q, _)) = layer_quad(&ectx, l) else {
                 // A 3D layer reaching past the camera: the part of its box in front of it.
@@ -1068,14 +1104,29 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
                     let pc = cam_state(&ectx).projection(cw as f64, ch as f64) * w;
                     let a3 = effectcraft_engine::geom::vec3(a[0], a[1], a[2]);
                     let len = 60.0 / zoom as f64;
-                    for (axis, col) in [
-                        (effectcraft_engine::geom::vec3(len, 0.0, 0.0), Color32::from_rgb(0xe0, 0x50, 0x50)),
-                        (effectcraft_engine::geom::vec3(0.0, len, 0.0), Color32::from_rgb(0x60, 0xd0, 0x60)),
-                        (effectcraft_engine::geom::vec3(0.0, 0.0, len), Color32::from_rgb(0x50, 0x8c, 0xf0)),
+                    let pinv = parent_world_inverse(&ectx, l);
+                    for (axis, col, name) in [
+                        (effectcraft_engine::geom::vec3(len, 0.0, 0.0), Color32::from_rgb(0xe0, 0x50, 0x50), "x"),
+                        (effectcraft_engine::geom::vec3(0.0, len, 0.0), Color32::from_rgb(0x60, 0xd0, 0x60), "y"),
+                        (effectcraft_engine::geom::vec3(0.0, 0.0, len), Color32::from_rgb(0x50, 0x8c, 0xf0), "z"),
                     ] {
                         // (clipped at the camera's near plane, #572)
-                        if let Some([o, e]) = project_segment(&pc, a3, a3 + axis) {
-                            painter.arrow(map.to_screen(o), map.to_screen(e) - map.to_screen(o), Stroke::new(2.0, col));
+                        let Some([o, e]) = project_segment(&pc, a3, a3 + axis) else { continue };
+                        // An axis pointing at the camera (Z in the default front view) projects to
+                        // a dot: draw it as a short diagonal stub so it can still be grabbed.
+                        let mut s = [e[0] - o[0], e[1] - o[1]];
+                        if (s[0] * s[0] + s[1] * s[1]).sqrt() * (zoom as f64) < 12.0 {
+                            let k = 24.0 / zoom as f64;
+                            s = [k, -k];
+                        }
+                        let (so, se) = (map.to_screen(o), map.to_screen([o[0] + s[0], o[1] + s[1]]));
+                        painter.arrow(so, se - so, Stroke::new(2.0, col));
+                        if !l.switches.locked {
+                            let dir = pinv.apply_vec(w.apply_vec(axis));
+                            let (ax, ay) = axis_drag([dir.x, dir.y, dir.z], s);
+                            // The inner part stays on the anchor point, which drags the layer freely.
+                            axis_hits.push((l.id, [so + (se - so) * 0.35, se], ax, ay));
+                            app.auto.add(&format!("viewer.gizmo.{}.{name}", l.id.0), Rect::from_center_size(se, vec2(12.0, 12.0)), "3D axis");
                         }
                     }
                 }
@@ -1231,8 +1282,8 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
     super::viewer_drop::show(app, ui, &painter, &map, &ectx);
 
     // Interaction.
-    let resp = ui.interact(area, egui::Id::new("viewer-interact"), Sense::click_and_drag());
-    let menu_hits_id = egui::Id::new(("viewer-menu-hits", cid.0));
+    let resp = ui.interact(area, egui::Id::unique("viewer-interact"), Sense::click_and_drag());
+    let menu_hits_id = egui::Id::unique(("viewer-menu-hits", cid.0));
     if resp.secondary_clicked()
         && let Some(pos) = resp.interact_pointer_pos()
     {
@@ -1251,7 +1302,7 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
         let hits = ui.data(|d| d.get_temp::<Vec<(u64, String)>>(menu_hits_id)).unwrap_or_default();
         if !hits.is_empty() {
             ui.menu_button(crate::i18n::tr("Select"), |ui| {
-                crate::widgets::menu_scroll(ui, |ui| {
+                crate::widgets::menu_scroll(ui, false, |ui| {
                     for (id, name) in &hits {
                         if ui.button(name).clicked() {
                             context_actions.push(("layer.select".to_owned(), serde_json::json!({"layers":[id]})));
@@ -1271,14 +1322,22 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
                     let c = super::timeline::LayerMenuCaps::of(&app.session.project, layer);
                     caps.vector |= c.vector;
                     caps.text |= c.text;
+                    caps.source |= c.source;
                     caps
                 },
             );
-            super::timeline::layer_menu(ui, &context_layers, caps, &mut context_actions);
+            super::timeline::layer_menu(ui, &context_layers, caps, (&mut app.auto, "viewer.layerMenu"), &mut context_actions);
         }
         ui.separator();
         if ui.button(copy_frame).clicked() {
             context_actions.push(("comp.copyFrame".to_owned(), serde_json::json!({"comp": cid.0})));
+            ui.close();
+        }
+        // The comp this viewer shows, which is not always the active one.
+        let settings = ui.button(crate::i18n::tr("Composition Settings…"));
+        app.auto.add("viewer.context.settings", settings.rect, "Composition Settings…");
+        if settings.clicked() {
+            context_actions.push(("comp.settings".to_owned(), serde_json::json!({"comp": cid.0})));
             ui.close();
         }
     });
@@ -1292,7 +1351,7 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
         let reach = vertex_grab_radius(pos, handle_hits.iter().map(|(_, _, h, _)| *h));
         vertex_hits.iter().rev().filter(|h| h.tangent.is_some() == tangents).find(|h| h.pos.distance(pos) < reach).copied()
     };
-    let gid = egui::Id::new("viewer-gesture");
+    let gid = egui::Id::unique("viewer-gesture");
     // An overlay on top of the viewer (e.g. the camera tracker points) takes the hover, but the pointer is still over the viewer: keep wheel zoom working.
     let hover_pos = resp.hover_pos().or_else(|| if resp.contains_pointer() { ui.input(|i| i.pointer.hover_pos()) } else { None });
     if let Some(hp) = hover_pos {
@@ -1320,7 +1379,7 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
             Tool::ObjectMatte => {
                 // The tool draws its own crosshair (and the layer it would matte) while no box
                 // is being dragged.
-                if ui.data(|d| d.get_temp::<Gesture>(egui::Id::new("viewer-gesture"))).is_none() {
+                if ui.data(|d| d.get_temp::<Gesture>(egui::Id::unique("viewer-gesture"))).is_none() {
                     super::object_matte_tool::hover(app, &painter, &map, &ectx, hp);
                 }
                 egui::CursorIcon::None
@@ -1340,6 +1399,8 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
                 } else if vertex_at(hp, true).or_else(|| vertex_at(hp, false)).is_some() {
                     // A path point under a box handle is grabbed first: no resize cursor.
                     egui::CursorIcon::PointingHand
+                } else if axis_at(&axis_hits, hp).is_some() {
+                    egui::CursorIcon::Move
                 } else if let Some((.., cursor)) = handle_hits.iter().find(|(_, _, h, _)| h.distance(hp) < HANDLE) {
                     *cursor
                 } else {
@@ -1378,10 +1439,10 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
     }
     // A pen click (press + release without a drag) ends its tangent gesture on release.
     if ui.input(|i| i.pointer.primary_released())
-        && matches!(ui.data(|d| d.get_temp::<Gesture>(egui::Id::new("viewer-gesture"))), Some(Gesture::Pen { .. }))
+        && matches!(ui.data(|d| d.get_temp::<Gesture>(egui::Id::unique("viewer-gesture"))), Some(Gesture::Pen { .. }))
         && !resp.drag_stopped()
     {
-        ui.data_mut(|d| d.remove::<Gesture>(egui::Id::new("viewer-gesture")));
+        ui.data_mut(|d| d.remove::<Gesture>(egui::Id::unique("viewer-gesture")));
     }
     // On-canvas text editing (Type tool, double-click a text layer) owns its clicks and drags.
     let text_owns = super::viewer_text::hook(app, ui, &painter, &map, &ectx, &resp, space_pan);
@@ -1525,7 +1586,12 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
             // far enough to count as a drag it may have left a small handle.
             Tool::Selection => {
                 let cpt = map.to_comp(press);
-                if let Some((lid, hi, ..)) = handle_hits.iter().find(|(_, _, h, _)| h.distance(press) < HANDLE + 2.0).cloned() {
+                // A gizmo arrow is drawn over the box handles, so it is grabbed first: move along
+                // that axis only, without snapping.
+                if let Some((lid, _, ax, ay)) = axis_at(&axis_hits, press) {
+                    let p0 = comp.layer(lid).and_then(|l| Some(ectx.v3(l, l.transform()?, "position", [0.0; 3])));
+                    p0.map(|p0| Gesture::Move { layers: vec![(lid, p0, ax, ay)], start: cpt, snap_src: None })
+                } else if let Some((lid, hi, ..)) = handle_hits.iter().find(|(_, _, h, _)| h.distance(press) < HANDLE + 2.0).cloned() {
                     let layer = comp.layer(lid).cloned();
                     layer.and_then(|layer| {
                         let tr = layer.transform()?;
@@ -1596,7 +1662,7 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
     let gesture: Option<Gesture> = ui.data(|d| d.get_temp(gid));
     if let (Some(g), Some(pos)) = (gesture.clone(), resp.interact_pointer_pos()) {
         let cpt = map.to_comp(pos);
-        let merge = format!("viewer-drag-{}", ui.data(|d| d.get_temp::<u64>(egui::Id::new("viewer-drag-n")).unwrap_or(0)));
+        let merge = format!("viewer-drag-{}", ui.data(|d| d.get_temp::<u64>(egui::Id::unique("viewer-drag-n")).unwrap_or(0)));
         match g {
             Gesture::Pan { start_pan } => {
                 // No total drag on the release frame: keep the pan reached so far (it used to
@@ -1864,8 +1930,8 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
         }
         ui.data_mut(|d| {
             d.remove::<Gesture>(gid);
-            let n: u64 = d.get_temp(egui::Id::new("viewer-drag-n")).unwrap_or(0);
-            d.insert_temp(egui::Id::new("viewer-drag-n"), n + 1);
+            let n: u64 = d.get_temp(egui::Id::unique("viewer-drag-n")).unwrap_or(0);
+            d.insert_temp(egui::Id::unique("viewer-drag-n"), n + 1);
         });
     }
     if resp.clicked()
@@ -2011,6 +2077,8 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
     crate::panels::effect_controls::viewer_hook(app, ui, &painter, &map, &ectx, &|c, l| l2c(c, l).0);
     // Selected shape gradients' start and end points (#612).
     crate::panels::gradient_handles::viewer_hook(app, ui, &painter, &map, &ectx, &|c, l| l2c(c, l).0);
+    // Selected text Range Selectors' Start and End bars (#1011).
+    crate::panels::text_range_handles::viewer_hook(app, ui, &painter, &map, &ectx, &|c, l| l2c(c, l).0);
 
     // Status chips (render time / caching).
     if app.playback.playing && app.playback.waiting {
@@ -2022,7 +2090,7 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
         let r = Rect::from_min_size(area.min + vec2(10.0, 10.0), vec2(330.0, 22.0));
         painter.rect_filled(r, 11.0, Color32::from_black_alpha(190));
         painter.text(r.center(), Align2::CENTER_CENTER, crate::i18n::tr("Video preview is off (Preview panel): audio only"), Tokens::ui(11.5), t.timecode);
-        ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("viewer-video-off-chip"), r));
+        ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique("viewer-video-off-chip"), r));
     }
 
     vt::draw_snap(&ctx, &painter, &map, &ectx);
@@ -2030,6 +2098,31 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
     vt::bottom_bar(app, ui, bar, zoom, time, &comp);
     if err_h > 0.0 {
         super::expr_bar::draw(app, ui, err_bar, cid);
+    }
+}
+
+/// The position change per comp pixel of drag (x, y) that moves a layer by `dir` when the
+/// pointer covers the axis' on-screen vector `s` (comp px); drag across the axis is ignored.
+fn axis_drag(dir: [f64; 3], s: [f64; 2]) -> ([f64; 3], [f64; 3]) {
+    let n = (s[0] * s[0] + s[1] * s[1]).max(1e-12);
+    (dir.map(|v| v * s[0] / n), dir.map(|v| v * s[1] / n))
+}
+
+/// The gizmo arrow under screen point `p`.
+fn axis_at(hits: &[(LayerId, [Pos2; 2], [f64; 3], [f64; 3])], p: Pos2) -> Option<(LayerId, [Pos2; 2], [f64; 3], [f64; 3])> {
+    let dist = |[a, b]: [Pos2; 2]| {
+        let ab = b - a;
+        let t = ((p - a).dot(ab) / ab.length_sq().max(1e-6)).clamp(0.0, 1.0);
+        p.distance(a + ab * t)
+    };
+    hits.iter().filter(|h| dist(h.1) < 6.0).min_by(|a, b| dist(a.1).total_cmp(&dist(b.1))).copied()
+}
+
+/// World to parent space for a 3D layer (identity without a parent).
+fn parent_world_inverse(ctx: &EvalCtx, l: &Layer) -> effectcraft_engine::geom::Mat4 {
+    match l.parent.and_then(|p| ctx.comp.layer(p)) {
+        Some(p) => ctx.world_matrix(p).inverse().unwrap_or_default(),
+        None => effectcraft_engine::geom::Mat4::IDENTITY,
     }
 }
 
@@ -2046,10 +2139,7 @@ fn drag_axes(ctx: &EvalCtx, l: &Layer) -> ([f64; 3], [f64; 3]) {
     let anchor = l.transform().map(|tr| ctx.v3(l, tr, "anchor", [0.0; 3])).unwrap_or([0.0; 3]);
     let wp = ctx.world_matrix(l).apply(anchor.into());
     let k = if cam.ortho { 1.0 / cam.zoom.max(1e-9) } else { cam.depth(wp).max(1.0) / cam.zoom.max(1e-9) };
-    let pinv = match l.parent.and_then(|p| ctx.comp.layer(p)) {
-        Some(p) => ctx.world_matrix(p).inverse().unwrap_or_default(),
-        None => effectcraft_engine::geom::Mat4::IDENTITY,
-    };
+    let pinv = parent_world_inverse(ctx, l);
     let a = pinv.apply_vec(cam.right() * k);
     let b = pinv.apply_vec(cam.down() * k);
     ([a.x, a.y, a.z], [b.x, b.y, b.z])
@@ -2179,7 +2269,7 @@ fn pen_cursor(ctx: &egui::Context, at: Pos2, icon: crate::icons::Icon) {
         Icon::PenConvert => vec2(8.0, 3.5),
         _ => vec2(8.0, 1.8),
     };
-    let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("viewer-pen-cursor")));
+    let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("viewer-pen-cursor")));
     let rect = Rect::from_min_size(at - tip, vec2(16.0, 16.0));
     for d in [vec2(-1.0, 0.0), vec2(1.0, 0.0), vec2(0.0, -1.0), vec2(0.0, 1.0)] {
         crate::icons::paint(&painter, rect.translate(d), icon, Color32::BLACK);
@@ -2187,6 +2277,10 @@ fn pen_cursor(ctx: &egui::Context, at: Pos2, icon: crate::icons::Icon) {
     crate::icons::paint(&painter, rect, icon, Color32::WHITE);
 }
 
+/// Handle a Pen-tool press at `pos`: close the current path when its first vertex is hit; otherwise append a snapped
+/// (Shift: 45-degree) vertex, resume an open path's end, add a motion-path keyframe, insert a vertex on a visible
+/// path segment, or start a new mask/shape path on the selected layer or a new shape layer. Records the resulting
+/// path id and tangent gesture in context data for the drag that follows.
 #[allow(clippy::too_many_arguments)]
 fn pen_press(
     app: &mut EffectcraftApp,
@@ -2199,7 +2293,7 @@ fn pen_press(
     mods: egui::Modifiers,
 ) {
     use effectcraft_engine::project::LayerSource;
-    let gid = egui::Id::new("viewer-gesture");
+    let gid = egui::Id::unique("viewer-gesture");
     let current: Option<(LayerId, u64)> = ui.data(|d| d.get_temp(pen_id()));
     let c0 = map.to_comp(pos);
     let corr = vt::snap(app, ui.ctx(), ectx, map, &[], &[c0], mods);
@@ -2221,6 +2315,12 @@ fn pen_press(
             });
             return;
         }
+        // Shift keeps the new segment at a multiple of 45° from the vertex before it (#1544).
+        let last = p.sp.vertices.last().map(|v| p.m.apply(gv2(v[0], v[1])));
+        let c = match last {
+            Some(q) if mods.shift => constrain_45([q.x, q.y], c),
+            _ => c,
+        };
         let lp = inv.apply(gv2(c[0], c[1]));
         let lp = [lp.x, lp.y];
         if let Ok(v) = app.session.execute("mask.addVertex", json!({"layer": lid.0, "mask": uid, "point": lp})) {
@@ -2282,10 +2382,25 @@ fn pen_press(
     });
 }
 
+/// `to` moved onto the nearest line through `from` at a multiple of 45° (horizontal, vertical or
+/// diagonal), as far along it as `to` lies: the Pen's Shift-click.
+fn constrain_45(from: [f64; 2], to: [f64; 2]) -> [f64; 2] {
+    let (dx, dy) = (to[0] - from[0], to[1] - from[1]);
+    if !(dx.is_finite() && dy.is_finite()) || (dx == 0.0 && dy == 0.0) {
+        return to;
+    }
+    let step = std::f64::consts::FRAC_PI_4;
+    let a = (dy.atan2(dx) / step).round() * step;
+    let (ux, uy) = (a.cos(), a.sin());
+    let along = dx * ux + dy * uy;
+    [from[0] + ux * along, from[1] + uy * along]
+}
+
 /// Visible, unlocked layers eligible for viewer hit tests, in front-to-back order.
-/// Solo scope matches the renderer: only active AV layers activate it, even when hidden or locked.
+/// Solo scope matches the renderer: any soloed AV layer activates it at every time (as in After
+/// Effects), even when hidden, locked or outside its in-out range.
 pub(crate) fn selectable_layers(comp: &Comp, time: Tick) -> impl Iterator<Item = &Layer> {
-    let any_solo = comp.layers.iter().any(|l| l.switches.solo && l.source.is_av() && l.is_active_at(time));
+    let any_solo = comp.layers.iter().any(|l| l.switches.solo && l.source.is_av());
     comp.layers
         .iter()
         .filter(move |l| l.is_active_at(time) && l.switches.video && !l.switches.locked && !l.is_camera() && !l.is_light() && (!any_solo || l.switches.solo))
@@ -2497,6 +2612,8 @@ fn create_shape(app: &mut EffectcraftApp, tool: Tool, a: [f64; 2], b: [f64; 2], 
     }
 }
 
+/// Draw the no-composition viewer with New Composition and New Composition From Footage buttons, accepting Project
+/// items dropped on it to create the first composition.
 fn empty_state(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
     let t = app.tokens;
     let p = ui.painter().clone();
@@ -2504,12 +2621,12 @@ fn empty_state(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
     let c = rect.center();
     p.text(c - vec2(0.0, 40.0), Align2::CENTER_CENTER, crate::i18n::tr("Composition"), Tokens::semibold(16.0), t.text);
     let b1 = Rect::from_center_size(c + vec2(0.0, 0.0), vec2(220.0, 30.0));
-    if widgets::text_button(ui, b1, "New Composition", true, &t, egui::Id::new("empty-newcomp")).clicked() {
+    if widgets::text_button(ui, b1, "New Composition", true, &t, egui::Id::unique("empty-newcomp")).clicked() {
         crate::panels::dialogs::open_new_comp(app);
     }
     app.auto.add("viewer.empty.newComp", b1, "New Composition");
     let b2 = Rect::from_center_size(c + vec2(0.0, 40.0), vec2(220.0, 30.0));
-    if widgets::text_button(ui, b2, "New Composition From Footage", false, &t, egui::Id::new("empty-fromfootage")).clicked() {
+    if widgets::text_button(ui, b2, "New Composition From Footage", false, &t, egui::Id::unique("empty-fromfootage")).clicked() {
         let _ = crate::menus::invoke(app, &ui.ctx().clone(), "file.import", json!({}));
     }
     app.auto.add("viewer.empty.import", b2, "New Composition From Footage");
@@ -2684,6 +2801,18 @@ mod tests {
     use super::*;
     use effectcraft_engine::geom::{Mat4, vec3};
 
+    /// #1544: Shift-clicking with the Pen keeps the new segment horizontal, vertical or diagonal.
+    #[test]
+    fn pen_shift_click_keeps_the_segment_at_45_degrees() {
+        let near = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).abs() < 1e-9 && (a[1] - b[1]).abs() < 1e-9;
+        let from = [100.0, 100.0];
+        assert!(near(constrain_45(from, [104.0, 180.0]), [100.0, 180.0]), "straight down");
+        assert!(near(constrain_45(from, [30.0, 97.0]), [30.0, 100.0]), "left");
+        assert!(near(constrain_45(from, [150.0, 46.0]), [152.0, 48.0]), "up and right, on the diagonal");
+        assert!(near(constrain_45(from, from), from), "on the vertex");
+        assert!(constrain_45(from, [f64::NAN, 3.0])[0].is_nan(), "a non-finite point stays as it is");
+    }
+
     /// The Rotation tool counts past a full turn in both directions, as in After Effects: the
     /// pointer going round the anchor 1.5 turns clockwise gives 540°, then back 2 turns gives
     /// −180°, with no jump where atan2 wraps from 180° to −180°.
@@ -2790,6 +2919,15 @@ mod tests {
         // above (negative y) instead, and the front corners stay where they were.
         assert!(crossing.iter().all(|p| p[0].is_finite() && p[1].is_finite() && p[1] < 34.0), "{crossing:?}");
         assert!(project_clipped(&m, &box_corners([-50.0, -400.0, 50.0, -200.0])).is_empty(), "wholly behind");
+    }
+
+    #[test]
+    fn axis_drag_follows_the_arrow_and_ignores_drag_across_it() {
+        let (ax, ay) = axis_drag([0.0, 0.0, 60.0], [24.0, -24.0]);
+        let at = |d: [f64; 2]| [0, 1, 2].map(|i| ax[i] * d[0] + ay[i] * d[1]);
+        assert_eq!(at([24.0, -24.0]), [0.0, 0.0, 60.0]);
+        assert_eq!(at([-12.0, 12.0]), [0.0, 0.0, -30.0]);
+        assert_eq!(at([10.0, 10.0]), [0.0, 0.0, 0.0]);
     }
 
     #[test]

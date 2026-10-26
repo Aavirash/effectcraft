@@ -497,13 +497,13 @@ fn collapsed_items<'a>(
     let op = ctx.opacity(layer) as f32 * r.opacity_mul();
     let Some((sub, nctx)) = r.collapse_into(ctx, layer, item, op) else { return vec![] };
     let t = nctx.time;
-    let any_solo = nctx.comp.layers.iter().any(|l| l.switches.solo && l.source.is_av() && l.is_active_at(t));
+    let any_solo = nctx.comp.any_solo();
     let nested: Vec<&'a Layer> = nctx
         .comp
         .layers
         .iter()
         .rev()
-        .filter(|l| l.is_active_at(t) && l.has_video() && !l.switches.adjustment && (!any_solo || l.switches.solo) && (r.opts.guides || !l.switches.guide))
+        .filter(|l| l.is_active_at(t) && l.has_video() && !l.switches.adjustment && (!any_solo || l.switches.solo) && (sub.opts.guides || !l.switches.guide))
         .collect();
     let mut items = Vec::new();
     for (k, l) in nested.into_iter().enumerate() {
@@ -703,7 +703,7 @@ fn occlusion(c: &Item, p: Vec3, l: &LightState) -> [f32; 3] {
 
 /// A Classic 3D run prepared for an accelerator ([`Renderer::prepare_3d_run`]): every plane
 /// with its geometry, material and buffer, ready for the per-pixel depth sort, lighting and
-/// ray-cast shadows of [`draw_run`] on another device.
+/// ray-cast shadows of `draw_run` on another device.
 #[derive(Clone, Debug)]
 pub struct Run3d {
     /// Drawn planes in stack order, then shadow casters from outside the run (`draw` false).
@@ -971,7 +971,7 @@ pub(crate) fn environment_rotation(ctx: &EvalCtx) -> f32 {
         .to_radians() as f32
 }
 
-/// An Environment Light Background layer ready to draw (see [`draw_sky`]): the layer's
+/// An Environment Light Background layer ready to draw (see `draw_sky`): the layer's
 /// buffer in the blending space, its opacity and the camera's view rays. Also handed to an
 /// accelerator's compositor (`Renderer::sky_draw`).
 #[derive(Clone)]

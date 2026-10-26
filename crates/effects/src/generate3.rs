@@ -147,8 +147,8 @@ pub(crate) fn paint(img: &mut Image, cov: &Plane, color: [f32; 4], opacity: f32,
     });
 }
 
-/// Coverage of a plan-drawn generator: round-capped segments rasterised by [`raster_segs`]
-/// with `hardness`, or the union of convex polygons ([`raster_convex`]).
+/// Coverage of a plan-drawn generator: round-capped segments rasterised by `raster_segs`
+/// with `hardness`, or the union of convex polygons (`raster_convex`).
 #[derive(Clone, Debug)]
 pub enum Coverage {
     Segs { segs: Vec<Seg>, hardness: f64 },
@@ -165,7 +165,7 @@ impl Coverage {
 }
 
 /// Stroke, Scribble, Vegas and Write-on, shared with the GPU compositor (effectcraft-gpu
-/// `fx_gen2`): the coverage and how it is painted. `style` 0–2 as [`paint`] (On Original
+/// `fx_gen2`): the coverage and how it is painted. `style` 0–2 as `paint` (On Original
 /// Image, On Transparent, Reveal Original Image), 3 = under the layer (Vegas' Composite Under).
 #[derive(Clone, Debug)]
 pub struct PaintPlan {
@@ -213,7 +213,7 @@ pub fn paint_plan(id: &str, ctx: &EffectCtx, b: &Buf) -> Option<PaintPlan> {
     }
 }
 
-/// Scribble's Composite as a [`paint`] style.
+/// Scribble's Composite as a `paint` style.
 pub fn scribble_style(ctx: &EffectCtx) -> u32 {
     match ctx.params.e("composite") {
         0 => 0,
@@ -1596,7 +1596,7 @@ fn draw_marks(b: &mut Buf, segs_core: &[Seg], thickness: f64, softness: f64, ins
 }
 
 /// Audio Spectrum / Audio Waveform, shared with the GPU compositor (effectcraft-gpu `fx_gen2`):
-/// the marks (the audio analysis runs on the CPU) and how [`draw_marks`] colours them.
+/// the marks (the audio analysis runs on the CPU) and how `draw_marks` colours them.
 #[derive(Clone, Debug)]
 pub struct MarksPlan {
     pub segs: Vec<Seg>,

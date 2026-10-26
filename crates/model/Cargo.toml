@@ -16,4 +16,4 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 log = { workspace = true }
 image = { workspace = true }
-miniz_oxide = "0.8"
+miniz_oxide = "0.9"

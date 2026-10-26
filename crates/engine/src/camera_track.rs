@@ -7,7 +7,7 @@
 //! camera"). When only the solve settings changed (Shot Type, Angle of View, Solve Method,
 //! deleted points) the stored tracks are re-solved without re-tracking. Results are written into
 //! the effect's hidden parameters as one undo step; edits that change the layer's frames clear
-//! them and queue the effect again ([`invalidate`], run after every edit), like After Effects.
+//! them and queue the effect again (`invalidate`, run after every edit), like After Effects.
 //!
 //! Composition space: the solve's canonical frame maps to comp world by
 //! [`CameraSolve::world`] with the zoom of the first solved frame (focal length × the layer's

@@ -20,7 +20,7 @@
 //! * `looks` (`name`, `process_space`, `transform`, `inverse_transform`) and look strings
 //!   (`+A, -B`, `A | B` = the first one the config has);
 //! * transforms: `MatrixTransform` (`matrix` 4×4 row-major, `offset`), `FileTransform` (the LUT,
-//!   CDL and matrix files [`super::ocio::parse_file`] reads; `interpolation`, `ccc_id`),
+//!   CDL and matrix files `super::ocio::parse_file` reads; `interpolation`, `ccc_id`),
 //!   `ExponentTransform` (`value`), `ExponentWithLinearTransform` (`gamma`, `offset`, `style:
 //!   mirror`; the power curve with a linear toe that the Academy CLF specification calls
 //!   "moncurve"), `LogTransform` (`base`), `LogAffineTransform` (`base`, `logSideSlope`,

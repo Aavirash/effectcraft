@@ -20,7 +20,7 @@ use crate::{Importer, Services};
 /// How an import treats numbered stills.
 #[derive(Clone, Copy, Debug)]
 pub struct SequenceOptions {
-    /// The "<format> Sequence" checkbox: picked numbered stills of one run import as a sequence.
+    /// The `"<format> Sequence"` checkbox: picked numbered stills of one run import as a sequence.
     pub sequence: bool,
     /// The numbered stills inside a picked or dropped folder import as sequences.
     pub folders: bool,
@@ -44,7 +44,7 @@ impl SequenceOptions {
 
     /// `file.import`'s options. Dropped files (`drag: true`) import as stills, as in After
     /// Effects, while a folder's numbered stills import as sequences unless `sequence: false`
-    /// (Alt-drag of a folder). The Import dialog passes its "<format> Sequence" checkbox (off
+    /// (Alt-drag of a folder). The Import dialog passes its `"<format> Sequence"` checkbox (off
     /// unless ticked) as `sequence`. Without `sequence` or `drag` (scripts, agents) a numbered
     /// still brings its run, as it always has.
     pub fn for_import(p: &serde_json::Value) -> SequenceOptions {

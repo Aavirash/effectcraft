@@ -2,7 +2,7 @@
 //! compositor for runs of 3D layers.
 //!
 //! The 2D compositor (`Renderer::comp_frame`) walks the layer stack bottom-to-top; each run of
-//! consecutive 3D layers is handed to [`compose::draw_run`] as a group (2D layers break 3D
+//! consecutive 3D layers is handed to `compose::draw_run` as a group (2D layers break 3D
 //! groups, as in After Effects).
 
 pub mod adv;

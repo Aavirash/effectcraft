@@ -4,8 +4,8 @@ use effectcraft_color::{BlendMode, Label};
 use effectcraft_keyframe::{Justify, TextDoc, Value as KV};
 use effectcraft_project::build::{self, Ids};
 use effectcraft_project::{
-    Comp, FrameBlend, GroupKind, ItemId, ItemKind, Layer, LayerId, LayerSource, MaskMode, MatteKind, Node, Project, PropGroup, Quality, Solid, TrackMatte,
-    limits,
+    Comp, FootageKind, FrameBlend, GroupKind, ItemId, ItemKind, Layer, LayerId, LayerSource, MaskMode, MatteKind, Node, Project, PropGroup, Quality, Solid,
+    TrackMatte, limits,
 };
 use effectcraft_time::Tick;
 use serde_json::{Value, json};
@@ -162,6 +162,15 @@ fn text_range_p(p: &Value) -> Option<std::ops::Range<usize>> {
     Some(x.min(y)..x.max(y))
 }
 
+/// `layer.newText`: adds a Text layer to the comp at the CTI and returns `{layer}`.
+///
+/// The document starts as centre-justified "Text", with the optional text parameters applied.
+/// With `box` `[x, y, w, h]`, `(x, y)` is the paragraph box's top-left in comp space. Its width
+/// and height are `w.abs().max(1.0)` and `h.abs().max(1.0)`; the layer position is the box centre.
+/// It is left justified unless `justify` is given. The layer is named by `name`, else the first 40
+/// characters of the first text line, else "Text". `edit: true` also opens a new editing
+/// session with anchor `0` and the caret after the text, selecting all initial text so the next
+/// insertion replaces it. The session has `created: true`, so leaving it empty removes the layer.
 fn new_text(s: &mut Session, p: &Value) -> Result<Value> {
     let cid = comp_id(s, p)?;
     let comp = s.project.comp(cid).ok_or(EngineError::NoComp)?.clone();
@@ -200,7 +209,14 @@ fn new_text(s: &mut Session, p: &Value) -> Result<Value> {
         let n = doc.char_len();
         let id = insert_layer(proj, st, cid, l)?;
         if edit {
-            st.text_edit = Some(super::text_edit::TextEdit { layer: id, anchor: 0, caret: n, created: true, ..Default::default() });
+            st.text_edit = Some(super::text_edit::TextEdit {
+                layer: id,
+                anchor: 0,
+                caret: n,
+                created: true,
+                session: super::text_edit::next_edit_session(),
+                ..Default::default()
+            });
         }
         Ok(id)
     })?;
@@ -305,6 +321,103 @@ fn add_item(s: &mut Session, p: &Value) -> Result<Value> {
         insert_layer_at(proj, st, cid, l, index)
     })?;
     Ok(json!({"layer": id.0}))
+}
+
+/// A layer whose source is an item (footage, precomposition or solid), as in After Effects'
+/// Replace Source. Text, shape, null, camera, light and 3D model layers have no AVItem source to
+/// replace.
+fn replaceable_layer(l: &Layer) -> bool {
+    matches!(l.source, LayerSource::Footage { .. } | LayerSource::Comp { .. } | LayerSource::Solid { .. })
+}
+
+/// The source a Project item gives a layer, or why it can't replace one.
+fn replacement_source(item: ItemId, it: &effectcraft_project::Item) -> Result<LayerSource> {
+    const CMD: &str = "layer.replaceSource";
+    match &it.kind {
+        ItemKind::Comp(_) => Ok(LayerSource::Comp { item }),
+        ItemKind::Footage(f) if f.kind == FootageKind::Data => {
+            Err(bad(CMD, "data files can't be layer sources; read them in expressions with footage(\"name\").sourceData"))
+        }
+        ItemKind::Footage(f) if f.kind == FootageKind::Model => Err(bad(CMD, "3D model items can't replace a 2D layer source; add them as 3D layers")),
+        ItemKind::Footage(_) => Ok(LayerSource::Footage { item }),
+        ItemKind::Solid(_) => Ok(LayerSource::Solid { item }),
+        ItemKind::Folder => Err(bad(CMD, "folders can't be layer sources")),
+    }
+}
+
+/// Whether a source brings audio properties (precompositions always can; footage when it has an
+/// audio stream).
+fn source_has_audio(project: &Project, source: &LayerSource) -> bool {
+    match source {
+        LayerSource::Comp { .. } => true,
+        LayerSource::Footage { item } => project.item(*item).is_some_and(|i| matches!(&i.kind, ItemKind::Footage(f) if f.has_audio)),
+        _ => false,
+    }
+}
+
+fn has_replace_source(s: &Session) -> std::result::Result<(), String> {
+    has_comp(s)?;
+    let c = s.active_comp().ok_or("no composition")?;
+    if !s.state.selected_layers.iter().filter_map(|l| c.layer(*l)).any(replaceable_layer) {
+        return Err("select a footage, composition or solid layer".into());
+    }
+    if s.state.project_selection.is_empty() {
+        return Err("select a footage item, a composition or a solid in the Project panel".into());
+    }
+    Ok(())
+}
+
+/// Replace the source of the selected (or `layers`) AV layers with a Project item, as After
+/// Effects' Alt-drag and Ctrl+Alt+/ do. The layer keeps every property: name, timing, transforms,
+/// keyframes, expressions, effects, masks, switches, parenting and track matte. Only its source
+/// changes; precompositions bring their Essential Properties group through `sync_project`, and a
+/// source with audio adds an Audio group when the layer has none.
+fn replace_source(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "layer.replaceSource";
+    let (cid, ids) = layers_p(s, p)?;
+    let ids = unlocked(s, cid, ids, CMD)?;
+    if ids.is_empty() {
+        return Err(bad(CMD, "select a layer first"));
+    }
+    let item = match p.get("item") {
+        Some(Value::Number(n)) => ItemId(n.as_u64().ok_or_else(|| bad(CMD, "item: a project item id"))?),
+        Some(Value::String(name)) => s.project.find_by_name(name).map(|i| i.id).ok_or_else(|| bad(CMD, format!("no item `{name}`")))?,
+        _ => *s.state.project_selection.first().ok_or_else(|| bad(CMD, "select a footage item, a composition or a solid in the Project panel"))?,
+    };
+    let it = s.project.item(item).ok_or_else(|| bad(CMD, format!("no item {}", item.0)))?;
+    let source = replacement_source(item, it)?;
+    let comp = s.project.comp(cid).ok_or(EngineError::NoComp)?;
+    for lid in &ids {
+        let l = comp.layer(*lid).ok_or_else(|| bad(CMD, "no such layer"))?;
+        if !replaceable_layer(l) {
+            return Err(bad(CMD, format!("“{}” has no source item to replace", l.name)));
+        }
+    }
+    if let LayerSource::Comp { item: new } = &source
+        && s.project.comp_contains(*new, cid)
+    {
+        return Err(bad(CMD, "a composition can't contain itself"));
+    }
+    let has_audio = source_has_audio(&s.project, &source);
+    let source_for_edit = source.clone();
+    s.edit("Replace Layer Source", None, |proj, _| {
+        for lid in &ids {
+            let needs_audio = has_audio && proj.comp(cid).and_then(|c| c.layer(*lid)).is_some_and(|l| l.props.sub("audio").is_none());
+            let audio = if needs_audio {
+                let mut next = Ids(&mut proj.next_id);
+                Some(build::audio(&mut next))
+            } else {
+                None
+            };
+            let l = layer_mut(proj, cid, *lid)?;
+            l.source = source_for_edit.clone();
+            if let Some(audio) = audio {
+                l.props.children.push(audio.into());
+            }
+        }
+        Ok(())
+    })?;
+    Ok(json!({"layers": ids.iter().map(|l| l.0).collect::<Vec<_>>(), "item": item.0}))
 }
 
 fn select(s: &mut Session, p: &Value) -> Result<Value> {
@@ -417,6 +530,10 @@ fn set_switch_others(s: &mut Session, cid: ItemId, ids: &[LayerId], name: &str, 
         let applies = |l: &Layer| match name {
             "audio" => l.props.sub("audio").is_some(),
             "lock" | "locked" => true,
+            // Every layer has a Video switch (it hides a null's outline in the viewer and turns a
+            // camera or light off), as the Timeline's eye cell shows; track mattes keep theirs off
+            // by design.
+            "video" | "eye" => !mattes.contains(&l.id),
             _ => l.source.is_av() && !mattes.contains(&l.id),
         };
         let mut alone = true;
@@ -1346,6 +1463,15 @@ fn shape_item_target(proj: &mut Project, cid: ItemId, lid: LayerId, group_uid: O
     })
 }
 
+/// `layer.setText`: sets a text layer's Source Text and/or character attributes at the CTI.
+///
+/// A `font` name is also added to the recent fonts and the preferences saved. With an empty
+/// `range` and no `text`, while that layer is being edited and its document is non-empty,
+/// recognised character attributes are also staged in the pending insertion style without
+/// changing existing characters. Paragraph/document attributes still apply through the edit;
+/// the session is bumped whenever this branch runs. Document changes use [`Session::edit`],
+/// merged by `merge_p`. With `text` given, a layer whose name is empty or starts with `Text`
+/// takes the new first line (up to 40 characters) when that line is non-empty. Replies `null`.
 fn set_text(s: &mut Session, p: &Value) -> Result<Value> {
     let (cid, lid) = layer_p(s, p, "layer.setText")?;
     // The Character panel's recent fonts (Settings ▸ Type ▸ Number of Recent Fonts to Display).
@@ -1373,6 +1499,9 @@ fn set_text(s: &mut Session, p: &Value) -> Result<Value> {
         }
         s.bump();
     }
+    // A changed Source Text is handled by `Session::edit`: its boundary clamps the selection and
+    // starts a new IME epoch only when the CTI document actually changed, so an identical text
+    // write stays a no-op and keeps the editor's owner.
     s.edit("Edit Text", merge_p(p), |proj, _| {
         let l = layer_mut(proj, cid, lid)?;
         let lt = l.layer_time(t);
@@ -1625,6 +1754,15 @@ pub fn specs() -> Vec<CommandSpec> {
             "{item: id|name, time? (s, the In point), index? (1-based stack position; default above the selected layer), position? ([x, y] comp px; default the centre), duration? (s, for a still)}",
             has_comp,
             add_item
+        ),
+        cmd!(
+            "layer.replaceSource",
+            "Replace Layer Source",
+            [],
+            Some("Cmd+Alt+/"),
+            "{comp?, layers?, layer?, item?: id|name (default the Project panel selection), fixExpressions?: bool (accepted for After Effects compatibility)} → {layers, item}",
+            has_replace_source,
+            replace_source
         ),
         cmd!("layer.select", "Select Layers", [], None, "{layers: [id|name|#n], add?, toggle?}", has_comp, select),
         cmd!("layer.selectNext", "Select Next Layer", [], Some("Cmd+ArrowDown"), "{add?}", has_comp, select_next),

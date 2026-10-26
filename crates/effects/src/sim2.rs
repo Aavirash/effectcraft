@@ -1586,7 +1586,7 @@ pub struct FoamEnv {
 
 /// What Foam draws this frame over a transparent frame of the layer's size: the bubble sprites,
 /// then the User Defined texture's discs, the Environment Map's reflections and (Draft + Flow
-/// Map) the flow map under it all, each [`foam_disc`]-composited in bubble order.
+/// Map) the flow map under it all, each `foam_disc`-composited in bubble order.
 pub struct FoamPlan {
     pub sprites: crate::sim::SpritePlan,
     pub user: Option<(crate::LayerPixels, Vec<FoamDisc>)>,

@@ -6,7 +6,7 @@
 //! `wait`; in the browser the background is a Web Worker whose segmentations stream back,
 //! [`crate::offload`]), frame by frame outward from the base frame, rendering the effect's input
 //! (`Renderer::layer_input`, source → masks → the effects above it). `roto.freeze` runs the same
-//! pass and stores the final mattes in the effect (one undo step). [`sync`], run after every
+//! pass and stores the final mattes in the effect (one undo step). `sync`, run after every
 //! edit, keeps each instance's hidden Input Key equal to a signature of what its frames are made
 //! of (the layer's source and timing, its masks and the effects above it) and drops frozen
 //! mattes made from other frames.

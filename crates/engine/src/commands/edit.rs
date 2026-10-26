@@ -1,7 +1,8 @@
 //! Edit menu.
 
 use effectcraft_color::Label;
-use effectcraft_project::{Comp, Expression, ItemKind, Layer, LayerId, LayerSource, TrackMatte};
+use effectcraft_keyframe::Value as KV;
+use effectcraft_project::{Comp, Expression, ItemId, ItemKind, Layer, LayerId, LayerSource, TrackMatte};
 use effectcraft_time::Tick;
 use serde_json::{Value, json};
 
@@ -73,6 +74,10 @@ fn select_all(s: &mut Session, _: &Value) -> Result<Value> {
     Ok(json!(s.state.selected_layers.len()))
 }
 fn deselect_all(s: &mut Session, _: &Value) -> Result<Value> {
+    // A deselected layer never keeps an open text edit: commit the edit first, exactly as
+    // `text.endEdit` (an empty Type-tool layer included), so every route — menu, shortcut,
+    // script, MCP — leaves one final state.
+    super::text_edit::end_edit(s, &Value::Null)?;
     s.state.selected_layers.clear();
     s.state.selected_props.clear();
     s.state.selected_keys.clear();
@@ -115,6 +120,11 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
         if !items.is_empty() {
             return super::prop_groups::duplicate_contents(s, &items);
         }
+        // Text animators or their selectors selected → duplicate them inside their text layers.
+        let items = super::prop_groups::selected_animator_items(s);
+        if !items.is_empty() {
+            return super::prop_groups::duplicate_contents(s, &items);
+        }
     }
     let (cid, ids) = layers_p(s, p)?;
     let new = s.edit("Duplicate", None, |proj, st| {
@@ -139,46 +149,73 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!(new.iter().map(|l| l.0).collect::<Vec<_>>()))
 }
 
+/// `edit.clear`: delegates to `text.delete` while editing text (deleting the selection or
+/// preceding character/word), then handles selected Time Remap (turning remapping off), keyframes, loose mask
+/// vertices, puppet pins, effects, masks/shape items/text animators/trackers, and finally the
+/// selected (or given) unlocked layers. Layer and selected-property-group paths return the number
+/// removed; text, Time Remap, keyframe, loose-vertex, puppet-pin and effect paths return their
+/// delegated command's result.
+///
+/// Layer removal also unparents surviving children in place, clears track mattes that pointed
+/// at a removed layer and rewrites layer-reference values and keys to `None` in the same undo
+/// step; the text-edit session is then sanitized so a removed layer's editor is not reused.
 fn delete(s: &mut Session, p: &Value) -> Result<Value> {
-    if s.state.text_edit.is_some() && p.get("layers").is_none() {
-        return s.execute("text.delete", json!({}));
+    if let Some(done) = delete_selection(s, p)? {
+        return Ok(done);
+    }
+    let (cid, ids) = layers_p(s, p)?;
+    let ids = super::unlocked(s, cid, ids, "edit.clear")?;
+    clear_layers(s, cid, &ids)?;
+    // A removed layer may have been the edited one: end that session before another command
+    // can reuse it. Undo restores a layer as a new editor, never by reviving the old IME session.
+    s.sanitize_state();
+    Ok(json!(ids.len()))
+}
+
+/// Deletes the selected things that are not layers. `None` when the layers are deleted
+/// instead (nothing else is selected, or the command names its layers).
+fn delete_selection(s: &mut Session, p: &Value) -> Result<Option<Value>> {
+    let no_layers = p.get("layers").is_none();
+    if s.state.text_edit.is_some() && no_layers {
+        return Ok(Some(s.execute("text.delete", json!({}))?));
     }
     // Time Remap selected (its name, which selects all its keys) → time remapping off, not the
     // layer (After Effects).
-    if p.get("layers").is_none() {
+    if no_layers {
         let remapped = super::layer_time::selected_time_remap(s);
         if !remapped.is_empty() {
-            return super::layer_time::disable_time_remap(s, &remapped);
+            return Ok(Some(super::layer_time::disable_time_remap(s, &remapped)?));
         }
     }
     // Keyframes selected → delete keys; mask vertices → delete them; else layers.
-    if !s.state.selected_keys.is_empty() && p.get("layers").is_none() {
-        return s.execute("keys.delete", json!({}));
+    if !s.state.selected_keys.is_empty() && no_layers {
+        return Ok(Some(s.execute("keys.delete", json!({}))?));
     }
     // (Points selected with their mask, which selecting a mask does: the mask goes, below.)
     let comp = s.active_comp();
     let loose = s.state.selected_vertices.iter().any(|v| {
         !s.state.selected_props.contains(&(v.layer, v.mask)) && comp.and_then(|c| c.layer(v.layer)).is_some_and(|l| l.props.find_group(v.mask).is_some())
     });
-    if loose && p.get("layers").is_none() {
-        return s.execute("mask.deleteVertices", json!({}));
+    if loose && no_layers {
+        return Ok(Some(s.execute("mask.deleteVertices", json!({}))?));
     }
     // Puppet pins selected → delete the pins (not their layer).
-    if p.get("layers").is_none() && !super::puppet::selected_pins(s).is_empty() {
-        return s.execute("puppet.removePin", json!({}));
+    if no_layers && !super::puppet::selected_pins(s).is_empty() {
+        return Ok(Some(s.execute("puppet.removePin", json!({}))?));
     }
     // Effects selected → remove them.
-    if p.get("layers").is_none() && !super::effect::selected_effects(s).is_empty() {
-        return s.execute("effect.remove", json!({}));
+    if no_layers && !super::effect::selected_effects(s).is_empty() {
+        return Ok(Some(s.execute("effect.remove", json!({}))?));
     }
     // Masks, shape items, text animators or trackers selected → remove them.
-    if p.get("layers").is_none()
-        && let Some(n) = super::prop_groups::remove_selected(s)?
-    {
-        return Ok(n);
+    if no_layers && let Some(n) = super::prop_groups::remove_selected(s)? {
+        return Ok(Some(n));
     }
-    let (cid, ids) = layers_p(s, p)?;
-    let ids = super::unlocked(s, cid, ids, "edit.clear")?;
+    Ok(None)
+}
+
+/// Removes layers `ids` from comp `cid` in one undoable step, and clears what referred to them.
+fn clear_layers(s: &mut Session, cid: ItemId, ids: &[LayerId]) -> Result<()> {
     // Children of deleted layers are unparented where they are (like After Effects).
     let comp = s.project.comp(cid).ok_or(crate::EngineError::NoComp)?;
     let orphans: Vec<LayerId> = comp.layers.iter().filter(|l| !ids.contains(&l.id) && l.parent.is_some_and(|p| ids.contains(&p))).map(|l| l.id).collect();
@@ -196,13 +233,27 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
             if l.track_matte.is_some_and(|m| ids.contains(&m.layer)) {
                 l.track_matte = None;
             }
+            // A layer-reference property (an Environment light's Source, an effect's Clone Source,
+            // Back Layer…) must read as None once its layer is gone, in this same history step: a
+            // dead id renders as nothing while the UI shows "None", which means "fall back to the
+            // comp's Environment Layer" (#2153). Keys carry the same value kind as the property.
+            l.props.walk_mut(&mut |p| {
+                let dead = |v: &KV| matches!(v, KV::Layer(Some(id)) if ids.contains(&LayerId(*id)));
+                if dead(&p.value) {
+                    p.value = KV::Layer(None);
+                }
+                for k in &mut p.keys {
+                    if dead(&k.value) {
+                        k.value = KV::Layer(None);
+                    }
+                }
+            });
         }
         st.selected_layers.clear();
         st.selected_props.clear();
         st.selected_keys.clear();
         Ok(())
-    })?;
-    Ok(json!(ids.len()))
+    })
 }
 
 fn clear_clipboards(s: &mut Session) {
@@ -228,9 +279,7 @@ fn copy(s: &mut Session, p: &Value) -> Result<Value> {
     }
     // Keyframes selected → copy keys (pasted at the CTI).
     if !s.state.selected_keys.is_empty() && p.get("layers").is_none() {
-        s.state.link_clipboard = None;
-        s.state.effect_clipboard.clear();
-        s.state.contents_clipboard.clear();
+        clear_clipboards(s);
         return s.execute("keys.copy", json!({}));
     }
     // Effects selected (Effect Controls / timeline) → copy the effects.
@@ -256,12 +305,14 @@ fn copy(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// Edit ▸ Copy with properties selected (Position, or the Transform group), as in After
-/// Effects: an animated property copies its keyframes (the selected ones, else all of them) and
-/// an unanimated one its value, for Paste onto the same properties of other layers (#493).
+/// Effects: an animated property copies its keyframes and an unanimated one its value, for Paste
+/// onto the same properties of other layers (#493). With keyframes selected only those are copied,
+/// even across several highlighted properties (#1552); a selected Transform group copies them all.
 /// `None` when no property (or Transform group) is selected.
 fn copy_properties(s: &mut Session) -> Result<Option<Value>> {
     let Some(comp) = s.active_comp() else { return Ok(None) };
     let mut leaves = vec![];
+    let mut copy_all_keys = s.state.selected_keys.is_empty();
     for (lid, uid) in &s.state.selected_props {
         let Some(l) = comp.layer(*lid) else { continue };
         if l.props.find(*uid).is_some() {
@@ -269,6 +320,7 @@ fn copy_properties(s: &mut Session) -> Result<Option<Value>> {
         } else if let Some(g) = l.props.find_group(*uid)
             && l.props.match_path_of(*uid).as_deref() == Some("transform")
         {
+            copy_all_keys = true;
             g.walk("", &mut |_, pr| leaves.push((*lid, pr.uid)));
         }
     }
@@ -286,7 +338,7 @@ fn copy_properties(s: &mut Session) -> Result<Option<Value>> {
             {
                 values.push((path, pr.value.clone()));
             }
-        } else if !keys.iter().any(|k| k.layer == *lid && k.prop == *uid) {
+        } else if copy_all_keys && !keys.iter().any(|k| k.layer == *lid && k.prop == *uid) {
             keys.extend(pr.keys.iter().map(|k| KeyRef { layer: *lid, prop: *uid, time: k.time }));
         }
     }
@@ -327,7 +379,8 @@ fn paste_properties(s: &mut Session, p: &Value) -> Result<Value> {
             }
             let lt = l.layer_time(t);
             for (path, v) in &values {
-                if let Some(pr) = l.props.prop_mut(path)
+                let path = super::resolve_effect_path(l, path);
+                if let Some(pr) = l.props.prop_mut(&path)
                     && let Some(v) = pr.value.coerce_json(&v.to_json())
                 {
                     pr.set_value_at(lt, v);
@@ -457,7 +510,8 @@ fn paste_links(s: &mut Session, clip: LinkClip) -> Result<Value> {
         for lid in &ids {
             let l = super::layer_mut(proj, cid, *lid)?;
             for (path, e) in &pairs {
-                if let Some(pr) = l.props.prop_mut(path) {
+                let path = super::resolve_effect_path(l, path);
+                if let Some(pr) = l.props.prop_mut(&path) {
                     pr.expr = Some(e.clone());
                     n += 1;
                 }
@@ -494,6 +548,13 @@ fn paste(s: &mut Session, p: &Value) -> Result<Value> {
     }
     if let Some(clip) = s.state.link_clipboard.clone() {
         return paste_links(s, clip);
+    }
+    // A copied Mask Path / shape Path pasted onto Position becomes a motion path (#1425).
+    if let [(_, effectcraft_keyframe::Value::Path(path))] = s.state.value_clipboard.as_slice()
+        && let Some(target) = super::anim::path_target(s, p)?
+    {
+        let path = path.clone();
+        return super::anim::paste_path(s, p, target, &path);
     }
     if !s.state.value_clipboard.is_empty() {
         return paste_properties(s, p);
@@ -807,8 +868,30 @@ fn original_path(s: &Session) -> Option<String> {
     }
 }
 
+/// Whether Edit Original may hand `path` to the system's default app: a regular file (after
+/// following links) whose name, and the name it links to, have a media extension the footage
+/// importer takes. Anything else (a folder or app bundle, a script, a shortcut) is refused.
+pub(crate) fn openable_original(path: &str) -> std::result::Result<(), String> {
+    let media = |p: &std::path::Path| {
+        let ext = p.extension().and_then(std::ffi::OsStr::to_str).map(str::to_ascii_lowercase).unwrap_or_default();
+        crate::media_browser::kind_of(&p.to_string_lossy()).is_some_and(|k| k != "project") || matches!(ext.as_str(), "pdf" | "ai" | "eps")
+    };
+    let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.to_string());
+    let real = std::fs::canonicalize(path).map_err(|e| format!("cannot open “{name}”: {e}"))?;
+    if !real.is_file() {
+        return Err(format!("“{name}” is not a file"));
+    }
+    if !media(std::path::Path::new(path)) || !media(&real) {
+        return Err(format!("Edit Original opens media files only; “{name}” is not one"));
+    }
+    Ok(())
+}
+
 fn edit_original(s: &mut Session, _: &Value) -> Result<Value> {
-    let path = original_path(s).ok_or_else(|| super::bad("edit.editOriginal", "select a footage item or layer"))?;
+    let stored = original_path(s).ok_or_else(|| super::bad("edit.editOriginal", "select a footage item or layer"))?;
+    let path = s.stored_path(&stored).map_err(|why| super::bad("edit.editOriginal", crate::doc_path::refusal(&stored, why)))?;
+    let path = path.to_string_lossy();
+    openable_original(&path).map_err(|e| super::bad("edit.editOriginal", e))?;
     let url = super::layer_menu::file_url(&path);
     s.events.push(crate::Event::OpenUrl(url.clone()));
     Ok(json!({"url": url}))
@@ -951,20 +1034,67 @@ fn always_ok(_: &Session) -> std::result::Result<(), String> {
 mod tests {
     use serde_json::json;
 
+    fn tmp(name: &str) -> std::path::PathBuf {
+        let d = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/test-out").join(name);
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
     /// Edit Original opens the footage as a well-formed `file://` URL, whatever its name contains.
     #[test]
     fn edit_original_opens_an_encoded_file_url() {
+        let clip = tmp("edit-original-url").join("take #1.mov");
+        std::fs::write(&clip, b"").unwrap();
+        let clip = clip.to_string_lossy().into_owned();
+        let url = super::super::layer_menu::file_url(&clip);
+        assert!(url.ends_with("/take%20%231.mov"), "{url}");
         let mut s = crate::Session::default();
         let id = s
             .edit("add", None, |p, _| {
-                let f = effectcraft_project::Footage { path: "/clips/take #1.mov".into(), ..Default::default() };
+                let f = effectcraft_project::Footage { path: clip.clone(), ..Default::default() };
                 Ok(p.add_item("take", effectcraft_color::Label::Lavender, None, effectcraft_project::ItemKind::Footage(f)))
             })
             .unwrap();
         s.state.project_selection = vec![id];
         s.drain_events();
         let r = s.execute("edit.editOriginal", json!({})).unwrap();
-        assert_eq!(r["url"], "file:///clips/take%20%231.mov");
-        assert!(s.drain_events().iter().any(|e| matches!(e, crate::Event::OpenUrl(u) if u == "file:///clips/take%20%231.mov")));
+        assert_eq!(r["url"], url.as_str());
+        assert!(s.drain_events().iter().any(|e| matches!(e, crate::Event::OpenUrl(u) if *u == url)));
+    }
+
+    /// Only regular media files reach the system opener.
+    #[test]
+    fn edit_original_opens_media_files_only() {
+        let d = tmp("edit-original-kinds");
+        for f in ["clip.mov", "Still.PNG", "run.bat", "app.desktop", "clip.mov.lnk"] {
+            std::fs::write(d.join(f), b"").unwrap();
+        }
+        for f in ["Tool.app", "folder.mov"] {
+            std::fs::create_dir_all(d.join(f)).unwrap();
+        }
+        let ok = |f: &str| super::openable_original(&d.join(f).to_string_lossy()).is_ok();
+        assert!(ok("clip.mov") && ok("Still.PNG"));
+        for f in ["run.bat", "app.desktop", "clip.mov.lnk", "Tool.app", "folder.mov", "missing.mov", ""] {
+            assert!(!ok(f), "{f}");
+        }
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(d.join("app.desktop"), d.join("link.png")).unwrap();
+            assert!(!ok("link.png"), "a media name linking to another kind of file");
+        }
+        // The command refuses without opening anything.
+        let mut s = crate::Session::default();
+        let path = d.join("run.bat").to_string_lossy().into_owned();
+        let id = s
+            .edit("add", None, |p, _| {
+                let f = effectcraft_project::Footage { path, ..Default::default() };
+                Ok(p.add_item("bat", effectcraft_color::Label::Lavender, None, effectcraft_project::ItemKind::Footage(f)))
+            })
+            .unwrap();
+        s.state.project_selection = vec![id];
+        s.drain_events();
+        assert!(s.execute("edit.editOriginal", json!({})).is_err());
+        assert!(!s.drain_events().iter().any(|e| matches!(e, crate::Event::OpenUrl(_))));
     }
 }

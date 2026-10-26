@@ -7,7 +7,7 @@
 //! stabilization plan once to validate the result. When the job finishes, the analysis is
 //! written into the effect's hidden Analysis parameter as one undo step, together with a key of
 //! what it was made from (the layer's source, In/Out, start, stretch and Time Remap). Edits that
-//! change those clear the analysis ([`invalidate`], run after every edit) and queue the effect
+//! change those clear the analysis (`invalidate`, run after every edit) and queue the effect
 //! for re-analysis, which frontends start with [`Session::poll_warp`] (After Effects re-analyses
 //! automatically too).
 

@@ -81,12 +81,13 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let importer = s.importer.clone().ok_or_else(|| bad(COMMAND, "media import is not available in this build"))?;
     let services = s.services.clone();
+    let stored = s.stored_paths.clone();
     let missing: Vec<(ItemId, Footage)> = s
         .project
         .items
         .values()
         .filter_map(|item| match &item.kind {
-            ItemKind::Footage(f) if !f.path.is_empty() && !services.exists(&f.path) => Some((item.id, f.clone())),
+            ItemKind::Footage(f) if !f.path.is_empty() && !stored.exists(services.as_ref(), &f.path) => Some((item.id, f.clone())),
             _ => None,
         })
         .collect();
@@ -102,7 +103,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
             }
             let supported = matches!(old.kind, FootageKind::Still | FootageKind::Sequence | FootageKind::Video | FootageKind::Audio)
                 && old.layer.is_none() && old.page == 0;
-            let name = Path::new(&old.path).file_name().and_then(|n| n.to_str()).unwrap_or("");
+            let name = Path::new(&old.path).file_name().and_then(std::ffi::OsStr::to_str).unwrap_or("");
             let paths = index.get(name).cloned().unwrap_or_default();
             let mut candidates = vec![];
             let mut accepted = vec![];
@@ -149,7 +150,8 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
             // A background search must not overwrite edits made while it was running.
             for (id, old, new) in &updates {
                 if s.project.item(*id).is_none_or(|i| !matches!(&i.kind, ItemKind::Footage(f) if f == old))
-                    || services.exists(&old.path) || !services.exists(&new.path)
+                    || stored.exists(services.as_ref(), &old.path)
+                    || !services.exists(&new.path)
                     || (new.kind == FootageKind::Sequence && new.sequence.iter().any(|p| !services.exists(p)))
                 {
                     return Err(bad(COMMAND, "footage changed during search; run the search again"));
@@ -157,6 +159,9 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
             }
             let matched = updates.len();
             if !dry_run && !updates.is_empty() {
+                for (_, _, new) in &updates {
+                    s.stored_paths.allow(new);
+                }
                 s.edit("Relink Missing Footage", None, |project, _| {
                     for (id, _, new) in updates {
                         if let Some(item) = project.item_mut(id) {
