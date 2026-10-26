@@ -2,7 +2,7 @@ use effectcraft_keyframe::Value;
 use effectcraft_project::{Comp, ItemId, ItemKind, LayerSource, LightKind, PrimitiveKind, Project, Renderer as R3, build};
 use effectcraft_time::{FrameRate, Tick};
 
-use super::scene::{Material, Scene, TexInfo, Vertex, irradiance_map};
+use super::scene::{Material, Scene, TexInfo, Vertex, dominant_direction, irradiance_map};
 use super::shade::{self, PI};
 use super::*;
 use crate::{NoFootage, RenderOpts, Renderer};
@@ -65,6 +65,17 @@ fn constant_environment_has_constant_irradiance() {
     let sky: Vec<[f32; 4]> = (0..32).flat_map(|y| (0..64).map(move |_| if y < 16 { [1.0, 1.0, 1.0, 1.0] } else { [0.0, 0.0, 0.0, 1.0] })).collect();
     let irr = irradiance_map(64, 32, &sky, 32, 16);
     assert!(irr[16][0] > 0.9 && irr[15 * 32 + 16][0] < 0.1, "{:?} {:?}", irr[16], irr[15 * 32 + 16]);
+}
+
+/// A NaN or infinite texel poisons the sums (every NaN comparison is false, so the thresholds
+/// alone would pass it through as a NaN direction); an infinite one even where sin θ = 0 turns
+/// into NaN. Either way the sum is garbage, not a direction: no sun, so no shadow (#2436).
+#[test]
+fn a_non_finite_environment_has_no_sun_direction() {
+    let nan = vec![[f32::NAN; 4]; 8 * 4];
+    assert_eq!(dominant_direction(8, 4, &nan, 0.0), [0.0; 3]);
+    let inf = vec![[f32::INFINITY, 0.0, 0.0, 1.0]; 8 * 4];
+    assert_eq!(dominant_direction(8, 4, &inf, 0.0), [0.0; 3]);
 }
 
 #[test]

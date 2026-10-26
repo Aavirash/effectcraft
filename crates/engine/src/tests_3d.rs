@@ -186,10 +186,14 @@ fn environment_lights_switch_classic_comps_to_advanced_3d() {
     s.execute("layer.newLight", json!({"kind": "Point"})).unwrap();
     assert_eq!(s.active_comp().unwrap().renderer, Renderer::Classic3D);
     // Switching back to Classic 3D with an Environment light in the comp explains itself.
-    s.execute("layer.newLight", json!({"kind": "Environment"})).unwrap();
+    let env = s.execute("layer.newLight", json!({"kind": "Environment"})).unwrap()["layer"].as_u64().unwrap();
     toasts(&mut s);
     s.execute("comp.renderer", json!({"renderer": "classic3d"})).unwrap();
     assert!(toasts(&mut s).iter().any(|m| m.contains("Environment light")), "the Classic 3D limit is explained");
+    // Editing that Environment light (no type change) leaves the renderer the user chose.
+    s.execute("layer.lightSettings", json!({"layer": env, "intensity": 80})).unwrap();
+    assert_eq!(s.active_comp().unwrap().renderer, Renderer::Classic3D, "an ordinary edit doesn't re-switch");
+    assert!(toasts(&mut s).is_empty(), "and doesn't toast either");
 }
 
 /// An Environment light takes Casts Shadows (with Shadow Darkness and Diffusion) like every

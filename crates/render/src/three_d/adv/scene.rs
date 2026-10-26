@@ -174,7 +174,8 @@ pub struct EnvInfo {
     pub rotation: f32,
     /// Unit direction from the scene towards the environment's dominant (radiance-weighted)
     /// bright region — the direction its shadow is cast from, like a parallel light's
-    /// `to_light`. `[0; 3]` when the image is directionless (uniform): no shadow then.
+    /// `to_light`. `[0; 3]` when the image is directionless (uniform) or the light casts no
+    /// shadow (nothing reads it then): no shadow.
     pub sun: [f32; 3],
     /// Shadow map index into [`Scene::shadows`]: 0 marked (assigned by `raster::shadow_maps`),
     /// -1 casts no shadow. Gated by the light's Cast Shadows.
@@ -815,7 +816,7 @@ pub fn irradiance_map(sw: u32, sh: u32, src: &[[f32; 4]], w: u32, h: u32) -> Vec
 /// (solid-angle weighted, rotation applied), or `[0; 3]` when the image is directionless
 /// (a uniform environment cancels to zero). The mean of a single bright spot on black points
 /// straight at it; a gradient points somewhere between its ends.
-fn dominant_direction(w: u32, h: u32, d: &[[f32; 4]], rot: f32) -> [f32; 3] {
+pub(crate) fn dominant_direction(w: u32, h: u32, d: &[[f32; 4]], rot: f32) -> [f32; 3] {
     use super::shade::equirect_dir;
     let (mut x, mut y, mut z) = (0.0f32, 0.0f32, 0.0f32);
     let mut weight = 0.0f32;
@@ -830,9 +831,10 @@ fn dominant_direction(w: u32, h: u32, d: &[[f32; 4]], rot: f32) -> [f32; 3] {
         z += dir[2] * lum;
         weight += lum.abs();
     }
-    // Under 1 % directional, the image is uniform to the eye: no dominant region to shadow from.
+    // Under 1 % directional, the image is uniform to the eye: no dominant region to shadow
+    // from. A non-finite sum (a NaN or infinite texel) is garbage, not a direction: none then.
     let len = (x * x + y * y + z * z).sqrt();
-    if weight <= 1e-9 || len < weight * 0.01 {
+    if !weight.is_finite() || !len.is_finite() || weight <= 1e-9 || len < weight * 0.01 {
         return [0.0; 3];
     }
     [x / len, y / len, z / len]
@@ -850,8 +852,9 @@ pub(crate) fn add_environment(
     shadow_darkness: f64,
     shadow_diffusion: f64,
 ) {
-    // The shadow direction from the full-resolution image, before the mip chain averages it.
-    let sun = dominant_direction(w, h, &data, rotation);
+    // The shadow direction from the full-resolution image, before the mip chain averages it —
+    // only a shadow-casting light reads it, so only one pays for the pass.
+    let sun = if casts_shadows { dominant_direction(w, h, &data, rotation) } else { [0.0; 3] };
     // Radiance level 0 at most 1024 wide.
     let (mut w, mut h, mut d) = (w, h, data);
     while w > 1024 {

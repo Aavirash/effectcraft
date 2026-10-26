@@ -294,11 +294,12 @@ fn light_settings(s: &mut Session, p: &Value) -> Result<Value> {
             l.name = n.clone();
         }
         apply_light(&mut l, p, t, "layer.lightSettings")?;
-        // The resulting kind (kept or changed to): an Environment light in a Classic 3D comp
-        // switches it, like adding one does.
-        let env = matches!(l.source, LayerSource::Light { kind: LightKind::Environment });
+        // A light that becomes an Environment light switches a Classic 3D comp to Advanced 3D,
+        // like adding one does; editing one that already is leaves the renderer to the user.
+        let was_env = matches!(old.source, LayerSource::Light { kind: LightKind::Environment });
+        let is_env = matches!(l.source, LayerSource::Light { kind: LightKind::Environment });
         *layer_mut(proj, cid, lid)? = l;
-        Ok(if env { use_advanced_3d(proj, cid)? } else { false })
+        Ok(if !was_env && is_env { use_advanced_3d(proj, cid)? } else { false })
     })?;
     report_switch(s, cid, switched, "which Environment lights need to light the scene");
     Ok(Value::Null)
