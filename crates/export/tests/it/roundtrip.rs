@@ -260,6 +260,8 @@ fn image_sequences_roundtrip() {
         (OutputFormat::JpegSequence, "jpg", 0.06, Channels::Rgb),
         (OutputFormat::TiffSequence, "tif", 0.01, Channels::Rgb),
         (OutputFormat::TiffSequence, "tif", 0.01, Channels::Rgba),
+        (OutputFormat::TargaSequence, "tga", 0.01, Channels::Rgb),
+        (OutputFormat::TargaSequence, "tga", 0.01, Channels::Rgba),
     ] {
         let d = out_dir(&format!("seq-{ext}-{ch:?}"));
         let om = OutputModule { channels: ch, ..OutputModule::for_format(fmt) };
