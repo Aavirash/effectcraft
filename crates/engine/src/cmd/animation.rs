@@ -18,6 +18,8 @@ use crate::{EngineError, KeyRef, Result, Session, cmd};
 pub const PRESET_TAG: &str = "effectcraftAnimationPreset";
 /// The preset format version that `anim.savePreset` writes.
 pub const PRESET_VERSION: u64 = 2;
+/// The first preset version that stores effect keys relative to the earliest key (#1971).
+const RELATIVE_EFFECT_KEYS: u64 = 2;
 
 fn has_selected_props(s: &Session) -> std::result::Result<(), String> {
     has_comp(s)?;
@@ -130,8 +132,16 @@ fn apply_preset(s: &mut Session, p: &Value) -> Result<Value> {
         s.save_prefs();
         s.prefs_revision += 1;
     }
-    let effects: Vec<PropGroup> =
+    let mut effects: Vec<PropGroup> =
         doc["effects"].as_array().map(|a| a.iter().filter_map(|v| serde_json::from_value(v.clone()).ok()).collect()).unwrap_or_default();
+    // Older presets stored effect keys at the source layer's times.
+    if doc[PRESET_TAG].as_u64().unwrap_or(1) < RELATIVE_EFFECT_KEYS
+        && let Some(first) = earliest_key(&effects)
+    {
+        for g in &mut effects {
+            retime_effect(g, 1.0, "anim.applyPreset", |t| Ok(Tick(t.0.checked_sub(first.0).ok_or_else(|| effect_time_error("anim.applyPreset"))?)))?;
+        }
+    }
     let props: Vec<(String, Property)> = doc["properties"]
         .as_array()
         .map(|a| {
