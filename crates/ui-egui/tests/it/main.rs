@@ -20,6 +20,8 @@ mod ui_drag_drop;
 mod ui_effect_controls;
 mod ui_effect_drop_highlight;
 mod ui_effect_names;
+mod ui_env_light_gpu;
+mod ui_env_light_repro;
 mod ui_font_search;
 mod ui_form_fit;
 mod ui_frame_step;
