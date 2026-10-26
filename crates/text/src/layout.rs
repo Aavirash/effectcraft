@@ -654,8 +654,9 @@ fn paragraph(
         let st = &runs[si].1;
         first_ascent(primaries[si].face, st.size).unwrap_or_else(|| fonts::face(primaries[si].face).metrics(st.size).ascent)
     };
-    let eff_align = |last: bool| -> Align {
-        if rtl_para && width.is_none() && para.align == Align::Justify {
+    // `rtl` is the resolved paragraph direction (an unset direction follows the text).
+    let eff_align = |last: bool, rtl: bool| -> Align {
+        if rtl && width.is_none() && para.align == Align::Justify {
             // Right-to-left point text with a justified paragraph sits flush at its start, the
             // right (After Effects 2026, every justify code; left-to-right not measured).
             Align::Right
@@ -679,7 +680,7 @@ fn paragraph(
             descent: pm.descent,
             first: style_first(si),
             advance: runs[si].1.line_advance(),
-            align: eff_align(true),
+            align: eff_align(true, rtl_para),
             avail: avail_for(true),
             margins: margins_for(true),
             underline: None,
@@ -861,7 +862,7 @@ fn paragraph(
     let mut out = Vec::new();
     for (li, r) in ranges.into_iter().enumerate() {
         let last = li + 1 == nlines;
-        let align = eff_align(last);
+        let align = eff_align(last, base_rtl);
         let avail = avail_for(li == 0);
         let (ce, tw) = trailing_ws(&r);
         let hang = hang_of(&r, ce);
@@ -1084,7 +1085,8 @@ pub fn layout_rich_uncached(text: &str, runs: &[(Range<usize>, TextStyle)], para
         let para = para_at(pi);
         if i == 0 {
             // Vertical type keeps its first column at the font ascent (not measured in AE).
-            let vertical = runs.iter().any(|r| r.1.vertical);
+            let vertical = runs.get(run_at(runs, pl.range.start)).is_some_and(|r| r.1.vertical)
+                || runs.iter().any(|r| r.1.vertical && r.0.start < pl.range.end && r.0.end > pl.range.start);
             baseline = if width.is_some() { if vertical { pl.ascent } else { pl.first } } else { 0.0 };
         } else {
             let prev_para = lay.lines.last().map_or(pi, |l| l.para);
@@ -1611,6 +1613,33 @@ mod tests {
             let got = at(Align::Justify, last);
             assert!((got.0 - right.0).abs() < 1e-3 && (got.1 - right.1).abs() < 1e-3, "{last:?}: {got:?} vs right-aligned {right:?}");
         }
+    }
+
+    /// The same holds when the direction is unset and the text itself resolves right to left.
+    #[test]
+    fn detected_rtl_point_text_with_a_justified_paragraph_is_flush_at_its_start() {
+        let text = "\u{5d0}\u{5d1}\u{5d2} \u{5d3}\u{5d4}";
+        let s = st(30.0);
+        let at = |align: Align| {
+            let p = ParagraphStyle { align, justify_last: Align::Left, rtl: None, ..Default::default() };
+            let l = layout_rich_uncached(text, &[(0..text.len(), s.clone())], &[p]);
+            (l.lines[0].x, l.lines[0].x + l.lines[0].width)
+        };
+        let (right, got) = (at(Align::Right), at(Align::Justify));
+        assert!((got.0 - right.0).abs() < 1e-3 && (got.1 - right.1).abs() < 1e-3, "{got:?} vs right-aligned {right:?}");
+    }
+
+    /// Only the first line's own runs decide whether box text starts at the font ascent: a
+    /// vertical run further down leaves a horizontal first line on its `d`-height baseline.
+    #[test]
+    fn a_later_vertical_run_keeps_the_first_line_baseline() {
+        let text = "Top\nside";
+        let horiz = st(40.0);
+        let vert = TextStyle { vertical: true, ..horiz.clone() };
+        let p = ParagraphStyle { width: Some(400.0), ..Default::default() };
+        let plain = layout_rich_uncached(text, &[(0..text.len(), horiz.clone())], std::slice::from_ref(&p));
+        let mixed = layout_rich_uncached(text, &[(0..4, horiz), (4..text.len(), vert)], &[p]);
+        assert!((mixed.lines[0].baseline - plain.lines[0].baseline).abs() < 1e-3, "{} vs {}", mixed.lines[0].baseline, plain.lines[0].baseline);
     }
 
     #[test]
