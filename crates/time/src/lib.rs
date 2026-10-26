@@ -387,7 +387,11 @@ pub fn format_time(t: Tick, rate: FrameRate, drop_frame: bool, display: TimeDisp
             let rem = Tick(abs.rem_euclid(TICKS_PER_SECOND)).to_units_floor(sample_rate);
             format!("{sign}{:02}:{:02}:{:02}:{rem:05}", secs / 3600, (secs / 60) % 60, secs % 60)
         }
-        TimeDisplay::Seconds => format!("{:.3}", t.seconds()),
+        TimeDisplay::Seconds => {
+            let s = t.seconds();
+            // A value that rounds to zero must not print a sign ("-0.000").
+            format!("{:.3}", if (s * 1000.0).round() == 0.0 { 0.0 } else { s })
+        }
     }
 }
 
@@ -532,6 +536,15 @@ pub const SAMPLE_RATES: [i64; 6] = [32_000, 44_100, 48_000, 88_200, 96_000, 192_
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn seconds_display_has_no_negative_zero() {
+        for t in [Tick(-1), Tick(0), Tick(-100)] {
+            assert_eq!(format_time(t, FrameRate::FPS_30, false, TimeDisplay::Seconds, 48000), "0.000");
+        }
+        let one = Tick(-TICKS_PER_SECOND);
+        assert_eq!(format_time(one, FrameRate::FPS_30, false, TimeDisplay::Seconds, 48000), "-1.000");
+    }
 
     #[test]
     fn frame_rate_constructors_accept_extreme_numbers() {
