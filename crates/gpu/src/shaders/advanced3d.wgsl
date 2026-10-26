@@ -320,14 +320,16 @@ fn light_shadow(li: u32, kind: u32, lpos: vec3<f32>, shadow: i32, darkness: f32,
     return 1.0 - darkness * (1.0 - f);
 }
 
-// The Environment light's shadow from its dominant direction (shade::env_shadow).
+// The Environment light's shadow from its dominant direction (shade::env_shadow). Only the
+// image's key fraction (g.env_sun.w) of the light is occluded — the fill keeps shining — so
+// the shadow stays partial the way After Effects renders an area-light shadow.
 fn env_shadow(p: vec3<f32>, ng: vec3<f32>, n: vec3<f32>) -> f32 {
     if (g.env2.z < 0.0) {
         return 1.0;
     }
     let n_l = clamp(dot(n, g.env_sun.xyz), 0.0, 1.0);
     let f = shadow_factor(u32(g.env2.z + 0.5) * SHADOW_STRIDE, p, ng, n_l);
-    return 1.0 - g.env2.w * (1.0 - f);
+    return 1.0 - g.env2.w * g.env_sun.w * (1.0 - f);
 }
 
 fn attenuation(kind: u32, falloff: u32, radius: f32, falloff_distance: f32, cos_inner: f32, cos_outer: f32, dir: vec3<f32>, to_l: vec3<f32>, dist: f32) -> f32 {

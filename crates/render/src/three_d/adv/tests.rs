@@ -69,13 +69,30 @@ fn constant_environment_has_constant_irradiance() {
 
 /// A NaN or infinite texel poisons the sums (every NaN comparison is false, so the thresholds
 /// alone would pass it through as a NaN direction); an infinite one even where sin θ = 0 turns
-/// into NaN. Either way the sum is garbage, not a direction: no sun, so no shadow (#2436).
+/// into NaN. Either way the sum is garbage, not a direction: no sun and no key, so no shadow
+/// (#2436).
 #[test]
 fn a_non_finite_environment_has_no_sun_direction() {
     let nan = vec![[f32::NAN; 4]; 8 * 4];
-    assert_eq!(dominant_direction(8, 4, &nan, 0.0), [0.0; 3]);
+    assert_eq!(dominant_direction(8, 4, &nan, 0.0), ([0.0; 3], 0.0));
     let inf = vec![[f32::INFINITY, 0.0, 0.0, 1.0]; 8 * 4];
-    assert_eq!(dominant_direction(8, 4, &inf, 0.0), [0.0; 3]);
+    assert_eq!(dominant_direction(8, 4, &inf, 0.0), ([0.0; 3], 0.0));
+}
+
+/// The key fraction: a uniform image is directionless (key 0), a lone bright spot on black is
+/// almost fully directional, and a broad gradient sits in between — the soft studio default
+/// shadows visibly but keeps most of its light as fill (#2436).
+#[test]
+fn environment_key_strength_tracks_directionality() {
+    let uniform = vec![[0.5f32, 0.5, 0.5, 1.0]; 8 * 4];
+    assert_eq!(dominant_direction(8, 4, &uniform, 0.0).1, 0.0);
+    let mut spot = vec![[0.0f32; 4]; 64 * 32];
+    spot[16 * 64 + 32] = [1.0, 1.0, 1.0, 1.0];
+    let (_, key) = dominant_direction(64, 32, &spot, 0.0);
+    assert!(key > 0.95, "a lone spot is almost fully directional: {key}");
+    let (w, h, d) = scene::default_environment();
+    let (_, key) = dominant_direction(w, h, &d, 0.0);
+    assert!((0.35..0.55).contains(&key), "the default studio is a broad key with fill: {key}");
 }
 
 #[test]
@@ -388,8 +405,9 @@ fn environment_light_without_a_source_lights_the_scene() {
 }
 
 /// #2436: an Environment light's Cast Shadows works like After Effects' — its image's dominant
-/// (brightest) region shadows the scene. A bright disc turned to shine from behind the camera
-/// (rotation 180°) shadows a sphere onto the plane behind it; Cast Shadows off lights it evenly.
+/// (brightest) region shadows the scene. A bright disc above the image's centre, turned to
+/// shine from up and behind the camera (rotation 180°), shadows a sphere onto the floor below
+/// it; Cast Shadows off lights it evenly.
 #[test]
 fn environment_lights_cast_shadows() {
     let (mut p, cid) = project(200, 150);
@@ -397,7 +415,7 @@ fn environment_lights_cast_shadows() {
     add(&mut p, cid, LayerSource::Primitive { kind: PrimitiveKind::Plane }, |l| {
         set(l, "geometryOptions/width", Value::Scalar(400.0));
         set(l, "geometryOptions/height", Value::Scalar(400.0));
-        set(l, "transform/position", Value::Vec3([100.0, 75.0, 200.0]));
+        set(l, "transform/position", Value::Vec3([100.0, 75.0, 110.0]));
         set(l, "materialOptions/baseColor", Value::Color([1.0, 1.0, 1.0, 1.0]));
     });
     add(&mut p, cid, LayerSource::Primitive { kind: PrimitiveKind::Sphere }, |l| {
@@ -405,38 +423,53 @@ fn environment_lights_cast_shadows() {
         set(l, "transform/position", Value::Vec3([100.0, 75.0, 50.0]));
         set(l, "materialOptions/castsShadows", Value::Enum(2));
     });
-    // The Environment Layer: a bright disc at the image's centre on black.
+    // The Environment Layer: a tight bright key above the image's centre, on black — a
+    // full-comp rect keeps the layer buffer full-size, the radial gradient is the key.
     add(&mut p, cid, LayerSource::Shape, |l| {
         l.switches.three_d = true;
         let mut next = 10_000u64;
         let ids = &mut build::Ids(&mut next);
         let rect = build::shape_rect(ids, [200.0, 150.0], [0.0, 0.0], 0.0);
-        let gfill = build::shape_gradient_fill(
+        let key = build::shape_gradient_fill(
             ids,
             true,
-            [0.0, 0.0],
-            [0.0, 75.0],
+            [0.0, -30.0],
+            [0.0, 5.0],
             effectcraft_keyframe::Gradient { colors: vec![(0.0, [1.0, 1.0, 1.0, 1.0]), (1.0, [0.0, 0.0, 0.0, 1.0])], opacities: vec![(0.0, 1.0), (1.0, 1.0)] },
         );
-        let g = build::shape_group(ids, "Sky", vec![rect, gfill]);
+        let g = build::shape_group(ids, "Key", vec![rect, key]);
         l.props.sub_mut("contents").unwrap().children.push(g.into());
         l.environment = true;
     });
-    // Turned 180°, the disc shines from behind the camera, straight at the floor.
+    // Turned 180°, the key shines from up and behind the camera onto the sphere and floor.
     add(&mut p, cid, LayerSource::Light { kind: LightKind::Environment }, |l| {
         set(l, "lightOptions/rotation", Value::Scalar(180.0));
         set(l, "lightOptions/castsShadows", Value::Bool(true));
     });
+    // The shadow lands below the sphere on the floor: its core is the darkest floor pixel
+    // below the sphere; the lit floor is the sample to the left. The frame is sRGB-encoded,
+    // so the ratios below are gamma-compressed (a linear halving reads as ~0.73).
+    let luma = |img: &crate::Image, x: usize, y: usize| (img.data[y * 200 + x][0] + img.data[y * 200 + x][1] + img.data[y * 200 + x][2]) / 3.0;
     let img = render(&p, cid);
-    let (mid, side) = (img.data[75 * 200 + 100], img.data[75 * 200 + 20]);
-    assert!(mid[3] > 0.99 && side[3] > 0.99);
-    assert!(mid[0] < side[0] * 0.5, "the disc shadows the sphere onto the floor: {mid:?} vs {side:?}");
-    // Cast Shadows off: the floor is lit everywhere.
+    let side = luma(&img, 25, 75);
+    let (mut core, mut cx, mut cy) = (f32::INFINITY, 0usize, 0usize);
+    for y in 100..150 {
+        for x in 60..140 {
+            if luma(&img, x, y) < core {
+                core = luma(&img, x, y);
+                cx = x;
+                cy = y;
+            }
+        }
+    }
+    assert!(side > 0.1, "the floor is lit: {side}");
+    assert!(core < side * 0.65, "the key shadows the sphere onto the floor: {core} vs {side} at ({cx}, {cy})");
+    // Cast Shadows off: the floor is lit everywhere, core included.
     let comp = p.comp_mut(cid).unwrap();
     set(&mut comp.layers[0], "lightOptions/castsShadows", Value::Bool(false));
     let img = render(&p, cid);
-    let mid = img.data[75 * 200 + 100];
-    assert!(mid[0] > side[0] * 0.8, "no shadow without Cast Shadows: {mid:?} vs {side:?}");
+    let mid = luma(&img, cx, cy);
+    assert!(mid > side * 0.9, "no shadow without Cast Shadows: {mid} vs {side}");
 }
 
 /// #2436: a uniform environment has no dominant region, so even with Cast Shadows on it casts
@@ -472,9 +505,11 @@ fn a_uniform_environment_casts_no_shadow() {
     assert_eq!(casting.data, off.data, "a directionless image casts no shadow");
 }
 
-/// #2436: the default environment (no Source, no Environment Layer) is level-preserving and
-/// directional — its dominant region points up and toward the initial camera, so a
-/// shadow-casting Environment light casts shadows out of the box, like After Effects' default.
+/// #2436: the default environment (no Source, no Environment Layer) is a dim studio — a mean
+/// of 0.3, not the 1.0 that would act like a 100 % white Ambient light and wash the scene out
+/// (After Effects' default does not) — and directional: its dominant region points up and
+/// toward the initial camera, so a shadow-casting Environment light casts soft, partial
+/// shadows out of the box, like After Effects' default.
 #[test]
 fn default_environment_keeps_the_level_and_points_up() {
     let (w, h, d) = scene::default_environment();
@@ -486,16 +521,21 @@ fn default_environment_keeps_the_level_and_points_up() {
         mean += (p[0] + p[1] + p[2]) / 3.0 * sa;
         weight += sa;
     }
-    assert!((mean / weight - 1.0).abs() < 0.01, "level-preserving mean: {}", mean / weight);
-    let sun = dominant_direction(w, h, &d, 0.0);
+    assert!((mean / weight - 0.3).abs() < 0.01, "dim studio mean: {}", mean / weight);
+    let (sun, key) = dominant_direction(w, h, &d, 0.0);
     assert!(sun[1] < -0.5, "the key is up: {sun:?}");
     assert!(sun[2] < -0.3, "the key is toward the camera: {sun:?}");
     assert!(sun[0].abs() < 0.1, "symmetric left-right: {sun:?}");
+    assert!((0.35..0.55).contains(&key), "a broad key with fill: {key}");
+    // No texel clips past white at the default intensity (the fog of a mean-1 environment).
+    assert!(d.iter().all(|p| p[0] <= 1.0 && p[0] > 0.0), "0 < radiance <= 1");
 }
 
 /// #2436: with no Source and no Environment Layer, the Environment light's default environment
-/// casts shadows like After Effects' default environment map — a sphere shadows the plane behind
-/// it; Cast Shadows off lights the floor evenly.
+/// casts soft, partial shadows like After Effects' default environment map — a sphere shadows
+/// the plane behind it, darkening part of the light while the fill keeps the floor visible
+/// (an area-light shadow, not the pitch black a point light casts); Cast Shadows off lights
+/// the floor evenly.
 #[test]
 fn the_default_environment_casts_shadows() {
     let (mut p, cid) = project(200, 150);
@@ -508,22 +548,39 @@ fn the_default_environment_casts_shadows() {
     });
     add(&mut p, cid, LayerSource::Primitive { kind: PrimitiveKind::Sphere }, |l| {
         set(l, "geometryOptions/radius", Value::Scalar(30.0));
-        set(l, "transform/position", Value::Vec3([100.0, 60.0, 50.0]));
+        set(l, "transform/position", Value::Vec3([100.0, 45.0, 50.0]));
         set(l, "materialOptions/castsShadows", Value::Enum(2));
     });
     add(&mut p, cid, LayerSource::Light { kind: LightKind::Environment }, |l| {
         set(l, "lightOptions/castsShadows", Value::Bool(true));
     });
+    // The default key (up and toward the camera) drops the shadow below the sphere: the core
+    // is the darkest floor pixel below it, the lit floor the sample to the left.
+    let luma = |img: &crate::Image, x: usize, y: usize| (img.data[y * 200 + x][0] + img.data[y * 200 + x][1] + img.data[y * 200 + x][2]) / 3.0;
     let img = render(&p, cid);
-    let (mid, side) = (img.data[120 * 200 + 100], img.data[120 * 200 + 30]);
-    assert!(mid[3] > 0.99 && side[3] > 0.99, "the floor covers both: {mid:?} {side:?}");
-    assert!(mid[0] < side[0] * 0.5, "the default environment shadows the sphere onto the floor: {mid:?} vs {side:?}");
-    // Cast Shadows off: the floor is lit everywhere.
+    let side = luma(&img, 30, 100);
+    let (mut core, mut cx, mut cy) = (f32::INFINITY, 0usize, 0usize);
+    for y in 110..150 {
+        for x in 80..120 {
+            if luma(&img, x, y) < core {
+                core = luma(&img, x, y);
+                cx = x;
+                cy = y;
+            }
+        }
+    }
+    assert!(side > 0.1, "the floor is lit: {side}");
+    // Partial: the key lobe is occluded (a clear darkening) but the fill keeps shining —
+    // not the pitch black a point light's shadow would cast at the same darkness. The frame
+    // is sRGB-encoded, so the ratios are gamma-compressed (a linear halving reads as ~0.73).
+    assert!(core < side * 0.8, "the default environment shadows the sphere onto the floor: {core} vs {side} at ({cx}, {cy})");
+    assert!(core > side * 0.45, "an area-light shadow, partial like After Effects': {core} vs {side}");
+    // Cast Shadows off: the floor is lit everywhere, core included.
     let comp = p.comp_mut(cid).unwrap();
     set(&mut comp.layers[0], "lightOptions/castsShadows", Value::Bool(false));
     let img = render(&p, cid);
-    let mid = img.data[120 * 200 + 100];
-    assert!(mid[0] > side[0] * 0.8, "no shadow without Cast Shadows: {mid:?} vs {side:?}");
+    let mid = luma(&img, cx, cy);
+    assert!(mid > side * 0.9, "no shadow without Cast Shadows: {mid} vs {side}");
 }
 
 #[test]
@@ -1234,5 +1291,56 @@ fn hard_edges_ramp_over_two_texels() {
         let first_below = |t: f32| f.iter().position(|&v| v < t).map_or(f32::NAN, |i| xs[i]);
         let w = first_below(0.1) - first_below(0.9);
         assert!((1.7..3.0).contains(&w), "v {v0}: hard edge ramps over {w} texels");
+    }
+}
+
+// ---------------------------------------------------------------- the After Effects look (#2436)
+
+/// #2436: an Environment light with every option at its default renders like After Effects':
+/// a dim studio that leaves the lit floor a mid gray instead of washing it out to white (the
+/// fog of a mean-1 default), a partial shadow (the key lobe occluded, the fill still shining —
+/// not the pitch black a point light casts), and a soft edge in both quality and draft renders
+/// (the map's texel grid never shows through as stair-steps).
+#[test]
+fn environment_shadows_match_the_after_effects_look() {
+    let (mut p, cid) = project(800, 600);
+    add(&mut p, cid, LayerSource::Primitive { kind: PrimitiveKind::Plane }, |l| {
+        set(l, "geometryOptions/width", Value::Scalar(1200.0));
+        set(l, "geometryOptions/height", Value::Scalar(900.0));
+        set(l, "transform/position", Value::Vec3([400.0, 300.0, 300.0]));
+        set(l, "materialOptions/baseColor", Value::Color([1.0, 1.0, 1.0, 1.0]));
+    });
+    add(&mut p, cid, LayerSource::Primitive { kind: PrimitiveKind::Sphere }, |l| {
+        set(l, "geometryOptions/radius", Value::Scalar(80.0));
+        set(l, "transform/position", Value::Vec3([400.0, 300.0, 120.0]));
+        set(l, "materialOptions/castsShadows", Value::Enum(2));
+    });
+    add(&mut p, cid, LayerSource::Light { kind: LightKind::Environment }, |l| {
+        set(l, "lightOptions/castsShadows", Value::Bool(true));
+    });
+    let luma = |img: &crate::Image, x: usize, y: usize| (img.data[y * 800 + x][0] + img.data[y * 800 + x][1] + img.data[y * 800 + x][2]) / 3.0;
+    for (name, opts) in [("quality", RenderOpts::default()), ("draft", RenderOpts { draft: true, ..Default::default() })] {
+        let img = Renderer::new(&p, &NoFootage, opts).comp_frame(cid, Tick::ZERO);
+        // The shadow core: the darkest pixel of the lower half (the key drops the shadow
+        // below the sphere); the lit floor is the mean of the band to its left.
+        let (mut core, mut cx, mut cy) = (f32::INFINITY, 0usize, 0usize);
+        for y in 420..580 {
+            for x in 300..500 {
+                if luma(&img, x, y) < core {
+                    core = luma(&img, x, y);
+                    cx = x;
+                    cy = y;
+                }
+            }
+        }
+        let lit: f32 = (60..260).map(|x| luma(&img, x, cy)).sum::<f32>() / 200.0;
+        assert!(lit > 0.15 && lit < 0.85, "{name}: the lit floor is a mid gray, no white fog: {lit}");
+        // The frame is sRGB-encoded, so the ratio is gamma-compressed (a linear halving
+        // reads as ~0.73): partial means clearly darker than lit, far from black.
+        assert!(core > lit * 0.45 && core < lit * 0.85, "{name}: a partial area-light shadow: core {core} vs lit {lit}");
+        // The edge's 10-90 % ramp from the lit plateau (left) down into the shadow.
+        let first_below = |t: f32| (260..cx).position(|x| luma(&img, x, cy) < core + (lit - core) * t).map(|i| 260 + i);
+        let w = (first_below(0.1).unwrap() as f32) - (first_below(0.9).unwrap() as f32);
+        assert!(w >= 3.5, "{name}: the edge ramps over {w} px (After Effects' env shadows are soft)");
     }
 }

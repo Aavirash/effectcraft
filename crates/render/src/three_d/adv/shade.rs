@@ -351,8 +351,12 @@ pub fn light_shadow(s: &Scene, l: &Light, p: [f32; 3], ng: [f32; 3], n_l: f32) -
     1.0 - l.shadow_darkness * (1.0 - f)
 }
 
-/// The visibility of the Environment light's dominant direction at `p` (1 = unshadowed),
-/// darkened by its Shadow Darkness. A directionless image (or a non-casting light) has no map
+/// The visibility of the Environment light at `p` (1 = unshadowed), darkened by its Shadow
+/// Darkness — but only by the image's key fraction: the shadow map occludes the dominant
+/// (key) lobe, while the environment's fill keeps shining on the shadowed surface, so an
+/// Environment light's shadow stays partial the way After Effects renders an area-light
+/// shadow (a broad environment like the default studio shadows softly, a lone bright spot
+/// on black almost fully). A directionless image (or a non-casting light) has no map
 /// and shades unshadowed.
 pub fn env_shadow(s: &Scene, e: &EnvInfo, p: [f32; 3], ng: [f32; 3], n: [f32; 3]) -> f32 {
     if e.shadow < 0 || e.sun == [0.0; 3] {
@@ -361,7 +365,7 @@ pub fn env_shadow(s: &Scene, e: &EnvInfo, p: [f32; 3], ng: [f32; 3], n: [f32; 3]
     let Some(m) = s.shadows.get(e.shadow as usize) else { return 1.0 };
     let n_l = dot(n, e.sun).clamp(0.0, 1.0);
     let f = shadow_factor(m, &s.shadow_texels, p, ng, n_l);
-    1.0 - e.shadow_darkness * (1.0 - f)
+    1.0 - e.shadow_darkness * e.key * (1.0 - f)
 }
 
 /// Unit direction from `p` to light `l`, and the distance (infinite for a parallel light).

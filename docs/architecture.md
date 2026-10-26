@@ -159,12 +159,14 @@ GGX specular, Smith–Schlick geometry, Schlick Fresnel, Lambert diffuse, after 
 parallel, spot and point lights with After Effects' falloffs, ambient lights, image-based
 light from an Environment light whose Source (or the comp's Environment Layer, Layer ▸
 Environment Layer, or a default studio environment — bright above and toward the initial
-camera, dark below and behind — of the light's colour × intensity when
-there is neither) is an equirectangular image (cosine irradiance map; roughness-indexed mip
-chain with the split-sum environment BRDF fit), and percentage-closer-filtered shadow maps
+camera, dark below and behind, at a dim 0.3 mean level — of the light's colour × intensity
+when there is neither) is an equirectangular image (cosine irradiance map; roughness-indexed
+mip chain with the split-sum environment BRDF fit), and percentage-closer-filtered shadow maps
 (spot: perspective, parallel: orthographic over the scene, point: six cube faces, environment:
 one orthographic from the image's dominant bright region — none only when the image is
-directionless, as a uniform one is). An Environment light only lights Advanced 3D comps,
+directionless, as a uniform one is — occluding only the image's directional key fraction of
+the light, so the shadow stays partial like After Effects' area-light shadows, with a soft
+default penumbra of at least eight pixels or four map texels). An Environment light only lights Advanced 3D comps,
 so adding one (or changing a light's type to it) switches a Classic 3D comp to Advanced 3D,
 as model layers do. Cards keep
 Material Options (Accepts Lights/Shadows, Casts Shadows On/Only, Ambient, Diffuse, Specular);

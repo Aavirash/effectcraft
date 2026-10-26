@@ -322,6 +322,7 @@ fn pack(s: &Scene) -> [Vec<u8>; 7] {
         intensity: 0.0,
         rotation: 0.0,
         sun: [0.0; 3],
+        key: 0.0,
         shadow: -1,
         shadow_darkness: 0.0,
         shadow_diffusion: 0.0,
@@ -330,8 +331,9 @@ fn pack(s: &Scene) -> [Vec<u8>; 7] {
     let lit = !(s.lights.is_empty() && s.env.is_none() && s.ambient == [0.0; 3]);
     // env2: rotation, any lighting (0/1), shadow map index (-1 none), shadow darkness.
     globals.extend([e.rotation, lit as u32 as f32, e.shadow as f32, e.shadow_darkness]);
-    // The environment's dominant direction (its shadow's source), for the shadow bias slope.
-    globals.extend([e.sun[0], e.sun[1], e.sun[2], 0.0]);
+    // The environment's dominant direction (its shadow's source), for the shadow bias slope,
+    // and its key fraction — how much of its light the shadow can remove (shade::env_shadow).
+    globals.extend([e.sun[0], e.sun[1], e.sun[2], e.key]);
     let mats = s.materials.iter().flat_map(|m| {
         let flags = (m.double_sided as u32)
             | (m.unlit as u32) << 1

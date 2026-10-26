@@ -177,6 +177,13 @@ pub struct EnvInfo {
     /// `to_light`. `[0; 3]` when the image is directionless (uniform) or the light casts no
     /// shadow (nothing reads it then): no shadow.
     pub sun: [f32; 3],
+    /// The image's directional (key) fraction — `|Σ dir·radiance| / Σ radiance` over the
+    /// sphere, 0 for a uniform image and near 1 for a single bright spot. An Environment
+    /// light's shadow occludes only this much of its light: the key lobe is blocked where
+    /// the map says so, the remaining fill keeps shining, so the shadow stays partial the
+    /// way After Effects renders an area-light shadow (a broad environment like the default
+    /// studio shadows softly, a lone bright spot on black almost fully).
+    pub key: f32,
     /// Shadow map index into [`Scene::shadows`]: 0 marked (assigned by `raster::shadow_maps`),
     /// -1 casts no shadow. Gated by the light's Cast Shadows.
     pub shadow: i32,
@@ -812,11 +819,14 @@ pub fn irradiance_map(sw: u32, sh: u32, src: &[[f32; 4]], w: u32, h: u32) -> Vec
     out
 }
 
-/// The environment image's dominant direction: the radiance-weighted mean texel direction
-/// (solid-angle weighted, rotation applied), or `[0; 3]` when the image is directionless
-/// (a uniform environment cancels to zero). The mean of a single bright spot on black points
-/// straight at it; a gradient points somewhere between its ends.
-pub(crate) fn dominant_direction(w: u32, h: u32, d: &[[f32; 4]], rot: f32) -> [f32; 3] {
+/// The environment image's dominant direction and key strength: the radiance-weighted mean
+/// texel direction (solid-angle weighted, rotation applied), or `([0; 3], 0.0)` when the image
+/// is directionless (a uniform environment cancels to zero). The mean of a single bright spot
+/// on black points straight at it; a gradient points somewhere between its ends. The returned
+/// key fraction is the mean vector's length over the radiance weight — how directional the
+/// image is, 0 (uniform) to ~1 (a lone spot) — and is the most of its light an Environment
+/// light's shadow can remove.
+pub(crate) fn dominant_direction(w: u32, h: u32, d: &[[f32; 4]], rot: f32) -> ([f32; 3], f32) {
     use super::shade::equirect_dir;
     let (mut x, mut y, mut z) = (0.0f32, 0.0f32, 0.0f32);
     let mut weight = 0.0f32;
@@ -835,9 +845,9 @@ pub(crate) fn dominant_direction(w: u32, h: u32, d: &[[f32; 4]], rot: f32) -> [f
     // from. A non-finite sum (a NaN or infinite texel) is garbage, not a direction: none then.
     let len = (x * x + y * y + z * z).sqrt();
     if !weight.is_finite() || !len.is_finite() || weight <= 1e-9 || len < weight * 0.01 {
-        return [0.0; 3];
+        return ([0.0; 3], 0.0);
     }
-    [x / len, y / len, z / len]
+    ([x / len, y / len, z / len], (len / weight).clamp(0.0, 1.0))
 }
 
 /// Prefilter an environment image into the scene's textures.
@@ -852,9 +862,9 @@ pub(crate) fn add_environment(
     shadow_darkness: f64,
     shadow_diffusion: f64,
 ) {
-    // The shadow direction from the full-resolution image, before the mip chain averages it —
-    // only a shadow-casting light reads it, so only one pays for the pass.
-    let sun = if casts_shadows { dominant_direction(w, h, &data, rotation) } else { [0.0; 3] };
+    // The shadow direction and key strength from the full-resolution image, before the mip
+    // chain averages it — only a shadow-casting light reads them, so only one pays for the pass.
+    let (sun, key) = if casts_shadows { dominant_direction(w, h, &data, rotation) } else { ([0.0; 3], 0.0) };
     // Radiance level 0 at most 1024 wide.
     let (mut w, mut h, mut d) = (w, h, data);
     while w > 1024 {
@@ -897,6 +907,7 @@ pub(crate) fn add_environment(
         intensity: k,
         rotation,
         sun,
+        key,
         // Marked; `raster::shadow_maps` assigns the map (a directionless image casts none).
         shadow: if casts_shadows { 0 } else { -1 },
         shadow_darkness: shadow_darkness as f32,
@@ -927,12 +938,13 @@ fn env_pixels(r: &Renderer, ctx: &EvalCtx, src: Option<u64>, lin: bool) -> Optio
     Some((img.width, img.height, data))
 }
 
-/// The default environment when the light has no Source and no Environment Layer: a soft studio
-/// gradient, bright above and toward the initial camera, dark below and behind it — After
+/// The default environment when the light has no Source and no Environment Layer: a dim studio
+/// gradient, bright above and toward the initial camera, dark below and behind — After
 /// Effects "uses a default environment map" for an Environment light too, and its default
-/// casts shadows out of the box. The solid-angle-weighted mean is 1, so the light's colour ×
-/// intensity still sets the overall level, like the flat default it replaces; the light's
-/// Rotation turns the key around the scene (#2436).
+/// casts shadows out of the box. The solid-angle-weighted mean is 0.3, a soft studio ambience
+/// (a mean of 1 would act like a 100 % white Ambient light and wash the whole scene out, which
+/// is not what After Effects' default looks like); the light's colour × intensity still scales
+/// the overall level, and its Rotation turns the key around the scene (#2436).
 pub(crate) fn default_environment() -> (u32, u32, Vec<[f32; 4]>) {
     use super::shade::{dot, equirect_dir};
     // The key region's centre: three quarters up, two thirds toward the viewer (the default
@@ -946,14 +958,14 @@ pub(crate) fn default_environment() -> (u32, u32, Vec<[f32; 4]>) {
         let sa = (v * std::f32::consts::PI).sin();
         for x in 0..w {
             let u = (x as f32 + 0.5) / w as f32;
-            let l = 0.5 + 0.9 * dot(equirect_dir(u, v, 0.0), key).max(0.0);
+            let l = 0.15 + 1.2 * dot(equirect_dir(u, v, 0.0), key).max(0.0);
             data.push([l, l, l, 1.0]);
             mean += l * sa;
             weight += sa;
         }
     }
-    // Keep the flat default's level: scale the gradient to a weighted mean of exactly 1.
-    let k = if mean.is_finite() && mean > 1e-6 { weight / mean } else { 1.0 };
+    // A dim studio: scale the gradient to a weighted mean of exactly 0.3.
+    let k = if mean.is_finite() && mean > 1e-6 { 0.3 * weight / mean } else { 1.0 };
     for p in &mut data {
         for c in 0..3 {
             p[c] *= k;
