@@ -415,7 +415,7 @@ fn effects_p(s: &Session, p: &Value, cmd: &str) -> Result<Vec<(LayerId, Uid)>> {
     Ok(sel)
 }
 
-fn effect_time_error(cmd: &str) -> EngineError {
+pub(crate) fn effect_time_error(cmd: &str) -> EngineError {
     bad(cmd, "an effect keyframe converts outside the supported time range")
 }
 
@@ -451,7 +451,7 @@ fn effect_time(layer: &Layer, time: Tick, to_comp: bool, cmd: &str) -> Result<Ti
 
 /// Change the key time coordinate system throughout an effect, including nested controls.
 /// Ease speeds are per second in that coordinate system; reversed time swaps the key sides.
-fn retime_effect(group: &mut PropGroup, scale: f64, cmd: &str, mut time: impl FnMut(Tick) -> Result<Tick>) -> Result<()> {
+pub(crate) fn retime_effect(group: &mut PropGroup, scale: f64, cmd: &str, mut time: impl FnMut(Tick) -> Result<Tick>) -> Result<()> {
     let mut result = Ok(());
     group.walk_mut(&mut |pr| {
         if result.is_err() {
