@@ -115,6 +115,11 @@ struct Doc<'a> {
     /// Zero components that buffer-less accessors may still allocate, across the whole file:
     /// nothing backs them, so many references to one capped accessor must not multiply (#2139).
     zero_left: Cell<usize>,
+    /// Components every accessor read may still allocate, across the whole file: each primitive
+    /// that references an accessor keeps its own copy, so references must not multiply memory.
+    read_left: Cell<usize>,
+    /// The budget `read_left` started from, for the error message.
+    read_cap: usize,
 }
 
 fn arr<'v>(v: &'v Value, k: &str) -> &'v [Value] {
@@ -133,6 +138,13 @@ fn indices(v: &Value, k: &str) -> Vec<usize> {
 /// in the file backs their counts, so they are capped instead of checked against a buffer
 /// (#1235, #2139).
 const MAX_ZERO_COMPONENTS: usize = 1 << 24;
+
+/// The most components all accessor reads in one file may allocate together (about 1 GiB as
+/// `f32`/`u32`). Each primitive keeps its own copy of what it reads, so an accessor referenced
+/// N times costs N times; this bounds that by a fixed amount rather than by buffer size, because
+/// real assets legitimately share one vertex buffer across many primitives. A 10M-triangle scan
+/// (5M vertices with position, normal, UV and tangent, 30M indices) reads about 90M.
+const MAX_READ_COMPONENTS: usize = 1 << 28;
 
 /// Where an accessor's elements lie in its buffer: `count` elements of `elem` bytes, `stride`
 /// apart from `base`, all checked to be inside `buf`.
@@ -162,6 +174,22 @@ fn component(buf: &[u8], base: usize, stride: usize, i: usize, c: usize, csize: 
 }
 
 impl Doc<'_> {
+    /// Charge `total` components to the file's read budget before allocating them.
+    fn charge(&self, total: usize) -> Result<()> {
+        let left = self.read_left.get();
+        let Some(rest) = left.checked_sub(total) else {
+            let cap = self.read_cap;
+            return Err(perr(format!("accessor reads need more than {cap} components in total ({total} requested, {left} left)")));
+        };
+        self.read_left.set(rest);
+        Ok(())
+    }
+
+    /// Charge `count` items of `per` components each.
+    fn charge_each(&self, count: usize, per: usize) -> Result<()> {
+        self.charge(count.checked_mul(per).ok_or_else(|| perr("primitive is too large"))?)
+    }
+
     /// The accessor's element count and total components (`count * n`), checked; and its span in
     /// the buffer, validated before anything is allocated from the count. `None` for an
     /// accessor without a buffer view, whose components are all zero.
@@ -177,6 +205,7 @@ impl Doc<'_> {
                 return Err(perr(format!("accessors without a bufferView have more than {MAX_ZERO_COMPONENTS} components ({total} requested, {left} left)")));
             };
             self.zero_left.set(rest);
+            self.charge(total)?;
             return Ok((count, total, None));
         };
         let view = arr(self.j, "bufferViews").get(bv).ok_or_else(|| perr(format!("no bufferView {bv}")))?;
@@ -194,6 +223,7 @@ impl Doc<'_> {
                 return Err(past());
             }
         }
+        self.charge(total)?;
         Ok((count, total, Some(Span { buf, base, stride })))
     }
 
@@ -290,6 +320,11 @@ impl Doc<'_> {
 
 /// Parse a `.gltf` (JSON) or `.glb` file.
 pub fn parse(bytes: &[u8], resolve: &dyn Fn(&str) -> Option<Vec<u8>>) -> Result<Model> {
+    parse_with_budget(bytes, resolve, MAX_READ_COMPONENTS)
+}
+
+/// [`parse`] with a read budget of `read_budget` accessor components for the whole file.
+pub(crate) fn parse_with_budget(bytes: &[u8], resolve: &dyn Fn(&str) -> Option<Vec<u8>>, read_budget: usize) -> Result<Model> {
     let (json, bin) = if bytes.starts_with(b"glTF") { split_glb(bytes)? } else { (bytes, None) };
     let j: Value = serde_json::from_slice(json).map_err(|e| perr(format!("glTF JSON: {e}")))?;
     let ver = j.get("asset").and_then(|a| a.get("version")).and_then(Value::as_str).unwrap_or("");
@@ -311,7 +346,7 @@ pub fn parse(bytes: &[u8], resolve: &dyn Fn(&str) -> Option<Vec<u8>>) -> Result<
         };
         buffers.push(data);
     }
-    let d = Doc { j: &j, buffers, zero_left: Cell::new(MAX_ZERO_COMPONENTS) };
+    let d = Doc { j: &j, buffers, zero_left: Cell::new(MAX_ZERO_COMPONENTS), read_left: Cell::new(read_budget), read_cap: read_budget };
 
     // Images → textures (decoded once per image; samplers set the wrap modes).
     let mut images: Vec<Option<Arc<Texture>>> = vec![];
@@ -578,7 +613,11 @@ fn primitive(d: &Doc, p: &Value, materials: &[Material]) -> Result<Option<Primit
     };
     let raw: Vec<u32> = match idx(p, "indices") {
         Some(a) => d.ints(a)?,
-        None => (0..n as u32).collect(),
+        None => {
+            // Generated indices are allocated like a read, once per referencing primitive.
+            d.charge(n)?;
+            (0..n as u32).collect()
+        }
     };
     if raw.iter().any(|&i| i as usize >= n) {
         return Err(perr("index out of range"));
@@ -598,11 +637,19 @@ fn primitive(d: &Doc, p: &Value, materials: &[Material]) -> Result<Option<Primit
         }
         _ => indices.extend(raw.as_chunks::<3>().0.iter().flatten()),
     }
+    // The triangle list is kept besides the raw indices (a strip or fan of k indices becomes
+    // 3(k-2)), so it is charged like a read.
+    d.charge(indices.len())?;
     if normals.len() != n {
         normals.clear();
     }
     let material = idx(p, "material").filter(|&m| m < materials.len());
     let skinned = joints.len() == n && weights.len() == n;
+    if normals.is_empty() {
+        // Flat normals unshare every vertex: position and normal, plus UVs and joints/weights.
+        let per = 6 + if uvs.len() == n { 2 } else { 0 } + if skinned { 8 } else { 0 };
+        d.charge_each(indices.len(), per)?;
+    }
     let mut prim = Primitive {
         positions,
         normals,
@@ -619,6 +666,7 @@ fn primitive(d: &Doc, p: &Value, materials: &[Material]) -> Result<Option<Primit
     }
     let needs_tangents = material.is_some_and(|m| materials[m].normal_tex.is_some());
     if needs_tangents && prim.tangents.is_empty() {
+        d.charge_each(prim.positions.len(), 4)?;
         prim.compute_tangents();
     }
     Ok(Some(prim))
