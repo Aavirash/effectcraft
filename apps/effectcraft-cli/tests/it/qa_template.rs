@@ -767,3 +767,45 @@ fn template_media_control_reports_a_path_that_cannot_be_imported() {
     assert!(!dir.join("missing-out.png").exists(), "{reply}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Renders with `--template` name their outputs after the template's composition (#1937), not
+/// the numbered name a duplicate would get. The name ends in a number and differs from the
+/// archive's file name; an expression that looks the composition up by that name still finds it.
+#[test]
+fn template_render_outputs_keep_the_template_composition_name() {
+    let dir = std::env::temp_dir().join(format!("ec-qa-template-comp-name-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let build = BUILD.replace(r#"addComp("Lower Third""#, r#"addComp("Title Card 2""#).replace(
+        "var fill =",
+        "bar.property(\"ADBE Transform Group\").property(\"ADBE Position\").expression = '[comp(\"Title Card 2\").numLayers * 80, 65]';\nvar fill =",
+    );
+    std::fs::write(dir.join("build.jsx"), build).unwrap();
+    let built = ok(&dir, &["script", "build.jsx", "--save-as", "t.ecproj"]);
+    assert_eq!(built["output"], "controls: 3", "{built}");
+    ok(&dir, &["exec", "essential.exportTemplate", r#"{"comp":"Title Card 2","path":"card.ectemplate"}"#, "t.ecproj"]);
+    let template_before = std::fs::read(dir.join("card.ectemplate")).unwrap();
+    std::fs::write(dir.join("values.json"), r#"{"Title":"John Smith"}"#).unwrap();
+
+    for (case, values) in [("defaults", None), ("values", Some("values.json"))] {
+        let out = dir.join(case).join("[compName]_[#####].png");
+        let mut args =
+            vec!["render", "--template", "card.ectemplate", "--out", out.to_str().unwrap(), "--format", "png", "--start", "1", "--end", "1.0833333333333333"];
+        if let Some(values) = values {
+            args.extend(["--values", values]);
+        }
+        let rendered = ok(&dir, &args);
+        let rendered = rendered["rendered"].as_array().unwrap();
+        assert_eq!(rendered.len(), 1, "{case}: {rendered:?}");
+        assert_eq!(rendered[0]["comp"], "Title Card 2", "{case}: {rendered:?}");
+        let frames: Vec<_> = std::fs::read_dir(dir.join(case)).unwrap().map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        assert_eq!(frames.len(), 1, "{case}: {frames:?}");
+        assert!(frames[0].starts_with("Title Card 2_") && frames[0].ends_with(".png"), "{case}: {frames:?}");
+        // The template's own two layers place the bar; the one-layer wrapper would move it left.
+        let frame = image::open(dir.join(case).join(&frames[0])).unwrap().to_rgba8();
+        let bar = frame.get_pixel(300, 75).0;
+        assert!(bar[0] > 240 && bar[1] < 15, "{case}: comp(\"Title Card 2\") is the template's composition: {bar:?}");
+    }
+    assert_eq!(std::fs::read(dir.join("card.ectemplate")).unwrap(), template_before);
+    let _ = std::fs::remove_dir_all(&dir);
+}

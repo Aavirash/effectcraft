@@ -15,7 +15,7 @@ pub(crate) use ui::catalog_characters;
 pub(crate) use ui::{set_current, tr, tr_args};
 
 /// Every language with a catalog, in the order Settings ▸ General ▸ Language lists them.
-const CATALOG_CODES: [&str; 11] = ["ja", "zh-hans", "zh-hant", "uk", "es", "pt-br", "ru", "fr", "de", "cs", "ka"];
+const CATALOG_CODES: [&str; 11] = ["cs", "de", "es", "fr", "pt-br", "ru", "uk", "ka", "ja", "zh-hans", "zh-hant"];
 
 /// The active interface language: the stored preference when it names a catalog, otherwise `en`
 /// (English is the source of every label and needs no lookup).

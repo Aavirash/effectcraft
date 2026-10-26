@@ -91,7 +91,7 @@ pub use sim::particle_state;
 pub use sim3::{PgBlit, PgPlan, playground_plan, playground_state};
 pub use stylize2::strobe_on;
 // CPU helpers the GPU kernels share (effectcraft-gpu).
-pub use blur2::{camera_lens_plain, camera_lens_spans};
+pub use blur2::{camera_lens_plain, camera_lens_spans, radial_fast_pad};
 pub use generate::{four_color_softening, gen_mode};
 pub use generate2::pattern_kind as cell_pattern_kind;
 pub use generate2::{BoltSeg, Contour, Ghost, RadioPlan, Wave, flare_ghosts, lightning_segments, radio_plan};
@@ -111,7 +111,7 @@ pub use time_fx::{PixelMotion, TimewarpPlan, TwStep, pmb_plan, posterized_time, 
 // effectcraft-gpu fx_tone.
 pub use ocio::color_stabilizer_maps;
 // GPU effects, part B (3D Channel, Immersive Video, colour management, simulation render passes).
-pub use channel3d::{CRYPTO_LAYERS, aux_point, crypto_aux_image, id_color, selection_hashes};
+pub use channel3d::{CRYPTO_LAYERS, CryptoAux, aux_point, crypto_aux_image, crypto_aux_image_with, id_color, selection_hashes};
 pub use ocio::{ColorOp, Straight, Tf, color_program};
 pub use sim::{Acc, Blob, Bubble, Post, Shape, Sprite, SpritePlan, Tint, bubble_list, drizzle_drops, mercury_blobs, sprite_plan};
 pub use sim2::{

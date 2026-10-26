@@ -1674,3 +1674,30 @@ fn set_value_rejects_an_array_of_the_wrong_dimension() {
     let (_, c) = comp_named(&s, "Dims");
     assert_eq!(layer(c, "s").props.prop("transform/position").unwrap().value, KV::Vec3([120.0, 34.0, 0.0]));
 }
+
+/// #1942: the scripting width and height setters resize the frame only. Re-anchoring the old frame
+/// in the new one, which moves every unparented layer, belongs to the Composition Settings dialog.
+#[test]
+fn setting_comp_width_and_height_leaves_the_layers_where_they_are() {
+    let mut s = session();
+    let o = ok(
+        &mut s,
+        r#"
+        var c = app.project.items.addComp("w", 400, 200, 1, 1, 25);
+        var l = c.layers.addSolid([1, 1, 1], "s", 50, 50, 1, 1);
+        var pos = l.property("ADBE Transform Group").property("ADBE Position");
+        pos.setValue([100, 100]);
+        var k = c.layers.addSolid([1, 1, 1], "k", 50, 50, 1, 1);
+        var kpos = k.property("ADBE Transform Group").property("ADBE Position");
+        kpos.setValueAtTime(0, [10, 20]);
+        kpos.setValueAtTime(1, [30, 40]);
+        var before = "" + pos.value;
+        c.width = 800;
+        c.height = 400;
+        [before, "" + pos.value, "" + kpos.keyValue(1), "" + kpos.keyValue(2), c.width, c.height]
+        "#,
+    );
+    assert_eq!(o.result, json!(["100,100,0", "100,100,0", "10,20,0", "30,40,0", 800, 400]));
+    let (_, c) = comp_named(&s, "w");
+    assert_eq!(layer(c, "s").props.prop("transform/position").unwrap().value, KV::Vec3([100.0, 100.0, 0.0]));
+}

@@ -475,12 +475,16 @@ pub(crate) fn effect_direct(id: &str, vals: &[(&str, Value)], adjustment: bool) 
     for (k, v) in vals {
         params.values.insert(k.to_string(), v.clone());
     }
+    let expect_empty = id == "ec.distort.ccblobbylize" && vals.iter().any(|(k, v)| *k == "cutAway" && matches!(v, Value::Scalar(x) if *x == 100.0));
     for scale in [1.0, 0.5] {
         let img = pattern(7, (size[0] * scale) as u32, (size[1] * scale) as u32);
         let buf = effectcraft_effects::Buf { img, offset: [0.0, 0.0], scale };
         let ctx = || effectcraft_effects::EffectCtx { params: &params, time: 0.25, layer_size: size, seed: 11, adjustment, env: Default::default() };
         let cpu = (spec.render)(&ctx(), buf.clone());
         let out = effectcraft_render::Accelerator::effects(g, &[effectcraft_render::FxStep { spec, ctx: ctx() }], &buf, None).expect("the GPU runs the effect");
+        if expect_empty {
+            assert!(out.img.data.iter().all(|p| p[3] == 0.0), "{id} {vals:?} adj {adjustment} scale {scale}: Cut Away 100 produced non-zero alpha");
+        }
         assert_eq!((out.offset, out.scale), (cpu.offset, cpu.scale), "{id}: geometry");
         let d = diff(&cpu.img, &out.img, 1e-3);
         let allow = if boundary_flips_allowed() { (d.total as f64 * GL_BOUNDARY_FLIPS) as usize } else { 0 };
@@ -521,11 +525,26 @@ pub(crate) fn c(r: f64, g: f64, b: f64) -> Value {
 }
 
 #[test]
+fn small_blurs_fall_back_to_the_cpu() {
+    // #1939: small Gaussian sigmas and fractional box radii render on the CPU kernel.
+    for (id, vals) in [("ec.blur.gaussian", [("blurriness", n(0.9))]), ("ec.blur.fastbox", [("radius", n(1.5))])] {
+        let mut s = Scene::new(BitDepth::Bpc32);
+        let bg = s.solid([0.15, 0.1, 0.2], 97, 61);
+        s.push(bg);
+        let mut l = s.footage(70, 44);
+        s.effect(&mut l, id, &vals);
+        s.push(l);
+        check(&format!("{id} {vals:?}"), compare_at(&s, opts(), Tick::ZERO), 0.0);
+    }
+}
+
+#[test]
 fn gpu_effects_match_cpu() {
-    effect_case("ec.blur.gaussian", &[("blurriness", n(9.0))]);
-    effect_case("ec.blur.gaussian", &[("blurriness", n(4.0)), ("dimensions", Value::Enum(1)), ("repeatEdge", Value::Bool(true))]);
-    effect_case("ec.blur.fastbox", &[("radius", n(5.0)), ("iterations", n(2.0))]);
-    effect_case("ec.blur.fastbox", &[("radius", n(3.0)), ("dimensions", Value::Enum(2)), ("repeatEdge", Value::Bool(true))]);
+    // Sigma 3 px and up and even radii, so the half-scale pass stays on the GPU too (#1939).
+    effect_case("ec.blur.gaussian", &[("blurriness", n(14.0))]);
+    effect_case("ec.blur.gaussian", &[("blurriness", n(12.0)), ("dimensions", Value::Enum(1)), ("repeatEdge", Value::Bool(true))]);
+    effect_case("ec.blur.fastbox", &[("radius", n(6.0)), ("iterations", n(2.0))]);
+    effect_case("ec.blur.fastbox", &[("radius", n(4.0)), ("dimensions", Value::Enum(2)), ("repeatEdge", Value::Bool(true))]);
     effect_case("ec.blur.directional", &[("direction", n(30.0)), ("length", n(12.0))]);
     effect_case("ec.stylize.glow", &[("threshold", n(40.0)), ("radius", n(14.0)), ("intensity", n(1.5))]);
     effect_case("ec.stylize.glow", &[("colors", Value::Enum(1)), ("operation", Value::Enum(1)), ("colorA", c(1.0, 0.8, 0.1))]);
@@ -1145,4 +1164,14 @@ fn upload_cache_drops_textures_of_freed_buffers() {
     }
     let kept = g.ctx.upload_entries();
     assert!(kept <= before + 1, "the upload cache kept {kept} textures of freed buffers (had {before})");
+}
+
+/// The device the compositor owns asks for `MemoryUsage` so freed textures give
+/// their allocator blocks back, while its label and limits stay as they were.
+#[test]
+fn owned_devices_favour_memory_usage() {
+    let d = crate::context::device_descriptor(wgpu::Limits::default());
+    assert!(matches!(d.memory_hints, wgpu::MemoryHints::MemoryUsage));
+    assert_eq!(d.label, Some("effectcraft gpu"));
+    assert_eq!(d.required_limits.max_texture_dimension_2d, wgpu::Limits::default().max_texture_dimension_2d);
 }

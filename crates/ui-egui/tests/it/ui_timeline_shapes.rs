@@ -75,6 +75,29 @@ fn shape_contents_add_menu_adds_path_operations() {
     assert_eq!(items, ["group", "trim"]);
 }
 
+/// A shape group's inner Contents is elided in After Effects: opening the group lists its items
+/// (here the path) directly, with no "Contents" row between them.
+#[test]
+fn shape_group_contents_has_no_inner_contents_row() {
+    let mut s = session();
+    let l = s.execute("layer.newShape", json!({"kind": "rect"})).unwrap()["layer"].as_u64().unwrap();
+    let layer = s.active_comp().unwrap().layer(LayerId(l)).unwrap().clone();
+    let contents = layer.props.sub("contents").unwrap().clone();
+    let group = contents.groups().next().unwrap().clone();
+    let inner = group.sub("contents").unwrap().clone();
+    let item = inner.groups().next().unwrap().clone();
+    let mut h = harness(s);
+    h.state_mut().ui.timeline.open_layers.insert(l);
+    h.state_mut().ui.timeline.open_groups.insert(contents.uid);
+    h.state_mut().ui.timeline.open_groups.insert(group.uid);
+    h.run_steps(2);
+    let name = |uid: u64| format!("timeline.group.{uid}.name");
+    assert!(h.state().auto.find(&name(contents.uid)).is_some(), "the layer's Contents row");
+    assert!(h.state().auto.find(&name(group.uid)).is_some(), "the shape group row");
+    assert!(h.state().auto.find(&name(inner.uid)).is_none(), "no inner Contents row");
+    assert!(h.state().auto.find(&name(item.uid)).is_some(), "the path lists directly under the group");
+}
+
 #[test]
 fn classic_3d_shape_layers_offer_change_renderer() {
     let mut s = session();

@@ -193,7 +193,8 @@ fn each_comp_keeps_its_viewer_resolution() {
     assert_eq!(h.state().viewer_res(), Resolution::Auto);
     let (req, _reply) = effectcraft_ui_egui::control::ControlRequest::new("ui.set", json!({"viewer": {"res": "quarter"}}));
     let ctx = h.ctx.clone();
-    let _ = effectcraft_ui_egui::control::handle(h.state_mut(), &ctx, &req);
+    let now = h.state().now();
+    let _ = effectcraft_ui_egui::control::handle(h.state_mut(), &ctx, &req, now);
     assert_eq!(h.state().viewer_res(), Resolution::Quarter);
     let ctx = h.ctx.clone();
     assert_eq!(effectcraft_ui_egui::control::inspect(h.state(), &ctx)["ui"]["viewer"]["res"], json!("Quarter"));
@@ -757,6 +758,74 @@ fn path_editing_hides_layer_bounds_and_keeps_corner_vertices_editable() {
         h.run_steps(2);
         assert!(h.state().auto.find(&handle).is_some(), "ending vertex selection restores the box");
     }
+}
+
+/// #1769: the eye hides a layer's pixels, not the controls of a selected AV layer: a hidden shape
+/// layer keeps its transform box, anchor and shape path, and its handles still scale it.
+#[test]
+fn hidden_shape_layer_keeps_its_controls_and_can_still_scale() {
+    let mut h = harness();
+    let (layer, path) = {
+        let r = h
+            .state_mut()
+            .session
+            .execute(
+                "shape.newPath",
+                json!({
+                    "vertices": [[200.0, 100.0], [400.0, 100.0], [400.0, 260.0], [200.0, 260.0]],
+                    "closed": true,
+                    "fill": false,
+                    "stroke": "#ffffff",
+                    "strokeWidth": 4
+                }),
+            )
+            .unwrap();
+        (r["layer"].as_u64().unwrap(), r["path"].as_u64().unwrap())
+    };
+    h.state_mut().session.execute("layer.select", json!({"layers": [layer]})).unwrap();
+    h.state_mut().session.state.selected_vertices.clear();
+    h.state_mut().session.execute("layer.setSwitch", json!({"layers": [layer], "switch": "video", "value": false})).unwrap();
+    h.run_steps(2);
+    let shown = h.state().session.active_comp().unwrap().layer(LayerId(layer)).unwrap().clone();
+    assert!(!shown.switches.video);
+    assert!(shown.source.is_av());
+    assert_eq!(h.state().session.state.selected_layers, vec![LayerId(layer)]);
+    assert!(h.state().auto.find(&format!("viewer.handle.{layer}.0")).is_some(), "a hidden shape keeps its transform box");
+    assert!(h.state().auto.find(&format!("viewer.anchor.{layer}")).is_some(), "and its anchor");
+    assert!(h.state().auto.find(&format!("viewer.shapePath.{path}.vertex.0")).is_some(), "and its shape path");
+    let scale = |h: &Harness<'_, EffectcraftApp>| {
+        h.state().session.active_comp().unwrap().layer(LayerId(layer)).unwrap().props.prop("transform/scale").unwrap().value.as_vec3()
+    };
+    let before = scale(&h);
+    let from = rect(&h, &format!("viewer.handle.{layer}.5")).center();
+    drag(&mut h, from, from + vec2(24.0, 0.0));
+    assert_ne!(scale(&h), before, "a hidden layer's handle still scales it");
+}
+
+/// #1769: a hidden masked layer keeps its mask path and vertices, and they remain editable.
+#[test]
+fn hidden_masked_layer_keeps_its_mask_path_editable() {
+    let mut h = harness();
+    let plate = layer_id(&h, "Plate");
+    let corners = [[100.0, 60.0], [500.0, 60.0], [500.0, 300.0], [100.0, 300.0]];
+    let mask = {
+        let s = &mut h.state_mut().session;
+        s.execute("layer.select", json!({"layers": [plate]})).unwrap();
+        let m = s.execute("mask.new", json!({"layer": plate, "vertices": corners, "closed": true})).unwrap()["mask"].as_u64().unwrap();
+        s.state.selected_vertices.clear();
+        s.execute("layer.setSwitch", json!({"layers": [plate], "switch": "video", "value": false})).unwrap();
+        m
+    };
+    h.run_steps(2);
+    assert!(h.state().auto.find(&format!("viewer.handle.{plate}.0")).is_some(), "a hidden masked layer keeps its transform box");
+    let vertex = format!("viewer.mask.{mask}.vertex.0");
+    assert!(h.state().auto.find(&vertex).is_some(), "and its mask path");
+    let before = mask_path(&h, "Plate");
+    let from = rect(&h, &vertex).center();
+    drag(&mut h, from, from + vec2(15.0, 12.0));
+    let after = mask_path(&h, "Plate");
+    assert_ne!(after.vertices[0], before.vertices[0], "the hidden layer's mask vertex can still be moved");
+    assert_eq!(after.vertices[1..], before.vertices[1..]);
 }
 
 #[test]
@@ -1802,6 +1871,14 @@ fn key_twice(h: &mut Harness<'_, EffectcraftApp>, k: egui::Key) {
 #[test]
 fn property_shortcuts_reveal_and_key_transform_properties() {
     let mut h = harness();
+    // Reveal shortcuts compare wall-clock instants; drive the app clock so a step count
+    // cannot decide whether a second press is "quick" or a later one.
+    h.state_mut().use_manual_clock();
+    h.run_steps(1);
+    let wait = |h: &mut Harness<'_, EffectcraftApp>| {
+        h.state_mut().clock_mut().advance(1.0);
+        h.run_steps(2);
+    };
     h.state_mut().session.execute("layer.select", json!({"layers": ["Box"]})).unwrap();
     h.run_steps(2);
     let t = |h: &Harness<'_, EffectcraftApp>, p: &str| shown(h, prop_uid(h, "Box", &format!("transform/{p}")));
@@ -1838,16 +1915,16 @@ fn property_shortcuts_reveal_and_key_transform_properties() {
     h.run_steps(2);
     key(&mut h, egui::Key::U, none);
     only(&h, &["opacity"]);
-    h.run_steps(40);
+    wait(&mut h);
     key(&mut h, egui::Key::U, none);
     only(&h, &[]);
     h.state_mut().session.execute("prop.set", json!({"layer": "Box", "path": "transform/rotation", "value": 30})).unwrap();
-    h.run_steps(40);
+    wait(&mut h);
     key_twice(&mut h, egui::Key::U);
     assert!(t(&h, "opacity") && t(&h, "rotation"), "UU: animated and changed properties");
     assert!(!t(&h, "scale"), "an untouched property stays hidden");
     // Ctrl+`: twirl the selected layer open, then closed.
-    h.run_steps(40);
+    wait(&mut h);
     key(&mut h, egui::Key::Backtick, egui::Modifiers::COMMAND);
     let id = layer_id(&h, "Box");
     assert!(h.state().ui.timeline.open_layers.contains(&id) && h.state().ui.timeline.reveal.is_empty());
@@ -1858,6 +1935,14 @@ fn property_shortcuts_reveal_and_key_transform_properties() {
 #[test]
 fn double_press_shortcuts_reveal_their_second_set() {
     let mut h = harness();
+    // Reveal shortcuts compare wall-clock instants; drive the app clock so a step count
+    // cannot decide whether a second press is "quick" or a later one.
+    h.state_mut().use_manual_clock();
+    h.run_steps(1);
+    let wait = |h: &mut Harness<'_, EffectcraftApp>| {
+        h.state_mut().clock_mut().advance(1.0);
+        h.run_steps(2);
+    };
     h.state_mut().session.execute("layer.select", json!({"layers": ["Box"]})).unwrap();
     h.state_mut().session.execute("prop.setExpression", json!({"layer": "Box", "path": "transform/scale", "expression": "value"})).unwrap();
     h.run_steps(2);
@@ -1866,24 +1951,24 @@ fn double_press_shortcuts_reveal_their_second_set() {
     key_twice(&mut h, egui::Key::E);
     assert_eq!(reveal(&h), vec!["expressions"]);
     assert!(shown(&h, prop_uid(&h, "Box", "transform/scale")));
-    h.run_steps(40);
+    wait(&mut h);
     // TT: Mask Opacity; MM: every mask property; a single M: Mask Path.
     key_twice(&mut h, egui::Key::T);
     assert_eq!(reveal(&h), vec!["maskOpacity"]);
-    h.run_steps(40);
+    wait(&mut h);
     key(&mut h, egui::Key::M, Default::default());
     assert_eq!(reveal(&h), vec!["maskPath"]);
-    h.run_steps(40);
+    wait(&mut h);
     key_twice(&mut h, egui::Key::M);
     assert_eq!(reveal(&h), vec!["masks"]);
-    h.run_steps(40);
+    wait(&mut h);
     // RR Time Remap, AA Material Options, PP paint/puppet, SS selected properties, FF missing effects.
     for (k, want) in
         [(egui::Key::R, "timeRemap"), (egui::Key::A, "material"), (egui::Key::P, "paint"), (egui::Key::S, "selected"), (egui::Key::F, "missingEffects")]
     {
         key_twice(&mut h, k);
         assert_eq!(reveal(&h), vec![want], "{k:?}{k:?}");
-        h.run_steps(40);
+        wait(&mut h);
     }
 }
 

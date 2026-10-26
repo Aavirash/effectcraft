@@ -1,6 +1,7 @@
 //! Edit menu.
 
 use effectcraft_color::Label;
+use effectcraft_keyframe::Value as KV;
 use effectcraft_project::{Comp, Expression, ItemKind, Layer, LayerId, LayerSource, TrackMatte};
 use effectcraft_time::Tick;
 use serde_json::{Value, json};
@@ -73,6 +74,10 @@ fn select_all(s: &mut Session, _: &Value) -> Result<Value> {
     Ok(json!(s.state.selected_layers.len()))
 }
 fn deselect_all(s: &mut Session, _: &Value) -> Result<Value> {
+    // A deselected layer never keeps an open text edit: commit the edit first, exactly as
+    // `text.endEdit` (an empty Type-tool layer included), so every route — menu, shortcut,
+    // script, MCP — leaves one final state.
+    super::text_edit::end_edit(s, &Value::Null)?;
     s.state.selected_layers.clear();
     s.state.selected_props.clear();
     s.state.selected_keys.clear();
@@ -201,12 +206,30 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
             if l.track_matte.is_some_and(|m| ids.contains(&m.layer)) {
                 l.track_matte = None;
             }
+            // A layer-reference property (an Environment light's Source, an effect's Clone Source,
+            // Back Layer…) must read as None once its layer is gone, in this same history step: a
+            // dead id renders as nothing while the UI shows "None", which means "fall back to the
+            // comp's Environment Layer" (#2153). Keys carry the same value kind as the property.
+            l.props.walk_mut(&mut |p| {
+                let dead = |v: &KV| matches!(v, KV::Layer(Some(id)) if ids.contains(&LayerId(*id)));
+                if dead(&p.value) {
+                    p.value = KV::Layer(None);
+                }
+                for k in &mut p.keys {
+                    if dead(&k.value) {
+                        k.value = KV::Layer(None);
+                    }
+                }
+            });
         }
         st.selected_layers.clear();
         st.selected_props.clear();
         st.selected_keys.clear();
         Ok(())
     })?;
+    // A removed layer may have been the edited one: end that session before another command
+    // can reuse it. Undo restores a layer as a new editor, never by reviving the old IME session.
+    s.sanitize_state();
     Ok(json!(ids.len()))
 }
 
@@ -827,7 +850,7 @@ fn original_path(s: &Session) -> Option<String> {
 /// importer takes. Anything else (a folder or app bundle, a script, a shortcut) is refused.
 pub(crate) fn openable_original(path: &str) -> std::result::Result<(), String> {
     let media = |p: &std::path::Path| {
-        let ext = p.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).unwrap_or_default();
+        let ext = p.extension().and_then(std::ffi::OsStr::to_str).map(str::to_ascii_lowercase).unwrap_or_default();
         crate::media_browser::kind_of(&p.to_string_lossy()).is_some_and(|k| k != "project") || matches!(ext.as_str(), "pdf" | "ai" | "eps")
     };
     let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.to_string());

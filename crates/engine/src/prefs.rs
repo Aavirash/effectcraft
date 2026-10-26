@@ -26,17 +26,19 @@ pub const PREFS_FILE: &str = "prefs.json";
 pub const LANGUAGES: &[(&str, &str)] = &[
     ("Match System", "system"),
     ("English", "en"),
+    // Alphabetical by the language's own name after English; Cyrillic, Georgian, then CJK names
+    // follow the Latin ones.
+    ("Čeština", "cs"),
+    ("Deutsch", "de"),
+    ("Español", "es"),
+    ("Français", "fr"),
+    ("Português (Brasil)", "pt-br"),
+    ("Русский", "ru"),
+    ("Українська", "uk"),
+    ("ქართული", "ka"),
     ("日本語", "ja"),
     ("简体中文", "zh-hans"),
     ("繁體中文", "zh-hant"),
-    ("Українська", "uk"),
-    ("Español", "es"),
-    ("Português (Brasil)", "pt-br"),
-    ("Русский", "ru"),
-    ("Français", "fr"),
-    ("Deutsch", "de"),
-    ("Čeština", "cs"),
-    ("ქართული", "ka"),
 ];
 
 /// Settings ▸ Startup & Repair ▸ Window Graphics: (label, `startup.windowGraphics` value).

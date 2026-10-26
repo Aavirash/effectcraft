@@ -117,10 +117,13 @@ fn radial_blur(e: &mut Enc, ctx: &EffectCtx, b: GBuf) -> Option<GBuf> {
     run(e, "gen_radial_blur", &p, b, None, Some(&data))
 }
 
-fn radial_fast(e: &mut Enc, ctx: &EffectCtx, b: GBuf) -> Option<GBuf> {
+fn radial_fast(e: &mut Enc, ctx: &EffectCtx, mut b: GBuf) -> Option<GBuf> {
     let s = (ctx.params.f("amount") / 100.0).clamp(0.0, 1.0) * 0.5;
     if s <= 0.0 {
         return Some(b);
+    }
+    if !ctx.adjustment {
+        b.pad(e, effectcraft_effects::radial_fast_pad(b.to_px(ctx.params.v2("center")), b.img.width, b.img.height, s))?;
     }
     let c = b.to_px(ctx.params.v2("center"));
     let mut p = Params::default();
