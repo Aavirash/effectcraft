@@ -8,7 +8,7 @@
 use serde_json::{Value, json};
 
 use crate::EffectcraftApp;
-use crate::dock::PanelKind;
+use crate::dock::{PanelKind, WorkspaceExt as _};
 use crate::state::{Resolution, Tool};
 use effectcraft_engine::menus::{MenuEntry, MenuNode};
 
@@ -330,7 +330,11 @@ pub fn invoke(app: &mut EffectcraftApp, ctx: &egui::Context, id: &str, params: V
         }
         return r;
     }
-    if no_params(&params) && app.ui.focused == PanelKind::Project {
+    // The Project-panel focus redirects apply only while no text edit is open: creating a text
+    // layer leaves focus on Project while the insertion point lives in the comp, so during an
+    // edit these commands address the text context — redirected, Deselect All would clear a
+    // project selection the user is not looking at and silently swallow the edit's own end.
+    if no_params(&params) && app.ui.focused == PanelKind::Project && app.session.state.text_edit.is_none() {
         match id {
             "edit.duplicate" => return run_engine(app, ctx, "project.duplicate", json!({})),
             "edit.selectAll" => {
@@ -363,7 +367,7 @@ pub fn invoke(app: &mut EffectcraftApp, ctx: &egui::Context, id: &str, params: V
         return invoke(app, ctx, "project.delete", json!({}));
     }
     if id == "edit.clear" && params.as_object().is_some_and(|p| p.is_empty()) && app.ui.focused == PanelKind::RenderQueue {
-        let selected = ctx.data(|d| d.get_temp::<(Vec<u64>, Option<u64>)>(egui::Id::new("rq-ui"))).and_then(|(_, id)| id);
+        let selected = ctx.data(|d| d.get_temp::<(Vec<u64>, Option<u64>)>(egui::Id::unique("rq-ui"))).and_then(|(_, id)| id);
         return match selected {
             Some(item) => run_engine(app, ctx, "renderQueue.remove", json!({"item": item})),
             None => Err("select a Render Queue item first".into()),
@@ -377,7 +381,7 @@ pub fn invoke(app: &mut EffectcraftApp, ctx: &egui::Context, id: &str, params: V
         }
         return crate::panels::delete_items::delete_confirmed(app, ctx, json!({}));
     }
-    let now = ctx.input(|i| i.time);
+    let now = app.now();
     // Closing a modified project asks to save it first; the command runs once answered.
     if crate::panels::unsaved::guard(app, id, &params) {
         return Ok(json!({"dialog": "unsavedChanges"}));
@@ -399,6 +403,10 @@ pub fn invoke(app: &mut EffectcraftApp, ctx: &egui::Context, id: &str, params: V
     if crate::panels::dialogs_3d::route(app, id, &params)? {
         return Ok(Value::Null);
     }
+    // New 3D Primitive without parameters opens its dialog.
+    if crate::panels::primitive_dialog::route(app, id, &params)? {
+        return Ok(Value::Null);
+    }
     // Layer Settings on a solid, adjustment layer or null opens its settings dialog.
     if crate::panels::dialogs::route_layer_settings(app, id, &params)? {
         return Ok(Value::Null);
@@ -406,6 +414,11 @@ pub fn invoke(app: &mut EffectcraftApp, ctx: &egui::Context, id: &str, params: V
     // Layer ▸ Layer Styles ▸ <style> from the menu adds the style and opens the dialog on it.
     if crate::panels::layer_styles_dialog::route(app, id, &params)? {
         return Ok(Value::Null);
+    }
+    // Shared docking: `window.dockAction`, craft-ui's `window.panel.*` commands, `ui.dock`,
+    // `ui.dock.reset` and `window.panelWindow`.
+    if let Some(result) = crate::dock_ui::route(app, ctx, id, &params) {
+        return result;
     }
     // Legacy per-panel / per-workspace ids (`window.panel.Project`, `window.workspace.default`).
     if let Some(rest) = id.strip_prefix("window.panel.") {
@@ -494,46 +507,6 @@ pub fn invoke(app: &mut EffectcraftApp, ctx: &egui::Context, id: &str, params: V
             _ => {}
         }
     }
-    if id == "window.dockAction" {
-        let value = params.get("action").cloned().ok_or("missing docking action")?;
-        let action: craft_ui::docking::Action<PanelKind> = serde_json::from_value(value).map_err(|error| format!("invalid docking action: {error}"))?;
-        if matches!(&action, craft_ui::docking::Action::Open { .. } | craft_ui::docking::Action::OpenAt { .. }) {
-            return Err("use the panel open commands to preserve viewer and ScriptUI lifecycle callbacks".into());
-        }
-        if let craft_ui::docking::Action::Close { panel } = &action {
-            let mut layout = crate::dock_shared::encode(&app.ui.dock, &app.ui.floating)?;
-            layout.apply(action.clone()).map_err(|error| error.to_string())?;
-            app.close_panel(*panel);
-            return Ok(Value::Null);
-        }
-        let mut error = None;
-        if !app.edit_layout(|layout| match layout.apply(action) {
-            Ok(()) => true,
-            Err(reason) => {
-                error = Some(reason);
-                false
-            }
-        }) {
-            return Err(error.unwrap_or_else(|| "invalid docking layout".into()));
-        }
-        return Ok(Value::Null);
-    }
-    // Multiple monitors: {panel, window?: bool} moves a panel into its own native window (or
-    // back into the main window; no `window` toggles).
-    if id == "window.panelWindow" {
-        // A panel name ("Info", "Effect Controls") or its serialized form ({"Viewer": 2}).
-        let value = params.get("panel").ok_or("panelWindow: need `panel`")?;
-        let panel = match value.as_str() {
-            Some(name) => PanelKind::from_name(name).ok_or(format!("unknown panel `{name}`"))?,
-            None => serde_json::from_value::<PanelKind>(value.clone()).map_err(|_| "panelWindow: unknown `panel`".to_string())?,
-        };
-        let window = match params.get("window") {
-            None | Some(Value::Null) => None,
-            Some(value) => Some(value.as_bool().ok_or("panelWindow: `window` must be true or false")?),
-        };
-        let window = app.set_panel_window(ctx, panel, window)?;
-        return Ok(json!({"window": window}));
-    }
     // A UI-only command (not in the engine's menus), so `frontend` gets it from here.
     if id == "window.maximizeApp" {
         return frontend(app, ctx, id, params);
@@ -552,7 +525,9 @@ pub fn invoke(app: &mut EffectcraftApp, ctx: &egui::Context, id: &str, params: V
             }
             "closePanel" => {
                 let p = panel_of("panel").ok_or("closePanel: need `panel`")??;
-                app.close_panel(p);
+                if app.ui.dock.is_open(p) {
+                    app.apply_dock(craft_ui::docking::Action::Close { panel: p })?;
+                }
                 return Ok(Value::Null);
             }
             "floatPanel" => {
@@ -561,22 +536,31 @@ pub fn invoke(app: &mut EffectcraftApp, ctx: &egui::Context, id: &str, params: V
                     Some(value) => serde_json::from_value::<[f32; 4]>(value.clone()).map_err(|_| "rect must contain four finite numbers")?,
                     None => crate::dock_ui::default_float_rect(ctx.content_rect()),
                 };
-                if !app.edit_layout(|l| l.float(p, r)) {
-                    return Err(format!("can't undock {}", p.title()));
-                }
+                app.apply_dock(craft_ui::docking::Action::Float { panel: p, rect: r }).map_err(|e| format!("can't undock {}: {e}", p.title()))?;
                 return Ok(Value::Null);
             }
             _ => {
+                // craft-ui's `window.panel.dock`: zones center/tab, left/right/top/bottom (a split
+                // beside the anchor), above/below; without an anchor a side zone docks along that
+                // edge of the whole workspace.
                 let p = panel_of("panel").ok_or("dockPanel: need `panel`")??;
-                let anchor = panel_of("anchor").ok_or("dockPanel: need `anchor` (a docked panel)")??;
-                let zone = params
-                    .get("zone")
-                    .and_then(Value::as_str)
-                    .map_or(Some(crate::dock::Zone::Center), crate::dock::Zone::from_name)
-                    .ok_or("zone: center|left|right|top|bottom")?;
-                if !app.edit_layout(|l| l.dock(p, anchor, zone)) {
-                    return Err(format!("can't dock {} at {} ({zone:?})", p.title(), anchor.title()));
+                let mut command = json!({"command": "window.panel.dock", "panel": p});
+                if let Some(anchor) = panel_of("anchor") {
+                    command["anchor"] = json!(anchor?);
+                    command["zone"] = json!("center");
                 }
+                if let Some(zone) = params.get("zone") {
+                    let zone = zone.as_str().ok_or("zone: center|tab|left|right|top|bottom|above|below")?.to_ascii_lowercase();
+                    if command.get("anchor").is_some() || zone != "center" {
+                        command["zone"] = json!(zone);
+                    }
+                }
+                if let Some(before) = panel_of("before") {
+                    command["before"] = json!(before?);
+                }
+                let command: craft_ui::docking::DockCommand<PanelKind> =
+                    serde_json::from_value(command).map_err(|e| format!("dockPanel: zone: center|tab|left|right|top|bottom|above|below ({e})"))?;
+                app.run_dock_command(ctx, command).map_err(|e| format!("can't dock {}: {e}", p.title()))?;
                 app.show_panel(p);
                 return Ok(Value::Null);
             }
@@ -658,10 +642,7 @@ pub fn invoke(app: &mut EffectcraftApp, ctx: &egui::Context, id: &str, params: V
         // Alt+Shift+, / Alt+Shift+.: the previous / next tab of the focused panel's group.
         "window.nextPanel" | "window.previousPanel" => {
             let focused = app.ui.focused;
-            let group: Vec<PanelKind> = match app.ui.floating.iter().find(|f| f.panels.contains(&focused)) {
-                Some(f) => f.panels.clone(),
-                None => app.ui.dock.group_of(focused).map(<[PanelKind]>::to_vec).unwrap_or_default(),
-            };
+            let group = app.ui.dock.group_of(focused);
             let Some(i) = group.iter().position(|p| *p == focused) else { return Ok(Value::Null) };
             let step = if id == "window.nextPanel" { 1 } else { group.len().saturating_sub(1) };
             if let Some(next) = group.get((i + step) % group.len().max(1)).copied() {
@@ -907,7 +888,7 @@ fn toggle(slot: &mut bool, p: &Value) -> Value {
 
 /// Perform a frontend command (from `Event::Frontend`).
 pub fn frontend(app: &mut EffectcraftApp, ctx: &egui::Context, id: &str, p: Value) -> Result<Value, String> {
-    let now = ctx.input(|i| i.time);
+    let now = app.now();
     let v = &mut app.ui.viewer;
     Ok(match id {
         "mediaBrowser.copySourcePath" => {
@@ -925,6 +906,10 @@ pub fn frontend(app: &mut EffectcraftApp, ctx: &egui::Context, id: &str, p: Valu
             ctx.copy_text(path.to_string());
             json!({"path": path})
         }
+        "app.checkForUpdates" | "help.checkForUpdates" => {
+            crate::updates_ui::check(app);
+            Value::Null
+        }
         "app.about" => {
             app.dialog = Some(crate::Dialog::About);
             Value::Null
@@ -939,6 +924,18 @@ pub fn frontend(app: &mut EffectcraftApp, ctx: &egui::Context, id: &str, p: Valu
         }
         // View ▸ New Viewer.
         "view.newViewer" => json!({"viewer": crate::panels::viewers::new_viewer(app)}),
+        // Reveal Layer Source / Reveal Composition: show the Project panel on the item, opening
+        // its folders and clearing the search so the row is visible.
+        "project.reveal" => {
+            let ids: Vec<effectcraft_engine::project::ItemId> = p
+                .get("items")
+                .and_then(Value::as_array)
+                .map(|items| items.iter().filter_map(Value::as_u64).map(effectcraft_engine::project::ItemId).collect())
+                .or_else(|| p.get("item").and_then(Value::as_u64).map(|item| vec![effectcraft_engine::project::ItemId(item)]))
+                .unwrap_or_default();
+            crate::panels::project::reveal(app, ctx, &ids);
+            json!({"items": ids.iter().map(|item| item.0).collect::<Vec<_>>()})
+        }
         // Run by id (control channel, MCP): the Project panel's selection, whatever has focus.
         "project.deleteWithoutConfirmation" => crate::panels::delete_items::delete_confirmed(app, ctx, json!({}))?,
         // A gradient property's "Edit Gradient…" (the Timeline's value): the Gradient Editor.
@@ -1154,7 +1151,6 @@ pub fn frontend(app: &mut EffectcraftApp, ctx: &egui::Context, id: &str, p: Valu
         "window.saveWorkspace" => {
             let name = app.ui.workspace.clone();
             app.ui.saved_workspaces.insert(name.clone(), app.ui.dock.clone());
-            app.ui.saved_floating.insert(name.clone(), app.ui.floating.clone());
             app.store_saved_workspaces()?;
             json!({"workspace": name})
         }
@@ -1170,7 +1166,6 @@ pub fn frontend(app: &mut EffectcraftApp, ctx: &egui::Context, id: &str, p: Valu
                 return Ok(Value::Null);
             };
             app.ui.saved_workspaces.insert(name.clone(), app.ui.dock.clone());
-            app.ui.saved_floating.insert(name.clone(), app.ui.floating.clone());
             app.ui.workspace = name.clone();
             app.store_saved_workspaces()?;
             json!({"workspace": name})
@@ -1193,7 +1188,6 @@ pub fn frontend(app: &mut EffectcraftApp, ctx: &egui::Context, id: &str, p: Valu
             };
             let builtin = crate::dock::WORKSPACES.contains(&name.as_str());
             if p.get("delete").and_then(Value::as_bool) == Some(true) {
-                app.ui.saved_floating.remove(&name);
                 if app.ui.saved_workspaces.remove(&name).is_none() && !builtin {
                     return Err(format!("no workspace `{name}`"));
                 }
@@ -1210,9 +1204,6 @@ pub fn frontend(app: &mut EffectcraftApp, ctx: &egui::Context, id: &str, p: Valu
                 }
                 let dock = app.ui.saved_workspaces.remove(&name).ok_or_else(|| format!("no workspace `{name}`"))?;
                 app.ui.saved_workspaces.insert(new.to_string(), dock);
-                if let Some(f) = app.ui.saved_floating.remove(&name) {
-                    app.ui.saved_floating.insert(new.to_string(), f);
-                }
                 if app.ui.workspace == name {
                     app.ui.workspace = new.to_string();
                 }
@@ -1224,7 +1215,7 @@ pub fn frontend(app: &mut EffectcraftApp, ctx: &egui::Context, id: &str, p: Valu
         "view.lookAt" => {
             let r: Vec<f64> = p.get("rect").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_f64).collect()).unwrap_or_default();
             if r.len() == 4 {
-                let map: Option<crate::panels::viewer::ViewerMap> = ctx.data(|d| d.get_temp(egui::Id::new("viewer-map")));
+                let map: Option<crate::panels::viewer::ViewerMap> = ctx.data(|d| d.get_temp(egui::Id::unique("viewer-map")));
                 if let Some(m) = map {
                     let (rw, rh) = (((r[2] - r[0]) as f32).max(1.0), ((r[3] - r[1]) as f32).max(1.0));
                     let zoom = ((m.area.width() - 40.0) / rw).min((m.area.height() - 40.0) / rh).clamp(0.015, 32.0);
@@ -1428,6 +1419,7 @@ fn file_dialog(app: &mut EffectcraftApp, id: &str, params: &Value) -> Option<Res
         };
         let tx = app.dialog_answers.0.clone();
         let answer = crate::DialogAnswer { command: id.to_string(), key, params: params.clone(), paths: Vec::new() };
+        app.file_dialogs.opened();
         spawn(
             request,
             Box::new(move |paths| {
@@ -1551,10 +1543,10 @@ pub(crate) fn entry_shortcut(app: &EffectcraftApp, e: &MenuEntry) -> Option<Stri
 /// Whether panel `p` is on screen: the front tab of a floating window, or of a docked group
 /// (an open frame in a stack) that a maximized panel does not cover.
 pub(crate) fn panel_shown(app: &EffectcraftApp, p: PanelKind) -> bool {
-    if app.ui.floating.iter().any(|f| f.panels.get(f.active) == Some(&p)) {
-        return true;
+    if app.ui.dock.is_floating(p) {
+        return app.ui.dock.is_visible(p);
     }
-    match app.ui.maximized.filter(|m| app.ui.dock.contains(*m)) {
+    match app.ui.maximized.filter(|m| app.ui.dock.is_docked(*m)) {
         Some(m) => m == p,
         None => app.ui.dock.is_visible(p),
     }
@@ -1606,7 +1598,10 @@ pub(crate) fn entry_checked(app: &EffectcraftApp, e: &MenuEntry) -> Option<bool>
 }
 
 pub(crate) fn entry_enabled(app: &EffectcraftApp, e: &MenuEntry) -> bool {
-    if app.ui.focused == PanelKind::Project {
+    // The Project-panel enabled rules mirror the invoke redirects, so they stand down for the
+    // same reason (see the redirect block): while a text edit is open the menu items must be
+    // enabled by what their routed command can do, or the menu grays out commands that work.
+    if app.ui.focused == PanelKind::Project && app.session.state.text_edit.is_none() {
         match e.command.as_str() {
             "edit.duplicate" => {
                 return !app.session.state.project_selection.is_empty()
@@ -1774,21 +1769,40 @@ fn mods_match(want: egui::Modifiers, got: egui::Modifiers) -> bool {
     want.command == got.command && want.shift == got.shift && want.alt == got.alt && (want.ctrl == got.ctrl || got.command && cfg!(not(target_os = "macos")))
 }
 
+/// Whether the `key`+`mods` chord is the current binding of `command` in the active preset
+/// (so callers that must match a shortcut themselves — like the viewer's text editor, which
+/// holds the keyboard while the shortcut dispatcher is skipped — follow rebinds).
+/// `Physical+`-only bindings never match here, exactly as for the app-wide dispatcher.
+pub fn chord_matches(session: &effectcraft_engine::Session, command: &str, key: egui::Key, mods: egui::Modifiers) -> bool {
+    bindings(session).into_iter().any(|(m, k, id, _)| id == command && k == key && mods_match(m, mods))
+}
+
+/// Whether a Deselect All chord matched by [`chord_matches`] may run while a text editor holds
+/// the keyboard. Chords carrying Cmd/Ctrl/Alt are command chords (the editor treats them as
+/// such for undo and the rest), and function keys never type, so those forward from the editor;
+/// a chord that could instead produce a character — a bare or Shift-only letter, digit or
+/// punctuation key, as from a pathological bare-letter rebinding — stays with the editor so
+/// typing keeps working, the same invariant the app-wide dispatcher honors by skipping
+/// focused text fields.
+pub fn forwardable_during_text_edit(mods: egui::Modifiers, key: egui::Key) -> bool {
+    mods.command || mods.ctrl || mods.alt || (egui::Key::F1..=egui::Key::F35).contains(&key)
+}
+
 /// Set (egui temp data) from a plain Spacebar press until its release while a tap would still
 /// run the Spacebar shortcut.
 /// The system clipboard's text of this frame's paste event, for the Edit ▸ Paste it runs.
 fn system_paste_id() -> egui::Id {
-    egui::Id::new("menus-system-paste")
+    egui::Id::unique("menus-system-paste")
 }
 
 fn space_tap_id() -> egui::Id {
-    egui::Id::new("spacebar-tap")
+    egui::Id::unique("spacebar-tap")
 }
 
 /// The modifiers held when this frame's input began: the state the last pass ended with, if it
 /// ran this (egui keeps only the state after the frame's events). Records this pass's state.
 fn modifiers_at_start(ctx: &egui::Context) -> Option<egui::Modifiers> {
-    let id = egui::Id::new("shortcut-modifiers");
+    let id = egui::Id::unique("shortcut-modifiers");
     let pass = ctx.cumulative_pass_nr();
     let now = ctx.input(|i| i.modifiers);
     ctx.data_mut(|d| {
@@ -2021,32 +2035,119 @@ fn handle_shortcuts_impl(app: &mut EffectcraftApp, ctx: &egui::Context, tab_only
     }
 }
 
+/// The id under which [`menu_bar`] remembers which of its menus was open at the end of the last
+/// frame (its title's open look, and the hover that switches between the titles).
+fn open_menu_id() -> egui::Id {
+    egui::Id::unique("menu-bar-open")
+}
+
+/// The id under which [`menu_bar`] remembers a title press still in progress (press-and-browse).
+fn browse_menu_id() -> egui::Id {
+    egui::Id::unique("menu-bar-browse")
+}
+
 /// Draw the in-window menu bar (the engine's AE menu tree).
+///
+/// The titles open on the press, not the release (native menu bars): while one is held the menus
+/// can be browsed by moving onto them, and releasing over an entry chooses it. Hovering another
+/// title switches the open menu to it, and the open one closes on a press outside it or when the
+/// window loses focus. The pointer leaving the window — onto the OS title bar, directly above the
+/// bar — closes nothing, however long: the platform forwards none of the title bar's clicks to
+/// egui (only the cursor leaving), so there is no click to close on and a graze must not drop the
+/// menu. The closing press itself still reaches the widget under it, as a click does in After
+/// Effects.
 pub fn menu_bar(app: &mut EffectcraftApp, ui: &mut egui::Ui) {
     let ctx = ui.ctx().clone();
     let mut clicked: Option<(String, Value)> = None;
     let mut nav = crate::menu_keys::Nav::default();
+    // The open menu as of the last frame: the titles are drawn before this frame can open or
+    // close anything, and what happened last frame is what they must react to.
+    let open_prev: Option<usize> = ctx.data(|d| d.get_temp(open_menu_id())).flatten();
+    if ctx.data(|d| d.get_temp(browse_menu_id())).unwrap_or(false) {
+        nav.set_browsing();
+    }
+    let mut drawn = 0;
     ui.horizontal_centered(|ui| {
         ui.add_space(6.0);
         egui::MenuBar::new().config(egui::containers::menu::MenuConfig::new().style(crate::widgets::menu_style)).ui(ui, |ui| {
             for node in effectcraft_engine::menus::menu_bar() {
-                if let MenuNode::Submenu { label, children } = node {
-                    let r = ui.menu_button(crate::i18n::label(app, "", label), |ui| {
-                        ui.set_min_width(if label == "Effect" { 200.0 } else { 280.0 });
-                        crate::widgets::menu_scroll(ui, |ui| menu_nodes(app, ui, children, &mut clicked, &mut nav, 0));
-                    });
-                    nav.top(&r.response);
-                    app.auto.add(&format!("menu.{label}"), r.response.rect, label);
+                let MenuNode::Submenu { label, children } = node else { continue };
+                // The open title takes the open button's look while its menu is up (as in AE).
+                let inactive = ui.style().visuals.widgets.inactive;
+                if open_prev == Some(drawn) {
+                    ui.style_mut().visuals.widgets.inactive = ui.style().visuals.widgets.open;
                 }
+                let mut response = ui.add(egui::Button::new(crate::i18n::label(app, "", label)));
+                ui.style_mut().visuals.widgets.inactive = inactive;
+                // A press on a title opens its menu at once (a second press on the open one closes
+                // it), and while it is held the menus below are browsable. The keyboard and the
+                // accessibility activation report `clicked` without the primary button (the press
+                // then happened somewhere else), and toggle the menu. Hovering another title
+                // switches to it once the pointer has moved: merely resting there must not take a
+                // keyboard-driven menu over.
+                let moved = ctx.input(|i| i.pointer.delta() != egui::Vec2::ZERO);
+                // With the button down elsewhere nothing is hovered, so the title under the
+                // pointer takes the highlight by hand: the hover-switch to it shows, one frame
+                // later like egui's own hover (the open title keeps its open look).
+                if moved && response.contains_pointer() && open_prev.is_some_and(|p| p != drawn) {
+                    response = response.highlight();
+                }
+                let pressed = ctx.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary)) && response.hovered();
+                let cmd = if pressed {
+                    nav.set_browsing();
+                    Some(egui::SetOpenCommand::Bool(open_prev != Some(drawn)))
+                } else if response.clicked() && !response.clicked_by(egui::PointerButton::Primary) {
+                    Some(egui::SetOpenCommand::Toggle)
+                } else if moved && response.enabled() && response.contains_pointer() && open_prev.is_some_and(|p| p != drawn) {
+                    Some(egui::SetOpenCommand::Bool(true))
+                } else {
+                    None
+                };
+                let inner = egui::Popup::menu(&response)
+                    .close_behavior(egui::PopupCloseBehavior::IgnoreClicks)
+                    .style(crate::widgets::menu_style)
+                    .open_memory(cmd)
+                    .show(|ui| {
+                        ui.set_min_width(if label == "Effect" { 200.0 } else { 280.0 });
+                        let browsing = nav.browsing();
+                        crate::widgets::menu_scroll(ui, browsing, |ui| menu_nodes(app, ui, children, &mut clicked, &mut nav, 0));
+                    });
+                nav.top(&response);
+                // The titles and the open menus: a press inside them is not an outside press.
+                nav.cover(response.rect);
+                if let Some(inner) = &inner {
+                    nav.cover(inner.response.rect);
+                }
+                app.auto.add(&format!("menu.{label}"), response.rect, label);
+                drawn += 1;
             }
         });
     });
     crate::menu_keys::handle(&ctx, &nav);
+    // egui leaves the closing to us (`IgnoreClicks`), so the menus close here: at once on a press
+    // outside them (the press itself still reaches the widget below) and when the window loses
+    // focus. The pointer leaving the window closes nothing: moving onto the OS title bar fires
+    // the cursor-left event and the platform forwards none of its clicks to egui, so there is no
+    // click to close on — and a graze or a stay must not drop the menu, as in native apps.
+    if let Some(top) = nav.open_popup(&ctx) {
+        let focus_lost = ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::WindowFocused(false))));
+        let outside_press = ctx.input(|i| i.pointer.any_pressed() && i.pointer.interact_pos().is_some_and(|p| !nav.covers(p)));
+        if focus_lost || outside_press {
+            egui::Popup::close_id(&ctx, top);
+        }
+    }
     if let Some((id, params)) = clicked.map(|(id, params)| menu_choice(app, id, params))
         && let Err(e) = invoke(app, &ctx, &id, if params.is_null() { json!({}) } else { params })
     {
         app.ui.status = e;
     }
+    // What the next frame starts from: the open title, and a title press still in progress.
+    let open = nav.open_index(&ctx);
+    let browsing = open.is_some() && nav.browsing() && ctx.input(|i| i.pointer.primary_down());
+    ctx.data_mut(|d| {
+        d.insert_temp(open_menu_id(), open);
+        d.insert_temp(browse_menu_id(), browsing);
+    });
 }
 
 /// The entries of top-level menu `name` (the Effect menu is the Effect Controls panel's context
@@ -2098,9 +2199,10 @@ fn menu_nodes(
                         Some(t) => r.on_hover_text(t),
                         None => r,
                     };
+                    let r = browse_hover(nav, r);
                     app.auto.add(&format!("menu.{name}.{i}"), r.rect, &e.label);
                     nav.entry(ui, depth, &r, false);
-                    if r.clicked() {
+                    if r.clicked() || browse_pick(nav, ui, &r) {
                         *clicked = Some((e.command.clone(), e.params.clone()));
                         ui.close();
                     }
@@ -2112,25 +2214,50 @@ fn menu_nodes(
                 // every other submenu goes through the menu catalog.
                 let shown = crate::i18n::effect_category(children, label)
                     .unwrap_or_else(|| crate::i18n::submenu(app, label, effectcraft_engine::menus::submenu_label(&app.session, label, &dyn_ctx(&ws, &[]))));
-                let r = ui.menu_button((gutter(false), shown.as_str()), |ui| {
+                let browsing = nav.browsing();
+                let egui::InnerResponse { inner, response } = ui.menu_button((gutter(false), shown.as_str()), |ui| {
                     ui.set_min_width(if children.len() > 30 { 200.0 } else { 240.0 });
-                    crate::widgets::menu_scroll(ui, |ui| menu_nodes(app, ui, children, clicked, nav, depth + 1));
+                    crate::widgets::menu_scroll(ui, browsing, |ui| menu_nodes(app, ui, children, clicked, nav, depth + 1));
                 });
-                nav.entry(ui, depth, &r.response, true);
-                if r.inner.is_some() {
-                    nav.opened(depth, &r.response);
+                let response = browse_hover(nav, response);
+                nav.entry(ui, depth, &response, true);
+                if inner.is_some() {
+                    // `ui.menu_button` drops the popup's own response on the floor: read it back,
+                    // so that a press inside this submenu doesn't count as an outside press.
+                    let sub = egui::containers::menu::SubMenu::id_from_widget_id(response.id);
+                    if let Some(resp) = ui.ctx().read_response(sub) {
+                        nav.cover(resp.rect);
+                    }
+                    nav.opened(depth, &response);
                 }
             }
             MenuNode::Item(e) => {
-                let r = menu_entry(app, ui, e);
+                let r = browse_hover(nav, menu_entry(app, ui, e));
                 nav.entry(ui, depth, &r, false);
-                if r.clicked() {
+                if r.clicked() || browse_pick(nav, ui, &r) {
                     *clicked = Some((e.command.clone(), e.params.clone()));
                     ui.close();
                 }
             }
         }
     }
+}
+
+/// The row `r` highlighted while the bar is mid press-and-browse: with a button down egui reports
+/// nothing as hovered — which would leave browsing with no hover feedback at all — so the row
+/// under the pointer takes the highlight by hand. It reads as the hover look one frame later,
+/// exactly egui's own hover latency; disabled rows ignore it (`Noninteractive`), as in native
+/// menus. Context menus use their own [`crate::menu_keys::Nav`], where the bar never browses.
+fn browse_hover(nav: &crate::menu_keys::Nav, r: egui::Response) -> egui::Response {
+    if nav.browsing() && r.contains_pointer() { r.highlight() } else { r }
+}
+
+/// Whether a press-and-browse (a menu-bar title still held down) releases over entry `r`, which
+/// then chooses it like a click does. egui reports neither for it: the release is far from the
+/// press, so there is no click, and nothing but the pressed widget is hovered while a button is
+/// down, so the row has to be tested by the pointer being over it.
+fn browse_pick(nav: &crate::menu_keys::Nav, ui: &egui::Ui, r: &egui::Response) -> bool {
+    nav.browsing() && r.enabled() && r.contains_pointer() && ui.input(|i| i.pointer.button_released(egui::PointerButton::Primary))
 }
 
 /// The menu bar's submenu at `path` (`["File", "Interpret Footage"]`) in a panel's context menu,
@@ -2412,7 +2539,7 @@ mod tests {
         run(&mut app, "window.toggleCompTimeline");
         assert_eq!(app.ui.focused, PanelKind::Timeline);
         // Alt+Shift+. / Alt+Shift+,: the tabs of the focused panel's group, wrapping.
-        let group = app.ui.dock.group_of(PanelKind::Timeline).unwrap().to_vec();
+        let group = app.ui.dock.group_of(PanelKind::Timeline);
         assert!(group.len() > 1, "{group:?}");
         run(&mut app, "window.nextPanel");
         assert_eq!(app.ui.focused, group[(group.iter().position(|p| *p == PanelKind::Timeline).unwrap() + 1) % group.len()]);
@@ -2424,7 +2551,7 @@ mod tests {
         // With another panel active it closes that panel.
         app.show_panel(PanelKind::Project);
         run(&mut app, "window.closeAll");
-        assert!(!app.ui.dock.contains(PanelKind::Project));
+        assert!(!app.ui.dock.is_open(PanelKind::Project));
     }
 
     #[test]
@@ -2544,6 +2671,56 @@ mod tests {
         app.run_dialog_answers();
         assert!(!dir.join("Frame.png").exists());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// While a command's OS file dialog is up, floating panels' OS windows are blocked, as for
+    /// a modal dialog; a dialog that ends, answered or not, unblocks them, and Save As opens a
+    /// dialog again. A macOS sheet can end without answering (its window went away): once one of
+    /// the app's windows has the keyboard again, or keeps it as if no dialog showed, floating
+    /// windows are not left blocked.
+    #[test]
+    fn file_dialogs_block_floating_windows_only_while_up() {
+        use std::sync::{Arc, Mutex};
+        let mut app = EffectcraftApp::new(effectcraft_engine::Session::default());
+        let ctx = egui::Context::default();
+        let pending: Arc<Mutex<Vec<crate::DialogDone>>> = Arc::default();
+        let queue = pending.clone();
+        app.hooks.file_dialog_async = Some(Box::new(move |_dialog, done| queue.lock().unwrap().push(done)));
+        let blocked = |app: &mut EffectcraftApp, focused: bool, time: f64| {
+            let input = egui::RawInput { focused, time: Some(time), ..Default::default() };
+            let mut out = false;
+            ctx.run_ui(input, |ui| out = app.floats_blocked(ui.ctx())).textures_delta.clear();
+            out
+        };
+        assert!(!blocked(&mut app, true, 0.0));
+        // Cancelled.
+        invoke(&mut app, &ctx, "file.saveAs", json!({})).unwrap();
+        assert!(blocked(&mut app, true, 0.1), "blocked while the dialog takes the keyboard");
+        assert!(blocked(&mut app, false, 0.2));
+        let done = pending.lock().unwrap().pop().expect("a dialog was shown");
+        done(Vec::new());
+        app.run_dialog_answers();
+        assert!(!blocked(&mut app, false, 0.3));
+        // Save As asks again; the sheet ends without answering.
+        invoke(&mut app, &ctx, "file.saveAs", json!({})).unwrap();
+        assert_eq!(pending.lock().unwrap().len(), 1, "Save As opens a dialog again");
+        assert!(blocked(&mut app, true, 1.0));
+        assert!(blocked(&mut app, false, 1.1));
+        assert!(blocked(&mut app, false, 9.0), "a dialog may stay up for long");
+        assert!(!blocked(&mut app, true, 9.1), "an app window has the keyboard again");
+        // A dialog that never takes the keyboard.
+        invoke(&mut app, &ctx, "file.saveAs", json!({})).unwrap();
+        assert!(blocked(&mut app, true, 10.0));
+        assert!(blocked(&mut app, true, 11.0));
+        assert!(!blocked(&mut app, true, 12.5));
+        // Answers of dialogs taken for gone arrive late: nothing stays blocked.
+        for done in pending.lock().unwrap().drain(..) {
+            done(Vec::new());
+        }
+        app.run_dialog_answers();
+        assert!(!blocked(&mut app, false, 13.0));
+        invoke(&mut app, &ctx, "file.saveAs", json!({})).unwrap();
+        assert!(blocked(&mut app, false, 13.1), "a later dialog blocks again");
     }
 
     #[test]
