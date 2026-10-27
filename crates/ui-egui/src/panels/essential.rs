@@ -56,6 +56,11 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
     }
 }
 
+/// The Essential Graphics panel's contents for the Primary (else active) comp: its name and Solo
+/// toggle, the template name, the controls list with its drop target for Timeline properties, the
+/// Add Formatting / Add Selected As / Media Replacement / Export Template buttons and the selected
+/// instance's properties. Returns the `essential.*` commands to run directly and the ones that go
+/// through the menu/frontend layer; with no comp it shows a hint and returns empty lists.
 fn body(app: &mut EffectcraftApp, ui: &mut egui::Ui) -> (Actions, Actions) {
     let t = app.tokens;
     let ctx = ui.ctx().clone();
@@ -79,6 +84,10 @@ fn body(app: &mut EffectcraftApp, ui: &mut egui::Ui) -> (Actions, Actions) {
                 }
             }
         });
+        // The label beside the combo names it for a screen reader; the selected comp alone
+        // doesn't say what the dropdown chooses. Keep the visible label and value together.
+        let primary_name = format!("{} {}", tr("Primary:"), comp_name);
+        r.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, ui.is_enabled(), &primary_name));
         app.auto.add("essential.primary", r.response.rect, &comp_name);
     });
     let solo = app.session.state.essential_solo;
@@ -90,7 +99,7 @@ fn body(app: &mut EffectcraftApp, ui: &mut egui::Ui) -> (Actions, Actions) {
     // ---- Name.
     let eg = project.comp(cid).and_then(|c| c.essential.clone()).unwrap_or_default();
     let shown_name = if eg.name.is_empty() { comp_name.clone() } else { eg.name.clone() };
-    let name_id = egui::Id::new("eg-name-buf");
+    let name_id = egui::Id::unique("eg-name-buf");
     let mut name: String = ctx.data(|d| d.get_temp(name_id)).unwrap_or_else(|| shown_name.clone());
     let r = ui.add(egui::TextEdit::singleline(&mut name).hint_text(tr("Template name")).desired_width(f32::INFINITY));
     app.auto.add("essential.name", r.rect, &shown_name);
@@ -291,7 +300,7 @@ fn link_menu(app: &mut EffectcraftApp, ui: &mut egui::Ui, cid: ItemId, c: &EgCon
 
 /// A control's name; double-click to rename (comments: edit the text).
 fn name_label(app: &mut EffectcraftApp, ui: &mut egui::Ui, cid: ItemId, c: &EgControl, text: RichText, actions: &mut Actions) {
-    let edit_id = egui::Id::new(("eg-rename", c.id));
+    let edit_id = egui::Id::unique(("eg-rename", c.id));
     let editing: Option<String> = ui.ctx().data(|d| d.get_temp(edit_id));
     match editing {
         Some(mut buf) => {
@@ -329,7 +338,7 @@ fn value_widget(app: &mut EffectcraftApp, ui: &mut egui::Ui, auto: &str, ty: Opt
                 KV::Str(s) => s.clone(),
                 _ => String::new(),
             };
-            let id = egui::Id::new(("eg-text", auto));
+            let id = egui::Id::unique(("eg-text", auto));
             let mut buf: String = ui.ctx().data(|d| d.get_temp(id)).unwrap_or_else(|| cur.clone());
             let r = ui.add(egui::TextEdit::singleline(&mut buf).desired_width(140.0));
             if r.has_focus() {
