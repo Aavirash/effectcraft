@@ -552,7 +552,7 @@ impl<S: Clone> SimCache<S> {
     ) -> std::sync::Arc<S> {
         use std::sync::Arc;
         let start = {
-            let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+            let mut g = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let tick = g.iter().map(|e| e.used).max().unwrap_or(0) + 1;
             g.iter_mut().find(|e| e.key == key).and_then(|e| {
                 e.used = tick;
@@ -578,7 +578,7 @@ impl<S: Clone> SimCache<S> {
         }
         let out = Arc::new(st);
         fresh.push((target, out.clone()));
-        let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let mut g = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let tick = g.iter().map(|e| e.used).max().unwrap_or(0) + 1;
         let idx = match g.iter().position(|e| e.key == key) {
             Some(ix) => ix,
