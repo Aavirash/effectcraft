@@ -181,6 +181,8 @@ fn timecode_field(ui: &mut egui::Ui, buf: &mut Option<String>, secs: &mut f64, r
     r
 }
 
+/// The temp-data id of the one-shot flag that makes the Save Preset name field take focus when
+/// it is next drawn.
 fn name_focus_id() -> egui::Id {
     egui::Id::unique("comp-preset-name-focus")
 }
