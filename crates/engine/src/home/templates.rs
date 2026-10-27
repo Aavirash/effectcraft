@@ -645,6 +645,15 @@ fn base_name(path: &str) -> String {
     path.rsplit(['/', '\\']).next().filter(|n| !n.is_empty()).unwrap_or("footage").to_string()
 }
 
+/// A template entry's name, made safe to write inside a folder: a template is a file like any
+/// other and can name its entries anything. Nothing a platform reads as a separator, a drive or
+/// the folder above survives, and a name that leaves nothing usable becomes `footage` (#2123).
+fn safe_file_name(name: &str) -> String {
+    let name: String = name.chars().map(|c| if matches!(c, '/' | '\\' | ':' | '\0') { '_' } else { c }).collect();
+    // `.` and `..`, and names of dots and spaces alone (Windows drops the trailing ones).
+    if name.trim_matches(['.', ' ']).is_empty() { "footage".to_string() } else { name }
+}
+
 /// What [`embed_footage`] did.
 #[derive(Default)]
 struct Embedded {
@@ -738,8 +747,10 @@ fn extract_footage(s: &Session, proj: &mut Project, entries: &[(String, Vec<u8>)
     let mut used = std::collections::HashSet::new();
     for (k, v) in entries.iter().filter(|(k, _)| k.starts_with("media/")) {
         // `media/<item>/<file>` → one folder; a name another item took gets the item's id.
-        let file = base_name(k);
-        let item = k.trim_start_matches("media/").split('/').next().unwrap_or("0");
+        let file = safe_file_name(&base_name(k));
+        // The item's id, and only that: it is written as one ([`embed_footage`]), but a template
+        // from elsewhere can hold anything there, and `..\` in it walks out of `dir` on Windows.
+        let item = k.trim_start_matches("media/").split('/').next().filter(|i| i.bytes().all(|b| b.is_ascii_digit())).unwrap_or("0");
         let name = if used.insert(file.clone()) { file } else { format!("{item}-{file}") };
         let out = format!("{dir}/{name}");
         s.services.store_file(&out, v).map_err(|e| EngineError::Other(format!("cannot write {out}: {e}")))?;
@@ -968,6 +979,44 @@ mod tests {
         let v = l.iter().find(|t| t.id == "vertical-story").unwrap();
         assert_eq!((v.width, v.height), (1080, 1920));
         assert_eq!(l.iter().find(|t| t.id == "lower-third").unwrap().controls, ["Name", "Title", "Bar Color"]);
+    }
+
+    /// #2123: a template holds its footage as `media/<item id>/<file>` entries, but a template
+    /// from anywhere else can name them anything — and `..\\`, which only this platform reads as
+    /// a plain character, is a separator on Windows, so a second entry with a base name already
+    /// taken wrote `<dir>/..\\..\\..\\Startup\\x-evil.bat`. Whatever an entry is called, the file
+    /// lands in the footage folder.
+    #[test]
+    fn extracted_footage_stays_in_its_folder() {
+        let s = Session::default();
+        let mut proj = effectcraft_project::Project::default();
+        let dir = std::env::temp_dir().join(format!("ec-templates-media-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let ds = dir.to_string_lossy().into_owned();
+        let entry = |k: &str| (k.to_string(), b"x".to_vec());
+        let entries = [
+            entry("media/0/clip.mp4"),
+            // The base name is taken, so this one's "item id" is used — and it is not one.
+            entry("media/..\\..\\..\\Startup\\x/clip.mp4"),
+            entry("media/1/C:evil.bat"),
+        ];
+        let written = extract_footage(&s, &mut proj, &entries, &ds).unwrap();
+        assert_eq!(written.len(), entries.len());
+        for w in &written {
+            let name = w.strip_prefix(&format!("{ds}/")).unwrap_or_else(|| panic!("{w} is outside {ds}"));
+            assert!(!name.contains(['/', '\\', ':']), "{w}");
+            assert!(!name.trim_matches(['.', ' ']).is_empty(), "{w}");
+        }
+        // One file each, all of them in the folder.
+        assert_eq!(std::fs::read_dir(&dir).map(|d| d.count()).unwrap_or(0), entries.len());
+        let _ = std::fs::remove_dir_all(&dir);
+        // And the names that would leave nothing to write.
+        for n in ["..", ".", " .. ", "...", ""] {
+            assert_eq!(safe_file_name(n), "footage", "{n:?}");
+        }
+        assert_eq!(safe_file_name("clip.mp4"), "clip.mp4");
+        assert_eq!(safe_file_name(".hidden.mp4"), ".hidden.mp4");
+        assert_eq!(safe_file_name("a/b\\c:d"), "a_b_c_d");
     }
 
     #[test]
