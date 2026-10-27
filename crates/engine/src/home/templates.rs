@@ -654,6 +654,12 @@ fn safe_file_name(name: &str) -> String {
     if name.trim_matches(['.', ' ']).is_empty() { "footage".to_string() } else { name }
 }
 
+/// What two entry names must differ by to be sure of two files: a filesystem may ignore case, and
+/// Win32 ignores trailing dots and spaces.
+fn same_file_key(name: &str) -> String {
+    name.trim_end_matches(['.', ' ']).to_lowercase()
+}
+
 /// What [`embed_footage`] did.
 #[derive(Default)]
 struct Embedded {
@@ -753,9 +759,12 @@ fn extract_footage(s: &Session, proj: &mut Project, entries: &[(String, Vec<u8>)
         let item = k.trim_start_matches("media/").split('/').next().filter(|i| i.bytes().all(|b| b.is_ascii_digit())).unwrap_or("0");
         // A name another entry has taken gets the item's id, and a number if that is taken too:
         // the names an entry can ask for are not distinct, and two files must not become one.
+        // They are compared the way a filesystem might: `CLIP.png` is `clip.png` on a
+        // case-insensitive volume (Windows and macOS as they come), and Win32 drops a trailing
+        // dot or space, so `a.png.` is `a.png` there. The name written stays as it is.
         let mut name = file.clone();
         let mut n = 0usize;
-        while !used.insert(name.clone()) {
+        while !used.insert(same_file_key(&name)) {
             n += 1;
             name = if n == 1 { format!("{item}-{file}") } else { format!("{item}-{n}-{file}") };
         }
@@ -1010,6 +1019,11 @@ mod tests {
             entry("media/1/a:b.png"),
             entry("media/2/a_b.png"),
             entry("media/3/2-a_b.png"),
+            // The same file on a case-insensitive volume, and on Windows, which drops the dot.
+            entry("media/4/clip.png"),
+            entry("media/5/CLIP.png"),
+            entry("media/6/a.png"),
+            entry("media/7/a.png."),
         ];
         let written = extract_footage(&s, &mut proj, &entries, &ds).unwrap();
         assert_eq!(written.len(), entries.len());
@@ -1029,6 +1043,9 @@ mod tests {
         assert_eq!(safe_file_name("clip.mp4"), "clip.mp4");
         assert_eq!(safe_file_name(".hidden.mp4"), ".hidden.mp4");
         assert_eq!(safe_file_name("a/b\\c:d"), "a_b_c_d");
+        // Names a filesystem may not tell apart (only the case half of this shows on macOS).
+        assert_eq!(same_file_key("A.PNG. "), same_file_key("a.png"));
+        assert_ne!(same_file_key("a.png"), same_file_key("b.png"));
     }
 
     #[test]
