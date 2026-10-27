@@ -153,7 +153,7 @@ impl Confinement {
         // (`effectcraft_engine::prefs::Scripting::same_permissions`), and neither may a confined
         // agent: `prefs.set` saves the settings file, so a script run long after this session
         // would still have it. (`prefs.reset` only puts the defaults back, which grant nothing.)
-        if id == "prefs.set" && prefs_keys(params).iter().any(|k| k.to_ascii_lowercase().starts_with("scripting.")) {
+        if id == "prefs.set" && prefs_keys(params).iter().any(|k| is_scripting_pref(k)) {
             return Err(Error::BadArgs(
                 "`prefs.set`: the Scripting settings decide what a script may do, so they can't be changed while file access is confined".into(),
             ));
@@ -236,6 +236,13 @@ impl Confinement {
             }
         }
     }
+}
+
+/// Whether a `prefs.set` key reaches the Scripting page. `Prefs::set` turns the key into a JSON
+/// pointer (`key.replace('.', "/")`), so `scripting/allowScriptsWriteFiles` resolves as well as
+/// the dotted spelling, and the page on its own replaces every setting on it.
+fn is_scripting_pref(key: &str) -> bool {
+    key.split(['.', '/']).next().is_some_and(|page| page.eq_ignore_ascii_case("scripting"))
 }
 
 /// The settings `prefs.set` is given: `key`, and the keys of `values`.

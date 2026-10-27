@@ -1421,6 +1421,11 @@ fn automation_roots_refuse_running_script_code() {
         json!({"key": "scripting.allow_scripts_write_files", "value": true}),
         json!({"values": {"scripting.warnExecutingFiles": false}}),
         json!({"values": {"general.showToolTips": false, "scripting.enableJsDebugger": true}}),
+        // `Prefs::set` makes a JSON pointer of the key, so this spelling resolves too…
+        json!({"key": "scripting/allowScriptsWriteFiles", "value": true}),
+        // …and the page on its own replaces every setting on it.
+        json!({"key": "scripting", "value": {"allowScriptsWriteFiles": true}}),
+        json!({"values": {"scripting": {"warnExecutingFiles": false}}}),
     ] {
         let msg = refused(&mut s, "execute_command", json!({"command": "prefs.set", "params": params}));
         assert!(msg.contains("what a script may do"), "{msg}");
