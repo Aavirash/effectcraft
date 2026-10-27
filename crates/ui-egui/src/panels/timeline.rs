@@ -1293,6 +1293,13 @@ fn layer_icon(l: &Layer, project: &effectcraft_engine::project::Project) -> Icon
 }
 
 /// Layers being dragged to a new place in the stack (timeline rows).
+#[derive(Clone)]
+struct LayerDrag {
+    comp: ItemId,
+    owner: egui::Id,
+    layers: Vec<u64>,
+}
+
 fn layer_drag_id() -> egui::Id {
     egui::Id::unique("tl-layer-drag")
 }
@@ -1500,12 +1507,6 @@ fn insertion(layer_rows: &[(Rect, LayerId)], py: f32, top: f32) -> (Option<usize
         None => layer_rows.last().map_or(top, |(r, _)| r.max.y),
     };
     (at, y)
-}
-
-/// The `egui::Id` of the flag the row drag's release sets, telling the same frame's reorder
-/// drawing code to apply the drop.
-fn layer_drop_id() -> egui::Id {
-    egui::Id::unique("tl-layer-drop")
 }
 
 /// Whether a Project item can replace a layer's source (the same set `layer.replaceSource`
@@ -2903,13 +2904,10 @@ fn layer_row_actions(app: &mut EffectcraftApp, ui: &mut egui::Ui, g: &mut Rw, rc
     let is_sel = rc.is_sel;
     // Locked layers can't be selected or moved (unlock them with the lock switch).
     let locked = layer.switches.locked;
-    if row_resp.drag_started() && !locked {
+    if row_resp.drag_started_by(egui::PointerButton::Primary) && !locked {
         // The selected layers move together; an unselected row moves alone.
         let moving: Vec<u64> = if is_sel { comp.layers.iter().filter(|l| selected.contains(&l.id)).map(|l| l.id.0).collect() } else { vec![layer.id.0] };
-        ctx.data_mut(|d| d.insert_temp(layer_drag_id(), moving));
-    }
-    if row_resp.drag_stopped() {
-        ctx.data_mut(|d| d.insert_temp(layer_drop_id(), true));
+        ctx.data_mut(|d| d.insert_temp(layer_drag_id(), LayerDrag { comp: cid, owner: row_resp.id, layers: moving }));
     }
     app.auto.add(&format!("timeline.layer.{}.row", layer.id.0), left, &layer.name);
     if row_resp.clicked() && !locked {
@@ -4351,6 +4349,7 @@ fn graph_empty_area(ui: &mut egui::Ui, g: &mut Rw) {
 
 /// Layer reorder drag: a line where the layers land.
 fn layer_reorder_drag(ui: &mut egui::Ui, g: &mut Rw) {
+    let cid = g.tl.cid;
     let t = g.tl.t;
     let rect = g.tl.rect;
     let graph_x0 = g.tl.graph_x0;
@@ -4360,16 +4359,25 @@ fn layer_reorder_drag(ui: &mut egui::Ui, g: &mut Rw) {
     let p = g.tl.p.clone();
     let actions = &mut g.tl.actions;
     let hit_rows = &mut g.hit_rows;
-    if let Some(moving) = ctx.data(|d| d.get_temp::<Vec<u64>>(layer_drag_id())) {
-        let dropped = ctx.data_mut(|d| d.remove_temp::<bool>(layer_drop_id())).unwrap_or(false);
+    // The origin row can scroll out of view, so finish the gesture here, independently of
+    // its Response. Disabled UI, Escape or lost ownership cancels; only a primary release drops layers.
+    if let Some(drag) = ctx.data(|d| d.get_temp::<LayerDrag>(layer_drag_id())) {
+        let (down, released, escape) =
+            ctx.input(|i| (i.pointer.primary_down(), i.pointer.button_released(egui::PointerButton::Primary), i.key_pressed(egui::Key::Escape)));
+        let dropped = ctx.drag_stopped_id() == Some(drag.owner) && released;
+        let valid = ui.is_enabled() && drag.comp == cid && !escape && (dropped || (down && ctx.dragged_id() == Some(drag.owner)));
+        if dropped || !valid {
+            ctx.data_mut(|d| d.remove::<LayerDrag>(layer_drag_id()));
+        }
+        let moving = &drag.layers;
         let layer_rows: Vec<(Rect, LayerId)> = hit_rows.iter().filter(|(_, r)| matches!(r.kind, RowKind::Layer)).map(|(rr, r)| (*rr, r.layer)).collect();
         if let Some(py) = ui.input(|i| i.pointer.interact_pos().or(i.pointer.latest_pos())).map(|p| p.y)
+            && valid
             && !layer_rows.is_empty()
         {
             let (at, line_y) = insertion(&layer_rows, py, rows_rect.min.y);
             let target = at.and_then(|i| layer_rows[i..].iter().find(|(_, l)| !moving.contains(&l.0)).map(|(_, l)| *l));
             if dropped {
-                ctx.data_mut(|d| d.remove::<Vec<u64>>(layer_drag_id()));
                 // Only when the order changes (no empty undo step for a drop in place).
                 let mut order: Vec<u64> = comp.layers.iter().map(|l| l.id.0).filter(|id| !moving.contains(id)).collect();
                 let at = target.and_then(|t| order.iter().position(|id| *id == t.0)).unwrap_or(order.len());
@@ -4385,8 +4393,6 @@ fn layer_reorder_drag(ui: &mut egui::Ui, g: &mut Rw) {
                 ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
                 p.with_clip_rect(rows_rect).line_segment([pos2(rect.min.x, line_y), pos2(graph_x0, line_y)], Stroke::new(2.0, t.accent));
             }
-        } else if dropped {
-            ctx.data_mut(|d| d.remove::<Vec<u64>>(layer_drag_id()));
         }
     }
     // Quick Offset of layer bars: the last selected layer moves by whole frames with the pointer
