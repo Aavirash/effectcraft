@@ -1396,7 +1396,7 @@ fn automation_roots_refuse_a_queued_output_from_an_unsaved_project() {
     s.backend().confine(Confinement::new(&[], std::slice::from_ref(&write)).unwrap());
     call_json(&mut s, "execute_command", json!({"command": "comp.new", "params": {"name": "A", "width": 64, "height": 64}}));
     // Never saved: neither way of queueing a render may fall back to the home folder.
-    for command in ["renderQueue.add", "render.preRender"] {
+    for command in ["renderQueue.add", "render.preRender", "file.createProxy"] {
         let (c, err) = call(&mut s, "execute_command", json!({"command": command, "params": {"comp": "A"}}));
         assert!(err, "`{command}` without an output should be refused: {c:?}");
         let msg = c[0]["text"].as_str().unwrap_or_default();
@@ -1406,6 +1406,10 @@ fn automation_roots_refuse_a_queued_output_from_an_unsaved_project() {
     assert_eq!(queue["items"].as_array().map(Vec::len), Some(0), "nothing was queued: {queue}");
     // Naming an output inside a write root is how it is done.
     call_json(&mut s, "execute_command", json!({"command": "renderQueue.add", "params": {"comp": "A", "output": p("named.mp4")}}));
+    // A proxy's own `path` is a write, not the read it used to be checked as (#2131 F-11).
+    let (c, err) = call(&mut s, "execute_command", json!({"command": "file.createProxy", "params": {"comp": "A", "path": "/elsewhere/proxy.mov"}}));
+    assert!(err, "a proxy outside the roots should be refused: {c:?}");
+    assert!(c[0]["text"].as_str().unwrap_or_default().contains("cannot write"), "{c:?}");
     // Once the project is saved there, the default output (beside it) is queued as before.
     call_json(&mut s, "save_project", json!({"path": p("proj.ecproj")}));
     call_json(&mut s, "execute_command", json!({"command": "renderQueue.add", "params": {"comp": "A"}}));

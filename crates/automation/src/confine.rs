@@ -86,13 +86,14 @@ const WRITES: &[(&str, &[&str])] = &[
     ("essential.exportTemplate", &["path"]),
     ("shortcuts.export", &["path"]),
     ("renderQueue.add", &["output", "path"]),
+    ("file.createProxy", &["path", "output"]),
 ];
 
 /// Commands that write where they are not told: the project's file, the Render Queue's outputs.
 const IMPLICIT_WRITES: &[&str] = &["file.save", "file.incrementAndSave", "renderQueue.render", "render.preRender"];
 
 /// Commands that queue a render, whose output defaults to the project's folder when not given.
-const QUEUES_AN_OUTPUT: &[&str] = &["renderQueue.add", "render.preRender"];
+const QUEUES_AN_OUTPUT: &[&str] = &["renderQueue.add", "render.preRender", "file.createProxy"];
 
 /// What must be looked up before an implicitly writing command may run.
 #[derive(Debug, PartialEq, Eq)]
