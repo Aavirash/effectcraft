@@ -74,9 +74,9 @@ fn constant_environment_has_constant_irradiance() {
 #[test]
 fn a_non_finite_environment_has_no_sun_direction() {
     let nan = vec![[f32::NAN; 4]; 8 * 4];
-    assert_eq!(dominant_direction(8, 4, &nan, 0.0), ([0.0; 3], 0.0));
+    assert_eq!(dominant_direction(8, 4, &nan, [1.0; 3], 0.0), ([0.0; 3], 0.0));
     let inf = vec![[f32::INFINITY, 0.0, 0.0, 1.0]; 8 * 4];
-    assert_eq!(dominant_direction(8, 4, &inf, 0.0), ([0.0; 3], 0.0));
+    assert_eq!(dominant_direction(8, 4, &inf, [1.0; 3], 0.0), ([0.0; 3], 0.0));
 }
 
 /// The key fraction: a uniform image is directionless (key 0), a lone bright spot on black is
@@ -85,13 +85,13 @@ fn a_non_finite_environment_has_no_sun_direction() {
 #[test]
 fn environment_key_strength_tracks_directionality() {
     let uniform = vec![[0.5f32, 0.5, 0.5, 1.0]; 8 * 4];
-    assert_eq!(dominant_direction(8, 4, &uniform, 0.0).1, 0.0);
+    assert_eq!(dominant_direction(8, 4, &uniform, [1.0; 3], 0.0).1, 0.0);
     let mut spot = vec![[0.0f32; 4]; 64 * 32];
     spot[16 * 64 + 32] = [1.0, 1.0, 1.0, 1.0];
-    let (_, key) = dominant_direction(64, 32, &spot, 0.0);
+    let (_, key) = dominant_direction(64, 32, &spot, [1.0; 3], 0.0);
     assert!(key > 0.95, "a lone spot is almost fully directional: {key}");
     let (w, h, d) = scene::default_environment();
-    let (_, key) = dominant_direction(w, h, &d, 0.0);
+    let (_, key) = dominant_direction(w, h, &d, [1.0; 3], 0.0);
     assert!((0.35..0.55).contains(&key), "the default studio is a broad key with fill: {key}");
 }
 
@@ -110,16 +110,45 @@ fn opposing_bright_regions_cancel_to_no_shadow() {
     let (a, b) = ((15 * w + 16) as usize, (16 * w + 48) as usize);
     opposed[a] = [1.0, 1.0, 1.0, 1.0];
     opposed[b] = [1.0, 1.0, 1.0, 1.0];
-    assert_eq!(dominant_direction(w, h, &opposed, 0.0), ([0.0; 3], 0.0));
+    assert_eq!(dominant_direction(w, h, &opposed, [1.0; 3], 0.0), ([0.0; 3], 0.0));
     // One side twice as bright: the mean points at the brighter spot with its share of the
     // weight (key = 1/3 — two parts against one).
     let mut tilted = opposed.clone();
     tilted[a] = [2.0, 2.0, 2.0, 1.0];
-    let (sun, key) = dominant_direction(w, h, &tilted, 0.0);
+    let (sun, key) = dominant_direction(w, h, &tilted, [1.0; 3], 0.0);
     assert!(sun != [0.0; 3] && key > 0.3, "the brighter side wins: {sun:?} key {key}");
     let want = shade::equirect_dir(16.5 / 64.0, 15.5 / 32.0, 0.0);
     let dot = sun[0] * want[0] + sun[1] * want[1] + sun[2] * want[2];
     assert!(dot > 0.999, "the sun points at the brighter spot: {sun:?} vs {want:?}");
+}
+
+/// #2436 review: the sun follows the tinted radiance, not the raw texels — equally bright red
+/// and blue regions on exactly opposite texels cancel to a white light (no shadow), but the
+/// red light's tint removes the blue side's pull, so the mean points straight at the red one
+/// (a blue light, at the blue one): the shadow lands where the emitted light comes from.
+#[test]
+fn a_coloured_light_shadows_from_the_region_it_tints() {
+    let (w, h) = (64u32, 32u32);
+    let mut opposed = vec![[0.0f32; 4]; (w * h) as usize];
+    // Rows 15 and 16 mirror about the equator, columns 16 and 48 half a width apart: the two
+    // texel-centre directions are exactly opposite — equal solid-angle weight, opposite pull.
+    let (a, b) = ((15 * w + 16) as usize, (16 * w + 48) as usize);
+    opposed[a] = [1.0, 0.0, 0.0, 1.0];
+    opposed[b] = [0.0, 0.0, 1.0, 1.0];
+    // To a white light the channel sums are equal: they cancel, no shadow.
+    assert_eq!(dominant_direction(w, h, &opposed, [1.0; 3], 0.0), ([0.0; 3], 0.0));
+    // A red light's tint zeroes the blue texel's weight: the red one becomes a lone spot.
+    // (Any positive scale of the tint — the normalised [3, 0, 0] included — points the same
+    // way; only the channel ratios matter.)
+    let (sun, key) = dominant_direction(w, h, &opposed, [1.0, 0.0, 0.0], 0.0);
+    let want = shade::equirect_dir(16.5 / 64.0, 15.5 / 32.0, 0.0);
+    let dot = sun[0] * want[0] + sun[1] * want[1] + sun[2] * want[2];
+    assert!(dot > 0.999 && key > 0.95, "the red side wins: {sun:?} key {key}");
+    // A blue light points at the blue one instead.
+    let (sun, _) = dominant_direction(w, h, &opposed, [0.0, 0.0, 1.0], 0.0);
+    let want = shade::equirect_dir(48.5 / 64.0, 16.5 / 32.0, 0.0);
+    let dot = sun[0] * want[0] + sun[1] * want[1] + sun[2] * want[2];
+    assert!(dot > 0.999, "the blue side wins: {sun:?}");
 }
 
 #[test]
@@ -596,6 +625,83 @@ fn a_uniform_environment_casts_no_shadow() {
     assert_eq!(casting.data, off.data, "a directionless image casts no shadow");
 }
 
+/// #2436 review: a chromatic environment under a coloured light — equally bright red and blue
+/// regions on exactly opposite sides of the image cancel to a white light (it casts no
+/// shadow), but the red Environment light's tint removes the blue region's pull, so the red
+/// one becomes the key and casts the shadow the user asked for, from the red side.
+#[test]
+fn a_red_light_shadows_from_the_red_region_of_a_chromatic_environment() {
+    let (mut p, cid) = project(200, 150);
+    // The floor facing the camera, a sphere in front of it casting shadows only.
+    add(&mut p, cid, LayerSource::Primitive { kind: PrimitiveKind::Plane }, |l| {
+        set(l, "geometryOptions/width", Value::Scalar(400.0));
+        set(l, "geometryOptions/height", Value::Scalar(400.0));
+        set(l, "transform/position", Value::Vec3([100.0, 75.0, 110.0]));
+        set(l, "materialOptions/baseColor", Value::Color([1.0, 1.0, 1.0, 1.0]));
+    });
+    add(&mut p, cid, LayerSource::Primitive { kind: PrimitiveKind::Sphere }, |l| {
+        set(l, "geometryOptions/radius", Value::Scalar(30.0));
+        set(l, "transform/position", Value::Vec3([100.0, 75.0, 50.0]));
+        set(l, "materialOptions/castsShadows", Value::Enum(2));
+    });
+    // The Environment Layer: a black background with a red square and an equally bright blue
+    // one at exactly antipodal image positions (the blue is the point mirror of the red through
+    // the antipodal map x -> x + w/2, y -> h - y: centres (14.5, 44.5) and (114.5, 105.5) in a
+    // 200x150 image, 20x20 each) — equal solid-angle weight, opposite pull. The red sits up,
+    // left and toward the camera; the blue down, right and away from it.
+    add(&mut p, cid, LayerSource::Shape, |l| {
+        l.environment = true;
+        let mut next = 10_000u64;
+        let ids = &mut build::Ids(&mut next);
+        // Contents stack like the AE timeline — the first group is on top — so the background
+        // goes in last, under the red and blue squares (and its full-comp rect keeps the
+        // layer buffer full-size: a shape layer's buffer otherwise crops to its content).
+        let red_rect = build::shape_rect(ids, [20.0, 20.0], [-85.5, -30.5], 0.0);
+        let red_fill = build::shape_fill(ids, [1.0, 0.0, 0.0, 1.0]);
+        let red = build::shape_group(ids, "Red", vec![red_rect, red_fill]);
+        let blue_rect = build::shape_rect(ids, [20.0, 20.0], [14.5, 30.5], 0.0);
+        let blue_fill = build::shape_fill(ids, [0.0, 0.0, 1.0, 1.0]);
+        let blue = build::shape_group(ids, "Blue", vec![blue_rect, blue_fill]);
+        let bg_rect = build::shape_rect(ids, [200.0, 150.0], [0.0, 0.0], 0.0);
+        let bg_fill = build::shape_fill(ids, [0.0, 0.0, 0.0, 1.0]);
+        let bg = build::shape_group(ids, "BG", vec![bg_rect, bg_fill]);
+        for g in [red, blue, bg] {
+            l.props.sub_mut("contents").unwrap().children.push(g.into());
+        }
+    });
+    // A white light over the chromatic image: the regions cancel — Cast Shadows changes
+    // nothing, exactly like a directionless image.
+    add(&mut p, cid, LayerSource::Light { kind: LightKind::Environment }, |l| {
+        set(l, "lightOptions/castsShadows", Value::Bool(true));
+    });
+    let white_casting = render(&p, cid);
+    let comp = p.comp_mut(cid).unwrap();
+    set(comp.layers.iter_mut().find(|l| l.is_light()).unwrap(), "lightOptions/castsShadows", Value::Bool(false));
+    let white_off = render(&p, cid);
+    assert_eq!(white_casting.data, white_off.data, "a white light sees no dominant region in the opposed red and blue");
+    // The red light: the tint removes the blue region, the red one shadows the sphere onto the
+    // floor below and right of it (the shadow falls opposite the red region).
+    let comp = p.comp_mut(cid).unwrap();
+    let light = comp.layers.iter_mut().find(|l| l.is_light()).unwrap();
+    set(light, "lightOptions/color", Value::Color([1.0, 0.0, 0.0, 1.0]));
+    set(light, "lightOptions/castsShadows", Value::Bool(true));
+    let img = render(&p, cid);
+    let chan = |img: &crate::Image, x: usize, y: usize| img.data[y * 200 + x][0];
+    let side = chan(&img, 25, 75);
+    let (mut core, mut cx) = (f32::INFINITY, 0usize);
+    for y in 100..150 {
+        for x in 60..170 {
+            if chan(&img, x, y) < core {
+                core = chan(&img, x, y);
+                cx = x;
+            }
+        }
+    }
+    assert!(side > 0.1, "the floor is lit red: {side}");
+    assert!(core < side * 0.65, "the red region shadows the sphere onto the floor: {core} vs {side} at x {cx}");
+    assert!(cx > 100, "the shadow is opposite the red region (right of the sphere): {cx}");
+}
+
 /// #2436: the default environment (no Source, no Environment Layer) is a dim studio — a mean
 /// of 0.3, not the 1.0 that would act like a 100 % white Ambient light and wash the scene out
 /// (After Effects' default does not) — and directional: its dominant region points up and
@@ -613,7 +719,7 @@ fn default_environment_keeps_the_level_and_points_up() {
         weight += sa;
     }
     assert!((mean / weight - 0.3).abs() < 0.01, "dim studio mean: {}", mean / weight);
-    let (sun, key) = dominant_direction(w, h, &d, 0.0);
+    let (sun, key) = dominant_direction(w, h, &d, [1.0; 3], 0.0);
     assert!(sun[1] < -0.5, "the key is up: {sun:?}");
     assert!(sun[2] < -0.3, "the key is toward the camera: {sun:?}");
     assert!(sun[0].abs() < 0.1, "symmetric left-right: {sun:?}");

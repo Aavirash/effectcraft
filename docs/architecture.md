@@ -165,7 +165,9 @@ mip chain with the split-sum environment BRDF fit), and percentage-closer-filter
 (spot: perspective, parallel: orthographic over the scene, point: six cube faces, environment:
 one orthographic from the image's dominant bright region — none only when the image lacks a
 sufficiently strong dominant direction (a uniform one, or opposing bright regions that
-cancel) — occluding only the image's directional key fraction of
+cancel) — the region weighted by the light's colour, so a coloured light shadows from the
+regions it actually lights (opposing red and blue regions cancel to a white light, but a red
+light's shadow comes from the red one) — occluding only the image's directional key fraction of
 the light, so the shadow stays partial like After Effects' area-light shadows, with a soft
 default penumbra of at least eight pixels or four map texels). A Source or Environment Layer
 that fails to render — a deleted layer, missing footage — lights nothing: no silent fallback

@@ -221,7 +221,10 @@ Things that tripped up a long agent-driven session (a multi-scene 3D piece built
   like the other lights: Cast Shadows shades the scene from the image's dominant bright region
   (the default environment's key, or a source image's brightest area; an image without a
   sufficiently strong dominant direction has none — a uniform one, or opposing bright regions
-  that cancel — so it casts no shadow) — occluding only that key's share of the light, so the
+  that cancel — so it casts no shadow) — the region weighted by the light's colour, so a
+  coloured light shadows from the regions it actually lights (opposing red and blue regions
+  cancel to a white light, but a red light's shadow comes from the red one) — occluding only
+  that key's share of the light, so the
   shadow stays partial like After Effects' area-light shadows, and soft by default (a penumbra
   of at least 8 pixels or four map texels, plus Shadow Diffusion). It only lights
   Advanced 3D comps, so creating one (or changing a light's type to Environment) switches a

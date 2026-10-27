@@ -819,23 +819,27 @@ pub fn irradiance_map(sw: u32, sh: u32, src: &[[f32; 4]], w: u32, h: u32) -> Vec
     out
 }
 
-/// The environment image's dominant direction and key strength: the radiance-weighted mean
-/// texel direction (solid-angle weighted, rotation applied), or `([0; 3], 0.0)` when the image
-/// is directionless (a uniform environment cancels to zero, and opposing bright regions that
-/// cancel leave no mean either). The mean of a single bright spot
+/// The environment image's dominant direction and key strength: the mean texel direction
+/// weighted by the radiance the light actually emits — solid-angle weighted, rotation applied,
+/// each texel's channels scaled by `tint` (the light's colour, `[1; 3]` for a white one) — or
+/// `([0; 3], 0.0)` when that radiance is directionless (a uniform environment cancels to zero,
+/// and opposing bright regions that cancel leave no mean either — though a chromatic one need
+/// not stay directionless once tinted: a red light over equally bright red and blue opposite
+/// regions removes the blue pull and points at the red one). The mean of a single bright spot
 /// on black points straight at it; a gradient points somewhere between its ends. The returned
 /// key fraction is the mean vector's length over the radiance weight — how directional the
 /// image is, 0 (uniform) to ~1 (a lone spot) — and is the most of its light an Environment
 /// light's shadow can remove.
-pub(crate) fn dominant_direction(w: u32, h: u32, d: &[[f32; 4]], rot: f32) -> ([f32; 3], f32) {
+pub(crate) fn dominant_direction(w: u32, h: u32, d: &[[f32; 4]], tint: [f32; 3], rot: f32) -> ([f32; 3], f32) {
     use super::shade::equirect_dir;
     let (mut x, mut y, mut z) = (0.0f32, 0.0f32, 0.0f32);
     let mut weight = 0.0f32;
     for (i, p) in d.iter().enumerate() {
         let (tx, ty) = ((i % w as usize) as u32, (i / w as usize) as u32);
         let (u, v) = ((tx as f32 + 0.5) / w as f32, (ty as f32 + 0.5) / h as f32);
-        // Luminance × solid angle (∝ sin θ).
-        let lum = (p[0] + p[1] + p[2]) * (v * std::f32::consts::PI).sin();
+        // Tinted radiance × solid angle (∝ sin θ): the shadow must follow the light the
+        // environment emits, not the raw texels.
+        let lum = (p[0] * tint[0] + p[1] * tint[1] + p[2] * tint[2]) * (v * std::f32::consts::PI).sin();
         let dir = equirect_dir(u, v, rot);
         x += dir[0] * lum;
         y += dir[1] * lum;
@@ -863,9 +867,16 @@ pub(crate) fn add_environment(
     shadow_darkness: f64,
     shadow_diffusion: f64,
 ) {
+    // Intensity × colour folded into the radiance (one scalar on the GPU): tint the texels.
+    // A white (or off) light leaves them as they are.
+    let k = (intensity[0] + intensity[1] + intensity[2]) / 3.0;
+    let tint = if k > 0.0 && (intensity[0] != intensity[1] || intensity[1] != intensity[2]) { intensity.map(|c| c / k) } else { [1.0, 1.0, 1.0] };
     // The shadow direction and key strength from the full-resolution image, before the mip
-    // chain averages it — only a shadow-casting light reads them, so only one pays for the pass.
-    let (sun, key) = if casts_shadows { dominant_direction(w, h, &data, rotation) } else { ([0.0; 3], 0.0) };
+    // chain averages it — only a shadow-casting light reads them, so only one pays for the
+    // pass — and weighted by the tint, so the shadow follows the radiance the light emits:
+    // opposing chromatic regions that cancel untinted need not cancel once the colour removes
+    // one of them (a red light over equally bright red and blue sides shadows from the red).
+    let (sun, key) = if casts_shadows { dominant_direction(w, h, &data, tint, rotation) } else { ([0.0; 3], 0.0) };
     // Radiance level 0 at most 1024 wide.
     let (mut w, mut h, mut d) = (w, h, data);
     while w > 1024 {
@@ -888,10 +899,7 @@ pub(crate) fn add_environment(
     let (sw, sh, sd) = small.unwrap_or((w, h, d));
     let irr = irradiance_map(sw, sh, &sd, 32, 16);
     let ii = b.texture_from(32, 16, [0, 1], irr.into_iter()) as u32;
-    // Intensity × colour folded into the radiance (one scalar on the GPU): tint the texels.
-    let k = (intensity[0] + intensity[1] + intensity[2]) / 3.0;
-    if k > 0.0 && (intensity[0] != intensity[1] || intensity[1] != intensity[2]) {
-        let tint = intensity.map(|c| c / k);
+    if tint != [1.0, 1.0, 1.0] {
         for t in first..=ii {
             let ti = b.s.textures[t as usize];
             for p in &mut b.s.texels[ti.offset as usize..(ti.offset + ti.width * ti.height) as usize] {
