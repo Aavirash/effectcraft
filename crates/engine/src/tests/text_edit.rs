@@ -1278,6 +1278,41 @@ fn duplicate_during_an_edit_copies_the_layer_not_a_selected_property_group() {
 }
 
 #[test]
+fn duplicate_during_an_edit_leaves_no_key_or_vertex_selected_on_the_original() {
+    use effectcraft_project::LayerId;
+    // Opening the editor keeps the keyframe and mask-vertex selection too. Once the copy takes the
+    // selection, Clear deletes the copy, not a key or a vertex of the original.
+    for what in ["keyframe", "mask vertex"] {
+        let (mut s, t) = session("Hello");
+        let mask = match what {
+            "keyframe" => {
+                for time in [0.0, 1.0] {
+                    s.execute("prop.addKey", json!({"layer": t, "path": "transform/opacity", "time": time, "value": 50})).unwrap();
+                }
+                s.execute("keys.select", json!({"keys": [{"layer": t, "path": "transform/opacity", "time": 0.0}]})).unwrap();
+                None
+            }
+            // The Pen leaves the new mask's last vertex selected.
+            _ => Some(s.execute("mask.new", json!({"layer": t, "vertices": [[0, 0], [40, 0], [40, 40]], "closed": true})).unwrap()["mask"].as_u64().unwrap()),
+        };
+        let original = |s: &Session| {
+            let l = s.active_comp().unwrap().layer(LayerId(t)).unwrap();
+            match mask {
+                None => l.props.prop("transform/opacity").unwrap().keys.len(),
+                Some(m) => l.props.find_group(m).unwrap().get("path").unwrap().value.as_path().unwrap().vertices.len(),
+            }
+        };
+        let (n, before) = (original(&s), layer_count(&s));
+        begin_edit_at(&mut s, t, 5);
+        let copy = s.execute("edit.duplicate", json!({})).unwrap()[0].as_u64().unwrap();
+        assert_eq!(s.state.selected_layers, vec![LayerId(copy)], "{what}: the copy is selected");
+        s.execute("edit.clear", json!({})).unwrap();
+        assert_eq!(layer_count(&s), before, "{what}: Clear deletes the selected copy");
+        assert_eq!(original(&s), n, "{what}: and leaves the original's {what} alone");
+    }
+}
+
+#[test]
 fn duplicate_ends_the_open_edit_and_selects_the_copy() {
     let (mut s, t) = editing("Hello", 5);
     s.execute("text.insert", json!({"text": "!"})).unwrap();

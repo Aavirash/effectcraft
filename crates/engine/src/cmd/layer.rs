@@ -28,6 +28,7 @@ pub(crate) use create::{color_p, index_p, insert_layer, insert_layer_at, place, 
 pub(crate) use parent::parent_fixes;
 use parent::set_parent;
 use replace::{has_replace_source, replace_source};
+pub(crate) use select::select_only;
 use select::{select, select_next, select_prev, select_step};
 use switches::{blend, rename, set_comment, set_switch, track_matte};
 use timing::{arrange, move_frames, precompose, slip, timing};

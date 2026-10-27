@@ -151,11 +151,13 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
         }
         relink_copies(comp, &map);
         proj.next_id = next;
-        st.selected_layers = created.clone();
-        // The property selection the edit kept was passed over above and belongs to the
-        // originals: left in place, the next Duplicate or Clear would act on it, not the copies.
+        // The property, keyframe and mask-vertex selection the edit kept belongs to the originals;
+        // left in place, the next Duplicate or Clear would act on it, not on the copies. So during
+        // an edit the copies take the selection the way a click on them would.
         if editing {
-            st.selected_props.clear();
+            super::layer::select_only(st, created.clone());
+        } else {
+            st.selected_layers = created.clone();
         }
         Ok(created)
     })?;
