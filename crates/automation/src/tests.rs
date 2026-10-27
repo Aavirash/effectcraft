@@ -1380,3 +1380,55 @@ fn automation_roots_confine_file_access() {
     assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 1, "only the unconfined save");
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// #2131 (audit F-11, "Running code"): `script.run` and the Scripts menu are refused while file
+/// access is confined, but a ScriptUI panel's script runs just as freely — when the panel opens,
+/// when an event reaches one of its controls, or when one of its tasks comes due — and
+/// `prefs.set` could grant every script run afterwards the file and network access the user
+/// withheld, in the settings file, long after the session. All of that is refused too.
+#[test]
+fn automation_roots_refuse_running_script_code() {
+    use crate::confine::Confinement;
+    let base = std::env::temp_dir().join(format!("ec-mcp-scripts-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&base).unwrap();
+    let mut s = server();
+    s.backend().confine(Confinement::new(&[], std::slice::from_ref(&base)).unwrap());
+    let refused = |s: &mut McpServer, name: &str, args: Value| {
+        let (c, err) = call(s, name, args.clone());
+        assert!(err, "{name} {args} should be refused: {c:?}");
+        c[0]["text"].as_str().unwrap_or_default().to_string()
+    };
+    // Every way a script's code starts.
+    for (command, params) in [
+        ("window.scriptPanel", json!({"name": "Layer Tools.jsx"})),
+        ("window.restoreScriptPanels", json!({})),
+        ("script.runTasks", json!({})),
+        ("scriptui.click", json!({"window": 1, "widget": 2})),
+        ("scriptui.set", json!({"window": 1, "widget": 2, "value": 1})),
+        ("scriptui.mouse", json!({"window": 1, "widget": 2, "type": "click"})),
+        ("scriptui.close", json!({"window": 1})),
+    ] {
+        let msg = refused(&mut s, "execute_command", json!({"command": command, "params": params}));
+        assert!(msg.contains("not available while file access is confined"), "`{command}`: {msg}");
+    }
+    // Including as a batch step.
+    let msg = refused(&mut s, "batch", json!({"steps": [{"command": "window.scriptPanel", "params": {"name": "x.jsx"}}]}));
+    assert!(msg.contains("not available while file access is confined"), "{msg}");
+    // What scripts may do stays as the user left it, by either spelling of the setting.
+    for params in [
+        json!({"key": "scripting.allowScriptsWriteFiles", "value": true}),
+        json!({"key": "scripting.allow_scripts_write_files", "value": true}),
+        json!({"values": {"scripting.warnExecutingFiles": false}}),
+        json!({"values": {"general.showToolTips": false, "scripting.enableJsDebugger": true}}),
+    ] {
+        let msg = refused(&mut s, "execute_command", json!({"command": "prefs.set", "params": params}));
+        assert!(msg.contains("what a script may do"), "{msg}");
+    }
+    let got = call_json(&mut s, "execute_command", json!({"command": "prefs.get", "params": {"key": "scripting.allowScriptsWriteFiles"}}));
+    assert_eq!(got, json!(false), "{got}");
+    // Other settings, and looking at the script windows, still work.
+    call_json(&mut s, "execute_command", json!({"command": "prefs.set", "params": {"key": "general.showToolTips", "value": false}}));
+    call_json(&mut s, "execute_command", json!({"command": "scriptui.list"}));
+    let _ = std::fs::remove_dir_all(&base);
+}

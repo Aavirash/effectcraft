@@ -7,7 +7,9 @@
 //! the roots (symbolic links resolved, no `..`), any other absolute path in its parameters too,
 //! and commands that write to a file they are not given (Save, Increment and Save, rendering the
 //! Render Queue) are checked against where they would write. Commands that run code or open
-//! other applications (scripts, Execute File, Reveal in Finder…) are refused while confined.
+//! other applications (scripts, ScriptUI panels and the events that reach them, Execute File,
+//! Reveal in Finder…) are refused while confined, as is granting scripts the file and network
+//! access the user withheld.
 
 use std::path::{Component, Path, PathBuf};
 
@@ -35,6 +37,15 @@ const REFUSED: &[&str] = &[
     "file.installScript",
     "file.installScriptUIPanel",
     "file.uninstallScript",
+    // A ScriptUI panel's script runs when the panel opens, when an event reaches one of its
+    // controls, and when one of its `app.scheduleTask` tasks comes due.
+    "window.scriptPanel",
+    "window.restoreScriptPanels",
+    "script.runTasks",
+    "scriptui.click",
+    "scriptui.set",
+    "scriptui.mouse",
+    "scriptui.close",
     "file.executeFile",
     "file.revealInFinder",
     "layer.openSource",
@@ -138,6 +149,15 @@ impl Confinement {
         if REFUSED.contains(&id) {
             return Err(Error::BadArgs(format!("`{id}` is not available while file access is confined (--automation-read-root/--automation-write-root)")));
         }
+        // Scripts can't grant themselves the access the user withheld
+        // (`effectcraft_engine::prefs::Scripting::same_permissions`), and neither may a confined
+        // agent: `prefs.set` saves the settings file, so a script run long after this session
+        // would still have it. (`prefs.reset` only puts the defaults back, which grant nothing.)
+        if id == "prefs.set" && prefs_keys(params).iter().any(|k| k.to_ascii_lowercase().starts_with("scripting.")) {
+            return Err(Error::BadArgs(
+                "`prefs.set`: the Scripting settings decide what a script may do, so they can't be changed while file access is confined".into(),
+            ));
+        }
         if id == "engine.batch" {
             for step in params.get("steps").and_then(Value::as_array).into_iter().flatten() {
                 let Some(inner) = step.get("command").or_else(|| step.get("id")).and_then(Value::as_str) else { continue };
@@ -216,6 +236,15 @@ impl Confinement {
             }
         }
     }
+}
+
+/// The settings `prefs.set` is given: `key`, and the keys of `values`.
+fn prefs_keys(params: &Value) -> Vec<&str> {
+    let mut keys: Vec<&str> = params.get("key").and_then(Value::as_str).into_iter().collect();
+    if let Some(Value::Object(m)) = params.get("values") {
+        keys.extend(m.keys().map(String::as_str));
+    }
+    keys
 }
 
 fn keys_of(table: &[(&str, &'static [&'static str])], id: &str) -> Option<&'static [&'static str]> {
