@@ -841,9 +841,18 @@ pub fn comp_content_key(project: &effectcraft_project::Project, comp: effectcraf
 
 /// [`comp_content_key`] with [`VirtualFileId`] for paths `std::fs::metadata` cannot describe.
 pub fn comp_content_key_with(project: &effectcraft_project::Project, comp: effectcraft_project::ItemId, virtual_id: Option<VirtualFileId<'_>>) -> u128 {
+    comp_content_key_for_renderer(project, comp, virtual_id, RENDER_VERSION)
+}
+
+fn comp_content_key_for_renderer(
+    project: &effectcraft_project::Project,
+    comp: effectcraft_project::ItemId,
+    virtual_id: Option<VirtualFileId<'_>>,
+    renderer: &str,
+) -> u128 {
     use effectcraft_project::{ItemKind, LayerSource};
     let mut h = Hash128::default();
-    h.write(RENDER_VERSION.as_bytes());
+    h.write(renderer.as_bytes());
     hash_debug(&mut h, &project.settings);
     let mut seen = std::collections::BTreeSet::new();
     let mut stack = vec![comp];
@@ -1010,7 +1019,7 @@ mod tests {
         let comp = Comp::new(2, 2, FrameRate::FPS_30, Tick::from_seconds_f64(1.0));
         let id = project.add_item("Cached composition", effectcraft_color::Label::None, None, ItemKind::Comp(comp.into()));
         let key = frame_key(comp_content_key(&project, id), 0, 1000, 0);
-        let previous_key = 188276472871424236106264377269312920732;
+        let previous_key = frame_key(comp_content_key_for_renderer(&project, id, None, "effectcraft-render-2"), 0, 1000, 0);
         let dir = tmpdir("previous-renderer");
         {
             let cache = DiskCache::open(&dir, 1 << 30).unwrap();
