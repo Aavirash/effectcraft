@@ -751,7 +751,14 @@ fn extract_footage(s: &Session, proj: &mut Project, entries: &[(String, Vec<u8>)
         // The item's id, and only that: it is written as one ([`embed_footage`]), but a template
         // from elsewhere can hold anything there, and `..\` in it walks out of `dir` on Windows.
         let item = k.trim_start_matches("media/").split('/').next().filter(|i| i.bytes().all(|b| b.is_ascii_digit())).unwrap_or("0");
-        let name = if used.insert(file.clone()) { file } else { format!("{item}-{file}") };
+        // A name another entry has taken gets the item's id, and a number if that is taken too:
+        // the names an entry can ask for are not distinct, and two files must not become one.
+        let mut name = file.clone();
+        let mut n = 0usize;
+        while !used.insert(name.clone()) {
+            n += 1;
+            name = if n == 1 { format!("{item}-{file}") } else { format!("{item}-{n}-{file}") };
+        }
         let out = format!("{dir}/{name}");
         s.services.store_file(&out, v).map_err(|e| EngineError::Other(format!("cannot write {out}: {e}")))?;
         if let Some(imp) = &s.importer {
@@ -999,6 +1006,10 @@ mod tests {
             // The base name is taken, so this one's "item id" is used — and it is not one.
             entry("media/..\\..\\..\\Startup\\x/clip.mp4"),
             entry("media/1/C:evil.bat"),
+            // Three that collide once the first is made safe: each still gets its own file.
+            entry("media/1/a:b.png"),
+            entry("media/2/a_b.png"),
+            entry("media/3/2-a_b.png"),
         ];
         let written = extract_footage(&s, &mut proj, &entries, &ds).unwrap();
         assert_eq!(written.len(), entries.len());
@@ -1007,7 +1018,8 @@ mod tests {
             assert!(!name.contains(['/', '\\', ':']), "{w}");
             assert!(!name.trim_matches(['.', ' ']).is_empty(), "{w}");
         }
-        // One file each, all of them in the folder.
+        // One file each, all of them in the folder, none overwritten by the next.
+        assert_eq!(written.iter().collect::<std::collections::BTreeSet<_>>().len(), entries.len(), "{written:?}");
         assert_eq!(std::fs::read_dir(&dir).map(|d| d.count()).unwrap_or(0), entries.len());
         let _ = std::fs::remove_dir_all(&dir);
         // And the names that would leave nothing to write.
