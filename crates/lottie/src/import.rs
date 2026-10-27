@@ -47,7 +47,9 @@ fn s<'a>(j: &'a Json, k: &str) -> Option<&'a str> {
 
 fn hex_color(sc: &str) -> [f32; 3] {
     let h = sc.trim_start_matches('#');
-    let c = |i: usize| h.get(i..i + 2).and_then(|x| u8::from_str_radix(x, 16).ok()).unwrap_or(0) as f32 / 255.0;
+    let c = |i: usize| {
+        h.get(i..i + 2).filter(|x| x.bytes().all(|b| b.is_ascii_hexdigit())).and_then(|x| u8::from_str_radix(x, 16).ok()).unwrap_or(0) as f32 / 255.0
+    };
     [c(0), c(2), c(4)]
 }
 
@@ -483,5 +485,17 @@ fn build_layers(cx: &mut Ctx, project: &mut Project, comp: &mut Comp, layers: &[
             l.parent = parent_id;
             l.track_matte = matte_id;
         }
+    }
+}
+
+#[cfg(test)]
+mod hex_color_tests {
+    use super::hex_color;
+
+    #[test]
+    fn hex_color_rejects_plus_sign() {
+        assert_eq!(hex_color("#+f0000"), [0.0, 0.0, 0.0]);
+        assert_eq!(hex_color("#zz0000"), [0.0, 0.0, 0.0]);
+        assert_eq!(hex_color("#ff0000"), [1.0, 0.0, 0.0]);
     }
 }
