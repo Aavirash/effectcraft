@@ -5,7 +5,7 @@
 use std::sync::Mutex;
 
 use effectcraft_project::render_queue::{AlphaMode, Channels, CurrentOrOff, EffectsMode, FrameSample, RenderLog, ResizeQuality, SwitchOverride, log_path};
-use effectcraft_project::{Comp, Project};
+use effectcraft_project::{BitDepth, Comp, Project};
 use effectcraft_raster::Image;
 use effectcraft_render::{Backend, LayerCache, RenderOpts, Renderer};
 use effectcraft_time::Tick;
@@ -318,10 +318,13 @@ impl<'a> Cx<'a> {
 
     /// 8-bit RGBA of the requested channels cropped/padded to `w`×`h` (codec rounding): RGB over
     /// the comp background (opaque), RGB + Alpha straight or premultiplied, or the alpha matte.
-    /// The colour is dithered on its way to 8 bits, as After Effects dithers colours converted to
-    /// 8 bpc for rendering and export, so gradients rendered at 16 or 32 bpc don't band (#2022).
+    /// When the render runs above 8 bpc, the colour is dithered on its way to 8 bits, as After
+    /// Effects dithers colours converted down to 8 bpc for rendering and export, so gradients
+    /// rendered at 16 or 32 bpc don't band (#2022). An 8 bpc render has no finer values to
+    /// dither, so its output stays byte for byte what it was.
     pub fn pixels(&self, img: &Image, comp: &Comp, channels: Channels, w: u32, h: u32) -> Vec<u8> {
-        self.pixels_with(img, comp, channels, w, h, true)
+        let dither = self.project.settings.bit_depth != BitDepth::Bpc8;
+        self.pixels_with(img, comp, channels, w, h, dither)
     }
 
     /// [`Cx::pixels`], dithering the colour or not (a GIF palette gains nothing from dither noise).
