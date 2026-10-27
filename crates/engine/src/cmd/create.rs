@@ -52,6 +52,9 @@ fn create(s: &mut Session, p: &Value) -> Result<Value> {
                         ItemKind::Solid(Solid { color: [1.0, 1.0, 1.0], width: comp.width, height: comp.height, pixel_aspect: 1.0 }),
                     );
                     let mut l = build::layer(proj, &comp, &name, LayerSource::Solid { item: sid }, (comp.width, comp.height), None);
+                    // A soloed source keeps its Solo switch with video off, and any_solo hides
+                    // the non-soloed copy: the copy takes the Solo over to stay visible.
+                    l.switches.solo = src.switches.solo;
                     // CC Composite referencing the 3D layer: the solid shows its render (the 2D
                     // copy).
                     let fx = effectcraft_effects::find("ec.channel.cccomposite").ok_or_else(|| bad("layer.create", "the CC Composite effect is missing"))?;

@@ -231,3 +231,27 @@ fn instance3d_shows_nothing_outside_the_source_layer_range() {
     let outside = s.render(comp, Tick::from_seconds_f64(1.5), RenderOpts::default());
     assert!(outside.data.iter().all(|p| p[3] < 1e-3), "transparent after the source's out point: {:?}", px(&outside, 320, 180));
 }
+
+#[test]
+fn instance3d_keeps_the_copy_visible_when_the_source_is_soloed() {
+    let mut s = session();
+    let model = triangle_model(&mut s);
+    let comp = cid(&s);
+    // Solo the model, then create the instance: any_solo hides non-soloed layers and the
+    // source's video goes off, so the copy has to take the Solo over.
+    s.edit("solo", None, |p, _| {
+        p.comp_mut(comp).unwrap().layer_mut(LayerId(model)).unwrap().switches.solo = true;
+        Ok(())
+    })
+    .unwrap();
+    let before = s.render(comp, Tick::ZERO, RenderOpts::default());
+    assert!(px(&before, 320, 180)[3] > 0.9, "the soloed model shows: {:?}", px(&before, 320, 180));
+    s.execute("layer.select", json!({"layers": [model]})).unwrap();
+    let r = s.execute("layer.create", json!({"op": "instance3d"})).unwrap();
+    let solid = r["layers"][0].as_u64().unwrap();
+    assert!(layer_in(&s, comp, solid).switches.solo, "the copy takes the source's Solo switch");
+    assert!(!layer_in(&s, comp, model).switches.video, "the source keeps its video off");
+    let after = s.render(comp, Tick::ZERO, RenderOpts::default());
+    assert!(px(&after, 320, 180)[3] > 0.9, "the soloed copy shows the model: {:?}", px(&after, 320, 180));
+    assert!(close(&before, &after, 2e-2), "the comp renders the same through the copy:\n{:?}\n{:?}", px(&before, 320, 180), px(&after, 320, 180));
+}
