@@ -131,18 +131,28 @@ impl NativeMenu {
 /// otherwise follows the project clipboard and would be greyed out with nothing copied there,
 /// while the field can paste.
 pub fn build_now(app: &EffectcraftApp, ctx: &egui::Context) -> NativeMenu {
-    fn enable(nodes: &mut [NativeNode]) {
+    fn enable(app: &EffectcraftApp, nodes: &mut [NativeNode]) {
         for node in nodes {
             match node {
-                NativeNode::Item(item) if edits_text(&item.command) => item.enabled = true,
-                NativeNode::Submenu { children, .. } => enable(children),
+                NativeNode::Item(item) if edits_text(&item.command) => {
+                    item.enabled = true;
+                    let source = match item.command.as_str() {
+                        "edit.undo" => Some("Undo"),
+                        "edit.redo" => Some("Redo"),
+                        _ => None,
+                    };
+                    if let Some(source) = source {
+                        item.label = crate::i18n::label(app, &item.command, source).into();
+                    }
+                }
+                NativeNode::Submenu { children, .. } => enable(app, children),
                 _ => {}
             }
         }
     }
     let mut menu = build(app);
     if text_field_window(ctx).is_some() {
-        enable(&mut menu.menus);
+        enable(app, &mut menu.menus);
     }
     menu
 }
