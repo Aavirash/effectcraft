@@ -84,6 +84,27 @@ fn a_startup_dialog_stays_open_and_its_script_goes_on_when_it_closes() {
 }
 
 #[test]
+fn startup_scripts_tasks_go_on_after_a_project_opens() {
+    use web_time::{Duration, Instant};
+    let store = Arc::new(MemoryConfig::default());
+    store.write(&format!("{STARTUP_DIR}/A Poll.jsx"), "app.scheduleTask('writeLn(\"poll\")', 100, true);").unwrap();
+    // A task scheduled after the script's dialog closes.
+    store.write(&format!("{STARTUP_DIR}/B Ask.jsx"), "new Window('dialog', 'Ask').show();\napp.scheduleTask('writeLn(\"ask\")', 100, true);").unwrap();
+    let mut s = session(&store);
+    s.execute("file.runStartupScripts", json!({})).unwrap();
+    s.execute("scriptui.close", json!({})).unwrap();
+    // The launch opens a project after the Startup scripts ran.
+    s.execute("file.closeProject", json!({})).unwrap();
+    let r = crate::tasks::run_tasks_at(&mut s, Instant::now() + Duration::from_millis(500));
+    assert_eq!(r["ran"], json!(2), "{r}");
+    // A script run from File ▸ Scripts still stops when the project closes.
+    s.execute("script.run", json!({"code": "app.scheduleTask('writeLn(\"menu\")', 100, true);", "name": "Menu.jsx"})).unwrap();
+    s.execute("file.closeProject", json!({})).unwrap();
+    let r = crate::tasks::run_tasks_at(&mut s, Instant::now() + Duration::from_millis(5000));
+    assert_eq!(r["ran"], json!(2), "{r}");
+}
+
+#[test]
 fn shutdown_dialogs_close_as_if_canceled() {
     let store = Arc::new(MemoryConfig::default());
     let code = r#"var a = new Window("dialog", "One").show();
