@@ -10,6 +10,18 @@ use serde_json::{Value, json};
 
 use crate::{Outcome, run_code};
 
+mod callable;
+mod ease_presets;
+mod evalfile;
+mod include;
+mod panels;
+#[cfg(not(windows))]
+mod services;
+mod tasks;
+mod ui;
+mod ui_more;
+mod ui_mouse;
+
 fn session() -> Session {
     let mut s = Session { expr: Some(Arc::new(effectcraft_expr::Expressions)), expr_check: Some(effectcraft_expr::check_syntax), ..Default::default() };
     crate::install(&mut s);
@@ -609,6 +621,26 @@ fn engine_entry_points() {
     let o = ok(&mut s, "app.executeCommand(app.findMenuCommandId('New Project')); app.project.numItems");
     assert_eq!(o.result, json!(0));
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `app.project.framesCountType` / `displayStartFrame`: Project Settings ▸ Frame Count (#1807).
+#[test]
+fn frames_count_type_sets_the_project_frame_count() {
+    let mut s = session();
+    let o = ok(
+        &mut s,
+        "var p = app.project; var a = [p.framesCountType === FramesCountType.FC_START_0, p.displayStartFrame]; p.framesCountType = FramesCountType.FC_START_1; a.concat([p.framesCountType === FramesCountType.FC_START_1, p.displayStartFrame]).join('|')",
+    );
+    assert_eq!(o.result, json!("true|0|true|1"));
+    // After Effects' enum values, so scripts that store the number keep working.
+    let o = ok(&mut s, "[FramesCountType.FC_START_0, FramesCountType.FC_START_1, FramesCountType.FC_TIMECODE_CONVERSION].join('|')");
+    assert_eq!(o.result, json!("2612|2613|2614"));
+    assert_eq!(s.project.settings.frame_start, 1);
+    ok(&mut s, "app.project.displayStartFrame = 0");
+    assert_eq!(s.project.settings.frame_start, 0);
+    let o = run_code(&mut s, "app.project.framesCountType = FramesCountType.FC_TIMECODE_CONVERSION", "test.jsx");
+    assert!(o.error.is_some_and(|e| e.message.contains("Timecode Conversion")));
+    assert_eq!(s.project.settings.frame_start, 0);
 }
 
 #[test]
@@ -1653,4 +1685,31 @@ fn set_value_rejects_an_array_of_the_wrong_dimension() {
     );
     let (_, c) = comp_named(&s, "Dims");
     assert_eq!(layer(c, "s").props.prop("transform/position").unwrap().value, KV::Vec3([120.0, 34.0, 0.0]));
+}
+
+/// #1942: the scripting width and height setters resize the frame only. Re-anchoring the old frame
+/// in the new one, which moves every unparented layer, belongs to the Composition Settings dialog.
+#[test]
+fn setting_comp_width_and_height_leaves_the_layers_where_they_are() {
+    let mut s = session();
+    let o = ok(
+        &mut s,
+        r#"
+        var c = app.project.items.addComp("w", 400, 200, 1, 1, 25);
+        var l = c.layers.addSolid([1, 1, 1], "s", 50, 50, 1, 1);
+        var pos = l.property("ADBE Transform Group").property("ADBE Position");
+        pos.setValue([100, 100]);
+        var k = c.layers.addSolid([1, 1, 1], "k", 50, 50, 1, 1);
+        var kpos = k.property("ADBE Transform Group").property("ADBE Position");
+        kpos.setValueAtTime(0, [10, 20]);
+        kpos.setValueAtTime(1, [30, 40]);
+        var before = "" + pos.value;
+        c.width = 800;
+        c.height = 400;
+        [before, "" + pos.value, "" + kpos.keyValue(1), "" + kpos.keyValue(2), c.width, c.height]
+        "#,
+    );
+    assert_eq!(o.result, json!(["100,100,0", "100,100,0", "10,20,0", "30,40,0", 800, 400]));
+    let (_, c) = comp_named(&s, "w");
+    assert_eq!(layer(c, "s").props.prop("transform/position").unwrap().value, KV::Vec3([100.0, 100.0, 0.0]));
 }

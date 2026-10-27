@@ -57,7 +57,7 @@ fn page() -> (Session, Arc<Manual>) {
     s.execute("prop.addKey", json!({"layer": l, "path": "effects/#1/transform/offset", "time": 0.0, "value": [0.5, 0.5]})).unwrap();
     s.execute("prop.addKey", json!({"layer": l, "path": "effects/#1/transform/offset", "time": 0.5, "value": [0.6, 0.56]})).unwrap();
     s.execute("effect.apply", json!({"layers": [l], "effect": "ec.blur.gaussian"})).unwrap();
-    s.execute("prop.set", json!({"layer": l, "path": "effects/#2/blurriness", "value": 3.0})).unwrap();
+    s.execute("prop.set", json!({"layer": l, "path": "effects/#2/blurriness", "value": 12.0})).unwrap();
     (s, off)
 }
 

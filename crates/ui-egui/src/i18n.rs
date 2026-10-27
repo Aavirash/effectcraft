@@ -15,7 +15,7 @@ pub(crate) use ui::catalog_characters;
 pub(crate) use ui::{set_current, tr, tr_args};
 
 /// Every language with a catalog, in the order Settings ▸ General ▸ Language lists them.
-const CATALOG_CODES: [&str; 11] = ["ja", "zh-hans", "zh-hant", "uk", "es", "pt-br", "ru", "fr", "de", "cs", "ka"];
+const CATALOG_CODES: [&str; 11] = ["cs", "de", "es", "fr", "pt-br", "ru", "uk", "ka", "ja", "zh-hans", "zh-hant"];
 
 /// The active interface language: the stored preference when it names a catalog, otherwise `en`
 /// (English is the source of every label and needs no lookup).
@@ -588,6 +588,7 @@ const SIMPLIFIED_CHINESE: &[(&str, &str, &str)] = &[
     ("layer.newShape", "Shape Layer", "形状图层"),
     ("layer.newAdjustment", "Adjustment Layer", "调整图层"),
     ("layer.newContentAwareFill", "Content-Aware Fill Layer...", "内容识别填充图层..."),
+    ("layer.newPrimitive", "3D Primitive...", "3D 基本体..."),
     ("layer.new3dPrimitive", "Cube", "立方体"),
     ("layer.new3dPrimitive", "Sphere", "球体"),
     ("layer.new3dPrimitive", "Plane", "平面"),
@@ -1222,6 +1223,7 @@ const TRADITIONAL_CHINESE: &[(&str, &str, &str)] = &[
     ("layer.newShape", "Shape Layer", "形狀圖層"),
     ("layer.newAdjustment", "Adjustment Layer", "調整圖層"),
     ("layer.newContentAwareFill", "Content-Aware Fill Layer...", "內容感知填滿圖層..."),
+    ("layer.newPrimitive", "3D Primitive...", "3D 基本體..."),
     ("layer.new3dPrimitive", "Cube", "立方體"),
     ("layer.new3dPrimitive", "Sphere", "球體"),
     ("layer.new3dPrimitive", "Plane", "平面"),
@@ -1853,6 +1855,7 @@ const JAPANESE: &[(&str, &str, &str)] = &[
     ("layer.newShape", "Shape Layer", "シェイプレイヤー"),
     ("layer.newAdjustment", "Adjustment Layer", "調整レイヤー"),
     ("layer.newContentAwareFill", "Content-Aware Fill Layer...", "コンテンツに応じた塗りつぶしレイヤー..."),
+    ("layer.newPrimitive", "3D Primitive...", "3D プリミティブ..."),
     ("layer.new3dPrimitive", "Cube", "立方体"),
     ("layer.new3dPrimitive", "Sphere", "球体"),
     ("layer.new3dPrimitive", "Plane", "平面"),
@@ -2487,6 +2490,7 @@ const UKRAINIAN: &[(&str, &str, &str)] = &[
     ("layer.newShape", "Shape Layer", "Шар фігури"),
     ("layer.newAdjustment", "Adjustment Layer", "Коригувальний шар"),
     ("layer.newContentAwareFill", "Content-Aware Fill Layer...", "Шар заливки з урахуванням вмісту..."),
+    ("layer.newPrimitive", "3D Primitive...", "3D-примітив..."),
     ("layer.new3dPrimitive", "Cube", "Куб"),
     ("layer.new3dPrimitive", "Sphere", "Сфера"),
     ("layer.new3dPrimitive", "Plane", "Площина"),
@@ -3122,6 +3126,7 @@ const SPANISH: &[(&str, &str, &str)] = &[
     ("layer.newShape", "Shape Layer", "Capa de forma"),
     ("layer.newAdjustment", "Adjustment Layer", "Capa de ajuste"),
     ("layer.newContentAwareFill", "Content-Aware Fill Layer...", "Capa de relleno según el contenido..."),
+    ("layer.newPrimitive", "3D Primitive...", "Primitiva 3D..."),
     ("layer.new3dPrimitive", "Cube", "Cubo"),
     ("layer.new3dPrimitive", "Sphere", "Esfera"),
     ("layer.new3dPrimitive", "Plane", "Plano"),
@@ -3755,6 +3760,7 @@ const PORTUGUESE: &[(&str, &str, &str)] = &[
     ("layer.newShape", "Shape Layer", "Camada de forma"),
     ("layer.newAdjustment", "Adjustment Layer", "Camada de ajuste"),
     ("layer.newContentAwareFill", "Content-Aware Fill Layer...", "Camada de preenchimento sensível ao conteúdo..."),
+    ("layer.newPrimitive", "3D Primitive...", "Primitiva 3D..."),
     ("layer.new3dPrimitive", "Cube", "Cubo"),
     ("layer.new3dPrimitive", "Sphere", "Esfera"),
     ("layer.new3dPrimitive", "Plane", "Plano"),
@@ -4395,6 +4401,7 @@ const RUSSIAN: &[(&str, &str, &str)] = &[
     ("layer.newShape", "Shape Layer", "Слой-фигура"),
     ("layer.newAdjustment", "Adjustment Layer", "Корректирующий слой"),
     ("layer.newContentAwareFill", "Content-Aware Fill Layer...", "Слой заливки с учетом содержимого..."),
+    ("layer.newPrimitive", "3D Primitive...", "3D-примитив..."),
     ("layer.new3dPrimitive", "Cube", "Куб"),
     ("layer.new3dPrimitive", "Sphere", "Сфера"),
     ("layer.new3dPrimitive", "Plane", "Плоскость"),
@@ -5028,6 +5035,7 @@ const FRENCH: &[(&str, &str, &str)] = &[
     ("layer.newShape", "Shape Layer", "Calque de forme"),
     ("layer.newAdjustment", "Adjustment Layer", "Calque de réglage"),
     ("layer.newContentAwareFill", "Content-Aware Fill Layer...", "Calque de remplissage d’après le contenu..."),
+    ("layer.newPrimitive", "3D Primitive...", "Primitive 3D..."),
     ("layer.new3dPrimitive", "Cube", "Cube"),
     ("layer.new3dPrimitive", "Sphere", "Sphère"),
     ("layer.new3dPrimitive", "Plane", "Plan"),
@@ -5661,6 +5669,7 @@ const GERMAN: &[(&str, &str, &str)] = &[
     ("layer.newShape", "Shape Layer", "Formebene"),
     ("layer.newAdjustment", "Adjustment Layer", "Einstellungsebene"),
     ("layer.newContentAwareFill", "Content-Aware Fill Layer...", "Ebene für inhaltsbasierte Füllung..."),
+    ("layer.newPrimitive", "3D Primitive...", "3D-Grundkörper..."),
     ("layer.new3dPrimitive", "Cube", "Würfel"),
     ("layer.new3dPrimitive", "Sphere", "Kugel"),
     ("layer.new3dPrimitive", "Plane", "Fläche"),
@@ -6295,6 +6304,7 @@ const CZECH: &[(&str, &str, &str)] = &[
     ("layer.newShape", "Shape Layer", "Vrstva tvaru"),
     ("layer.newAdjustment", "Adjustment Layer", "Vrstva úprav"),
     ("layer.newContentAwareFill", "Content-Aware Fill Layer...", "Vrstva výplně podle obsahu..."),
+    ("layer.newPrimitive", "3D Primitive...", "3D primitivum..."),
     ("layer.new3dPrimitive", "Cube", "Krychle"),
     ("layer.new3dPrimitive", "Sphere", "Koule"),
     ("layer.new3dPrimitive", "Plane", "Rovina"),

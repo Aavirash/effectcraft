@@ -148,7 +148,8 @@ including files overwritten at the same path and byte size.
   File ▸ Open tries each missing file at the same place under the project's new folder, without
   marking the project modified.
 - **File ▸ Reload Footage** (Ctrl+Alt+L) reads the files again. A sequence picks up frames
-  added to its folder (a render still in progress) and keeps its interpretation.
+  added to its folder (a render still in progress) and keeps its interpretation; a still is
+  read as its one file, even when numbered files sit next to it.
 
 **File ▸ Dependencies ▸ Relink Missing Footage…** searches a chosen folder and its subfolders
 for missing source files on the desktop. It relinks unique exact filenames whose decoded type,
