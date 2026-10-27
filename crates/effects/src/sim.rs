@@ -31,10 +31,10 @@ pub use engine::particle_state;
 pub(crate) use engine::{PState, PW_ANIMS, Phys, simulate};
 #[cfg(test)]
 use engine::{PW_EFFECT_CAMERA, rate_history, sim_key, simulate_rates};
-#[cfg(test)]
-use particle_fx::{PW_RATE, pw_phys};
 pub(crate) use engine::{SPS, steps_at};
 pub use particle_fx::{Blob, mercury_blobs};
+#[cfg(test)]
+use particle_fx::{PW_RATE, pw_phys};
 pub use registry::{specs, sprite_plan};
 pub use sprites::{Acc, Post, Shape, Sprite, SpritePlan, Tint};
 pub(crate) use sprites::{combine, raster, splat};
