@@ -740,6 +740,10 @@ impl<'a> Renderer<'a> {
                     use std::hash::{Hash, Hasher};
                     let mut h = std::collections::hash_map::DefaultHasher::new();
                     (0x00f8_a3e5_u64, item, i, (w as f32).to_bits(), mode as u8, f.frame_rate.num, f.frame_rate.den, &f.path, float).hash(&mut h);
+                    (f.alpha as u8).hash(&mut h);
+                    if f.alpha == effectcraft_project::AlphaMode::Premultiplied {
+                        f.premul_color.map(f32::to_bits).hash(&mut h);
+                    }
                     h.finish()
                 });
                 if let (Some(c), Some(k)) = (self.cache, key)

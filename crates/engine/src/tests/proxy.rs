@@ -247,6 +247,49 @@ fn comp_proxy_frames_blend() {
 }
 
 #[test]
+fn comp_proxy_frame_blend_cache_tracks_alpha_interpretation() {
+    struct Interpreted(std::sync::atomic::AtomicUsize);
+    impl FootageSource for Interpreted {
+        fn frame(&self, _: ItemId, f: &Footage, _: Tick) -> Option<Arc<Image>> {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let pixel = match f.alpha {
+                AlphaMode::Straight => [0.4, 0.2, 0.1, 0.5],
+                AlphaMode::Premultiplied => [f.premul_color[0] * 0.5, 0.1, 0.0, 0.5],
+                AlphaMode::Ignore => [0.8, 0.4, 0.2, 1.0],
+            };
+            Some(Arc::new(Image::filled(4, 4, pixel)))
+        }
+    }
+    for mode in ["frameMix", "pixelMotion"] {
+        let mut s = session();
+        let footage = Arc::new(Interpreted(std::sync::atomic::AtomicUsize::new(0)));
+        s.footage = footage.clone();
+        let (inner, outer) = nested(&mut s);
+        s.execute("file.setProxy", json!({"item": inner.0, "path": "/m/alpha.mov"})).unwrap();
+        s.execute("file.interpretProxy", json!({"item": inner.0, "alpha": "straight"})).unwrap();
+        s.execute("layer.frameBlending", json!({"mode": mode})).unwrap();
+        s.execute("comp.setSwitch", json!({"switch": "frameBlending", "value": true})).unwrap();
+        let opts = RenderOpts::default();
+        let first = px(&s, outer, 0.05, opts, 1, 1);
+        let calls = footage.0.load(std::sync::atomic::Ordering::Relaxed);
+        assert_eq!(px(&s, outer, 0.05, opts, 1, 1), first);
+        assert_eq!(footage.0.load(std::sync::atomic::Ordering::Relaxed), calls);
+        for params in [
+            json!({"item": inner.0, "alpha": "ignore"}),
+            json!({"item": inner.0, "alpha": "premultiplied", "premulColor": [0.0, 0.0, 0.0]}),
+            json!({"item": inner.0, "alpha": "premultiplied", "premulColor": [1.0, 0.0, 0.0]}),
+        ] {
+            s.execute("file.interpretProxy", params.clone()).unwrap();
+            let mut fresh = s.renderer(opts);
+            fresh.cache = None;
+            let want = fresh.comp_frame(outer, Tick::from_seconds_f64(0.05)).get(1, 1);
+            let actual = px(&s, outer, 0.05, opts, 1, 1);
+            assert_eq!(actual, want, "{mode} after {params}");
+        }
+    }
+}
+
+#[test]
 fn interpret_proxy_settings_apply_to_the_proxy() {
     let mut s = session();
     let full = import(&mut s, "/m/red16.png");
