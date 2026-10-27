@@ -152,7 +152,7 @@ fn is_pdf(p: &Value) -> bool {
 }
 
 /// File ▸ Import ▸ File… picked numbered stills that import as image sequences: ask, as After
-/// Effects' "<format> Sequence" checkbox in its Import dialog does (rfd's native dialog can't
+/// Effects' `<format> Sequence` checkbox in its Import dialog does (rfd's native dialog can't
 /// carry a checkbox), with Force Alphabetical Order and the frame rate. `p`: the import's
 /// parameters. Returns whether the dialog opened. The checkbox starts off, as in After Effects:
 /// unticked, the picked files import as stills. Dropped files and agents' `file.import` don't
@@ -542,6 +542,8 @@ pub fn open_form(app: &mut EffectcraftApp, id: &str, p: &Value) -> bool {
                             }
                         },
                     ),
+                    // Time Display Style ▸ Frames ▸ Frame Count (also numbers Feet + Frames).
+                    Field::choice("frameStart", "Frame count", &[("Start at 0", json!(0)), ("Start at 1", json!(1))], usize::from(st.frame_start == 1)),
                     Field::choice(
                         "colorEngine",
                         "Color engine",
