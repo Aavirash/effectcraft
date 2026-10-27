@@ -422,7 +422,30 @@ pub fn open_form(app: &mut EffectcraftApp, id: &str, p: &Value) -> bool {
             ],
         ),
         "file.interpretFootage" | "file.interpretProxy"
-            if !has(p, &["frameRate", "alpha", "loop", "pixelAspect", "colorProfile", "fields", "invertAlpha", "matteColor", "linearLight", "startFrame"]) =>
+            if !has(
+                p,
+                &[
+                    "frameRate",
+                    "alpha",
+                    "loop",
+                    "pixelAspect",
+                    "colorProfile",
+                    "fields",
+                    "invertAlpha",
+                    "matteColor",
+                    "linearLight",
+                    "startFrame",
+                    "logConversion",
+                    "cineonUnits",
+                    "pointUnits",
+                    "convertedBlack",
+                    "convertedWhite",
+                    "tenBitBlack",
+                    "tenBitWhite",
+                    "currentGamma",
+                    "highlightRolloff",
+                ],
+            ) =>
         {
             let proxy = id == "file.interpretProxy";
             let f = s.state.project_selection.first().and_then(|i| s.project.item(*i)).and_then(|it| match (&it.kind, &it.proxy) {
@@ -1081,6 +1104,44 @@ mod tests {
         let r = app.session.execute("file.exportTimeline", params).unwrap();
         assert_eq!(r["path"], path.as_str());
         assert!(std::fs::read_to_string(&path).unwrap().contains("<xmeml"));
+    }
+
+    #[test]
+    fn interpretation_menu_applies_explicit_cineon_parameters_without_a_dialog() {
+        use effectcraft_engine::project::{Footage, FootageKind, ItemKind, Proxy};
+        for command in ["file.interpretFootage", "file.interpretProxy"] {
+            let mut app = EffectcraftApp::new(effectcraft_engine::Session::default());
+            let footage = Footage { path: "/m/scan.dpx".into(), kind: FootageKind::Still, width: 4, height: 4, has_video: true, ..Default::default() };
+            let project = std::sync::Arc::make_mut(&mut app.session.project);
+            let item = project.add_item("scan.dpx", Default::default(), None, ItemKind::Footage(footage.clone()));
+            project.item_mut(item).unwrap().proxy = Some(Box::new(Proxy { footage, enabled: true }));
+            app.session.state.project_selection = vec![item];
+            let ctx = egui::Context::default();
+            for params in [
+                json!({"logConversion": true}),
+                json!({"cineonUnits": "10bit"}),
+                json!({"pointUnits": "10bit"}),
+                json!({"convertedBlack": 10.0}),
+                json!({"convertedWhite": 900.0}),
+                json!({"tenBitBlack": 90.0}),
+                json!({"tenBitWhite": 690.0}),
+                json!({"currentGamma": 2.2}),
+                json!({"highlightRolloff": 30.0}),
+            ] {
+                crate::menus::invoke(&mut app, &ctx, command, params.clone()).unwrap();
+                assert!(app.dialog.is_none(), "{command}: {params}");
+            }
+            let item = app.session.project.item(item).unwrap();
+            let footage = if command == "file.interpretProxy" {
+                &item.proxy.as_ref().unwrap().footage
+            } else {
+                let ItemKind::Footage(footage) = &item.kind else { panic!("not footage") };
+                footage
+            };
+            assert!(footage.cineon.log_conversion);
+            assert_eq!(footage.cineon.gamma, 2.2);
+            assert_eq!(footage.cineon.converted_white, 900.0);
+        }
     }
 
     /// Interpret Footage shows Cineon Settings for DPX footage only. The converted points show in
