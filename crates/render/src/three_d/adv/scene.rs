@@ -174,8 +174,8 @@ pub struct EnvInfo {
     pub rotation: f32,
     /// Unit direction from the scene towards the environment's dominant (radiance-weighted)
     /// bright region — the direction its shadow is cast from, like a parallel light's
-    /// `to_light`. `[0; 3]` when the image is directionless (uniform) or the light casts no
-    /// shadow (nothing reads it then): no shadow.
+    /// `to_light`. `[0; 3]` when the image is directionless (uniform, or opposing bright
+    /// regions that cancel) or the light casts no shadow (nothing reads it then): no shadow.
     pub sun: [f32; 3],
     /// The image's directional (key) fraction — `|Σ dir·radiance| / Σ radiance` over the
     /// sphere, 0 for a uniform image and near 1 for a single bright spot. An Environment
@@ -821,7 +821,8 @@ pub fn irradiance_map(sw: u32, sh: u32, src: &[[f32; 4]], w: u32, h: u32) -> Vec
 
 /// The environment image's dominant direction and key strength: the radiance-weighted mean
 /// texel direction (solid-angle weighted, rotation applied), or `([0; 3], 0.0)` when the image
-/// is directionless (a uniform environment cancels to zero). The mean of a single bright spot
+/// is directionless (a uniform environment cancels to zero, and opposing bright regions that
+/// cancel leave no mean either). The mean of a single bright spot
 /// on black points straight at it; a gradient points somewhere between its ends. The returned
 /// key fraction is the mean vector's length over the radiance weight — how directional the
 /// image is, 0 (uniform) to ~1 (a lone spot) — and is the most of its light an Environment
@@ -915,13 +916,30 @@ pub(crate) fn add_environment(
     });
 }
 
-/// The environment layer's pixels as linear straight RGBA.
-fn env_pixels(r: &Renderer, ctx: &EvalCtx, src: Option<u64>, lin: bool) -> Option<(u32, u32, Vec<[f32; 4]>)> {
+/// The Environment light's image: `Absent` when the light has no Source and the comp has no
+/// Environment Layer (the default studio environment applies — After Effects "uses a default
+/// environment map" for an Environment light too), `Image` when the source renders, `Failed`
+/// when a selected or found source produced no pixels (a deleted layer, missing footage, a
+/// failed decode). A failed source must not silently become the default environment — that
+/// would relight and reshadow the scene behind the user's back — so, like any layer whose
+/// source fails renders nothing, it contributes nothing (#2436).
+enum EnvPixels {
+    Absent,
+    Image((u32, u32, Vec<[f32; 4]>)),
+    Failed,
+}
+
+fn env_pixels(r: &Renderer, ctx: &EvalCtx, src: Option<u64>, lin: bool) -> EnvPixels {
     let layer = match src {
-        Some(id) => ctx.comp.layer(effectcraft_project::LayerId(id))?,
-        None => ctx.comp.layers.iter().find(|l| l.environment && l.is_active_at(ctx.time))?,
+        Some(id) => ctx.comp.layer(effectcraft_project::LayerId(id)),
+        None => ctx.comp.layers.iter().find(|l| l.environment && l.is_active_at(ctx.time)),
     };
-    let buf = r.blend_layer_buf(ctx, layer)?;
+    let Some(layer) = layer else {
+        // A set Source that resolves to no layer (deleted) failed; an unset one with no
+        // Environment Layer is simply unconfigured.
+        return if src.is_some() { EnvPixels::Failed } else { EnvPixels::Absent };
+    };
+    let Some(buf) = r.blend_layer_buf(ctx, layer) else { return EnvPixels::Failed };
     let img = &buf.img;
     let data = img
         .data
@@ -935,7 +953,7 @@ fn env_pixels(r: &Renderer, ctx: &EvalCtx, src: Option<u64>, lin: bool) -> Optio
             if lin { [s[0], s[1], s[2], 1.0] } else { [srgb_to_linear(s[0]), srgb_to_linear(s[1]), srgb_to_linear(s[2]), 1.0] }
         })
         .collect();
-    Some((img.width, img.height, data))
+    EnvPixels::Image((img.width, img.height, data))
 }
 
 /// The default environment when the light has no Source and no Environment Layer: a dim studio
@@ -1065,15 +1083,22 @@ pub(crate) fn build_at(r: &Renderer, ctx: &EvalCtx, sub: Option<&EvalCtx>, run: 
         b.s.ambient = amb;
         if let Some(env) = env {
             match env_pixels(r, ctx, env.src, lin) {
-                Some((w, h, d)) => add_environment(&mut b, w, h, d, env.color, env.rot, env.casts_shadows, env.shadow_darkness, env.shadow_diffusion),
+                EnvPixels::Image((w, h, d)) => {
+                    add_environment(&mut b, w, h, d, env.color, env.rot, env.casts_shadows, env.shadow_darkness, env.shadow_diffusion)
+                }
                 // No Source and no Environment Layer: the default environment, a soft studio
                 // gradient of the light's colour × intensity — After Effects "uses a default
                 // environment map" for an Environment light — so the light always lights the
                 // scene per its parameters, and its dominant region casts shadows (#2436).
-                None => {
+                EnvPixels::Absent => {
                     let (w, h, d) = default_environment();
                     add_environment(&mut b, w, h, d, env.color, env.rot, env.casts_shadows, env.shadow_darkness, env.shadow_diffusion)
                 }
+                // A selected or found source that produced no pixels (deleted layer, missing
+                // footage, failed decode): no environment at all — the light contributes
+                // nothing, exactly like a layer whose source failed renders nothing, never a
+                // silent swap to the default studio's lighting and shadows (#2436).
+                EnvPixels::Failed => {}
             }
         }
         if r.opts.shadows() {

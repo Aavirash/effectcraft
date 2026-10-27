@@ -95,6 +95,33 @@ fn environment_key_strength_tracks_directionality() {
     assert!((0.35..0.55).contains(&key), "the default studio is a broad key with fill: {key}");
 }
 
+/// #2436 review: a non-uniform image can be directionless too — two equal bright spots at
+/// opposite azimuths pull the radiance-weighted mean in opposite directions and cancel,
+/// leaving no dominant region to shadow from (under 1 % directional): no sun, no key, so no
+/// shadow, just like a uniform image. Tilt the balance and a direction re-emerges, pointing
+/// at the brighter spot.
+#[test]
+fn opposing_bright_regions_cancel_to_no_shadow() {
+    let (w, h) = (64u32, 32u32);
+    let mut opposed = vec![[0.0f32; 4]; (w * h) as usize];
+    // Rows 15 and 16 mirror about the equator (v = 0.484375 / 0.515625), and columns 16 and 48
+    // sit half a width apart (u = 0.2578125 / 0.7578125): the two texel-centre directions are
+    // exactly opposite — equal solid-angle weight, opposite pull.
+    let (a, b) = ((15 * w + 16) as usize, (16 * w + 48) as usize);
+    opposed[a] = [1.0, 1.0, 1.0, 1.0];
+    opposed[b] = [1.0, 1.0, 1.0, 1.0];
+    assert_eq!(dominant_direction(w, h, &opposed, 0.0), ([0.0; 3], 0.0));
+    // One side twice as bright: the mean points at the brighter spot with its share of the
+    // weight (key = 1/3 — two parts against one).
+    let mut tilted = opposed.clone();
+    tilted[a] = [2.0, 2.0, 2.0, 1.0];
+    let (sun, key) = dominant_direction(w, h, &tilted, 0.0);
+    assert!(sun != [0.0; 3] && key > 0.3, "the brighter side wins: {sun:?} key {key}");
+    let want = shade::equirect_dir(16.5 / 64.0, 15.5 / 32.0, 0.0);
+    let dot = sun[0] * want[0] + sun[1] * want[1] + sun[2] * want[2];
+    assert!(dot > 0.999, "the sun points at the brighter spot: {sun:?} vs {want:?}");
+}
+
 #[test]
 fn equirect_round_trip_and_env_brdf() {
     for (u, v) in [(0.1f32, 0.2f32), (0.5, 0.5), (0.9, 0.7)] {
@@ -402,6 +429,70 @@ fn environment_light_without_a_source_lights_the_scene() {
     let red = render(&p, cid);
     let c5 = red.data[20 * 120 + 30];
     assert!(c5[0] > 0.15 && c5[1] < 0.05 && c5[2] < 0.05, "red environment: {c5:?}");
+}
+
+/// #2436 review: a selected or auto-picked environment source that fails to render (missing
+/// footage, a deleted layer) must not silently swap in the default studio environment — the
+/// light contributes nothing, exactly like a layer whose source failed renders nothing. Only a
+/// light with no Source at all (and no Environment Layer in the comp) uses the default.
+#[test]
+fn a_failed_environment_source_lights_nothing() {
+    let (mut p, cid) = project(120, 90);
+    let sid = p.add_item(
+        "S",
+        Default::default(),
+        None,
+        ItemKind::Solid(effectcraft_project::Solid { color: [1.0, 1.0, 1.0], width: 60, height: 40, pixel_aspect: 1.0 }),
+    );
+    add(&mut p, cid, LayerSource::Solid { item: sid }, |l| l.switches.three_d = true);
+    let unlit = render(&p, cid);
+    // The Environment Layer's footage is unreadable (missing; NoFootage serves no frames).
+    let fid = p.add_item(
+        "F",
+        Default::default(),
+        None,
+        ItemKind::Footage(effectcraft_project::Footage {
+            path: "missing.exr".into(),
+            kind: effectcraft_project::FootageKind::Still,
+            width: 64,
+            height: 32,
+            pixel_aspect: 1.0,
+            duration: Tick::from_seconds_f64(1.0),
+            has_video: true,
+            missing: true,
+            ..Default::default()
+        }),
+    );
+    add(&mut p, cid, LayerSource::Footage { item: fid }, |l| {
+        l.switches.three_d = true;
+        l.environment = true;
+    });
+    let env_layer = p.comp(cid).unwrap().layers.iter().find(|l| l.environment).unwrap().id;
+    add(&mut p, cid, LayerSource::Light { kind: LightKind::Environment }, |l| {
+        set(l, "lightOptions/castsShadows", Value::Bool(true));
+    });
+    fn light(p: &mut Project, cid: ItemId) -> &mut effectcraft_project::Layer {
+        p.comp_mut(cid).unwrap().layers.iter_mut().find(|l| l.is_light()).unwrap()
+    }
+    // Auto-picked Environment Layer, unreadable: the light is off — no studio default, no
+    // default-environment shadow either.
+    let failed = render(&p, cid);
+    assert_eq!(failed.data, unlit.data, "an unreadable Environment Layer lights nothing");
+    // The light's Source set to that unreadable layer: same.
+    set(light(&mut p, cid), "lightOptions/source", Value::Layer(Some(env_layer.0)));
+    let failed = render(&p, cid);
+    assert_eq!(failed.data, unlit.data, "an unreadable selected Source lights nothing");
+    // The Source pointing at a deleted layer: same.
+    set(light(&mut p, cid), "lightOptions/source", Value::Layer(Some(999_999)));
+    let failed = render(&p, cid);
+    assert_eq!(failed.data, unlit.data, "a deleted selected Source lights nothing");
+    // Contrast: with no Source and no Environment Layer, the default studio still lights it.
+    let comp = p.comp_mut(cid).unwrap();
+    comp.layers.retain(|l| l.is_light() || !l.environment);
+    set(comp.layers.iter_mut().find(|l| l.is_light()).unwrap(), "lightOptions/source", Value::Layer(None));
+    let lit = render(&p, cid);
+    let (c, c2) = (unlit.data[20 * 120 + 30], lit.data[20 * 120 + 30]);
+    assert!(c2[3] > 0.99 && (c2[0] - c[0]).abs() > 0.05, "the unconfigured light still lights: {c2:?} vs {c:?}");
 }
 
 /// #2436: an Environment light's Cast Shadows works like After Effects' — its image's dominant

@@ -163,10 +163,13 @@ camera, dark below and behind, at a dim 0.3 mean level — of the light's colour
 when there is neither) is an equirectangular image (cosine irradiance map; roughness-indexed
 mip chain with the split-sum environment BRDF fit), and percentage-closer-filtered shadow maps
 (spot: perspective, parallel: orthographic over the scene, point: six cube faces, environment:
-one orthographic from the image's dominant bright region — none only when the image is
-directionless, as a uniform one is — occluding only the image's directional key fraction of
+one orthographic from the image's dominant bright region — none only when the image lacks a
+sufficiently strong dominant direction (a uniform one, or opposing bright regions that
+cancel) — occluding only the image's directional key fraction of
 the light, so the shadow stays partial like After Effects' area-light shadows, with a soft
-default penumbra of at least eight pixels or four map texels). An Environment light only lights Advanced 3D comps,
+default penumbra of at least eight pixels or four map texels). A Source or Environment Layer
+that fails to render — a deleted layer, missing footage — lights nothing: no silent fallback
+to the default studio environment. An Environment light only lights Advanced 3D comps,
 so adding one (or changing a light's type to it) switches a Classic 3D comp to Advanced 3D,
 as model layers do. Cards keep
 Material Options (Accepts Lights/Shadows, Casts Shadows On/Only, Ambient, Diffuse, Specular);
