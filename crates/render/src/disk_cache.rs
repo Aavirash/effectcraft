@@ -331,7 +331,7 @@ impl DiskCache {
                 let Ok(files) = std::fs::read_dir(shard.path()) else { continue };
                 for f in files.flatten() {
                     let p = f.path();
-                    let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                    let name = p.file_name().and_then(std::ffi::OsStr::to_str).unwrap_or("");
                     if name.contains(".tmp") {
                         // A writer that died mid-write; old temporaries are removed.
                         if f.metadata().and_then(|m| m.modified()).is_ok_and(|t| t.elapsed().is_ok_and(|e| e.as_secs() > 600)) {
@@ -772,7 +772,7 @@ fn decode_layer(p: &[u8]) -> Option<Buf> {
 // ---------------------------------------------------------------- content keys
 
 /// Bump when rendering changes in a way that makes old disk entries wrong.
-const RENDER_VERSION: &str = "effectcraft-render-2";
+const RENDER_VERSION: &str = "effectcraft-render-3";
 
 fn hash_debug(h: &mut Hash128, v: &impl std::fmt::Debug) {
     h.write(format!("{v:?}").as_bytes());
@@ -999,6 +999,28 @@ mod tests {
         assert_eq!((st.entries, st.hits, st.misses, st.writes), (2, 2, 1, 2));
         // Wrong kind is a miss.
         assert!(dc.get_frame(42).is_none());
+    }
+
+    #[test]
+    fn previous_renderer_frames_are_not_reused() {
+        use effectcraft_project::{Comp, ItemKind, Project};
+        use effectcraft_time::{FrameRate, Tick};
+
+        let mut project = Project::default();
+        let comp = Comp::new(2, 2, FrameRate::FPS_30, Tick::from_seconds_f64(1.0));
+        let id = project.add_item("Cached composition", effectcraft_color::Label::None, None, ItemKind::Comp(comp.into()));
+        let key = frame_key(comp_content_key(&project, id), 0, 1000, 0);
+        let previous_key = 188276472871424236106264377269312920732;
+        let dir = tmpdir("previous-renderer");
+        {
+            let cache = DiskCache::open(&dir, 1 << 30).unwrap();
+            cache.put_frame_now(previous_key, 2, 2, &[9; 16]);
+        }
+        let cache = DiskCache::open(&dir, 1 << 30).unwrap();
+        assert_eq!(cache.get_frame(previous_key).unwrap().rgba, vec![9; 16]);
+        assert!(cache.get_frame(key).is_none());
+        cache.put_frame_now(key, 2, 2, &[17; 16]);
+        assert_eq!(cache.get_frame(key).unwrap().rgba, vec![17; 16]);
     }
 
     #[test]

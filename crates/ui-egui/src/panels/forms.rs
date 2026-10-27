@@ -152,7 +152,7 @@ fn is_pdf(p: &Value) -> bool {
 }
 
 /// File ▸ Import ▸ File… picked numbered stills that import as image sequences: ask, as After
-/// Effects' "<format> Sequence" checkbox in its Import dialog does (rfd's native dialog can't
+/// Effects' `<format> Sequence` checkbox in its Import dialog does (rfd's native dialog can't
 /// carry a checkbox), with Force Alphabetical Order and the frame rate. `p`: the import's
 /// parameters. Returns whether the dialog opened. The checkbox starts off, as in After Effects:
 /// unticked, the picked files import as stills. Dropped files and agents' `file.import` don't
