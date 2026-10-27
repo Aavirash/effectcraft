@@ -243,6 +243,8 @@ pub fn dialog(app: &mut EffectcraftApp, ctx: &egui::Context, t: &Tokens) {
 
 // ---------------------------------------------------------------- timeline drawing + gestures
 
+/// The `egui::Id` of a marker drag in progress: the dragged marker's layer and index (updated as
+/// the marker moves) and whether Alt was held when the drag started.
 fn drag_state_id() -> egui::Id {
     egui::Id::unique("marker-drag")
 }

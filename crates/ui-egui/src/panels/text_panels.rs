@@ -61,6 +61,9 @@ pub fn text_target(app: &EffectcraftApp) -> Option<TextTarget> {
     effectcraft_engine::render::text::source_text(&ectx, layer).map(|d| TextTarget { layer: layer.id.0, doc: d, range: None })
 }
 
+/// A small toggle button at `r` showing `label` (semibold 13 when `bold`, else 12), filled with
+/// the accent while `on`; returns whether it was clicked. It only reports the click: the caller
+/// decides the new state.
 fn toggle(app: &mut EffectcraftApp, ui: &mut egui::Ui, p: &egui::Painter, r: Rect, id: &str, label: &str, on: bool, bold: bool) -> bool {
     let t = app.tokens;
     let resp = ui.interact(r, egui::Id::unique(("text-toggle", id)), Sense::click());
@@ -81,6 +84,12 @@ fn toggle(app: &mut EffectcraftApp, ui: &mut egui::Ui, p: &egui::Painter, r: Rec
     resp.clicked()
 }
 
+/// The Character panel for the text being edited (or the selected text layer): font family and
+/// style, size, leading, tracking, stroke, scale, baseline shift and other numeric fields, kerning,
+/// fill/stroke colours with eyedroppers, style toggles, OpenType features and variable-font axes.
+/// Without a text target the panel is inert — no edit is collected and it asks for a text layer.
+/// Edits are collected and, when a target exists, sent as `layer.setText` commands scoped to the
+/// edited range; failures show in `app.ui.status`.
 pub fn character(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
     let t = app.tokens;
     let p = ui.painter().with_clip_rect(rect);
@@ -452,6 +461,10 @@ pub fn paint_justify_glyph(p: &egui::Painter, r: Rect, j: Justify, c: egui::Colo
     }
 }
 
+/// The Paragraph panel: alignment, left/right/first-line indents, space before and after,
+/// paragraph direction (when the text engine allows it), the composer, and Roman hanging
+/// punctuation. Edits are queued and sent as `layer.setText` for the edited range when a text
+/// target exists; failures show in `app.ui.status`.
 pub fn paragraph(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
     let t = app.tokens;
     let p = ui.painter().with_clip_rect(rect);

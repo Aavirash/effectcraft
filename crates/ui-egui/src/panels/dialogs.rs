@@ -287,6 +287,10 @@ const ABOUT_TABS: [(&str, &str); 3] = [("About", "about"), ("Contributors", "con
 /// Height of the Contributors / Models tab bodies (they scroll inside it).
 const CREDITS_HEIGHT: f32 = 380.0;
 
+/// The About dialog: tabs for the name/version/blurb, the contributors and the models (the last
+/// two scroll in a fixed-height body), the licence and bundled-font line, and Close. The tab is
+/// kept in egui temp data. A command the About body asked for is run once the modal has been
+/// built; Close clears `app.dialog`.
 fn about(app: &mut EffectcraftApp, ctx: &egui::Context, t: &Tokens) {
     let mut close = false;
     let mut cmd: Option<&str> = None;

@@ -21,6 +21,8 @@ struct State {
     new_name: String,
 }
 
+/// The `egui::Id` of the render-settings / output-module template dialog's state ([`State`]):
+/// which kind it edits, the selected template and the name being typed.
 fn state_id() -> egui::Id {
     egui::Id::unique("rq-templates-dialog")
 }
