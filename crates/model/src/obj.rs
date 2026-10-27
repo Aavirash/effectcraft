@@ -22,12 +22,12 @@ fn sibling_name(name: &str) -> Option<&str> {
     (!file.is_empty() && file.len() < name.len()).then_some(file)
 }
 
-/// A material reference resolved against the model's folder: the name as written (options are
-/// part of it, `-bm 1 file.png`), the whole value (a name containing spaces), then its file name
-/// (an absolute path from another machine, #1274).
+/// A material reference resolved against the model's folder: the name as written (a name
+/// containing spaces is one name), then its file name (an absolute path from another machine,
+/// #1274), then the final token (the options convention, `-bm 1 file.png`).
 fn resolve_reference(resolve: &dyn Fn(&str) -> Option<Vec<u8>>, name: &str) -> Option<Vec<u8>> {
     let mut tried: Vec<&str> = vec![];
-    for candidate in [name.split_whitespace().last().unwrap_or(name), name, sibling_name(name).unwrap_or(name)] {
+    for candidate in [name, sibling_name(name).unwrap_or(name), name.split_whitespace().last().unwrap_or(name)] {
         if tried.contains(&candidate) {
             continue;
         }

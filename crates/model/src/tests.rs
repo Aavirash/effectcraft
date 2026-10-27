@@ -168,6 +168,46 @@ fn obj_textures_from_another_machine_find_the_file_next_to_the_model() {
 }
 
 #[test]
+fn obj_texture_prefers_the_complete_name_over_its_final_token() {
+    // Two textures sit beside the model: `Map.png` (the final whitespace token of the reference)
+    // and `Diffuse Map.png` (the complete name). The complete name must win, its basename next,
+    // the final token last (the `-bm 1 file.png` options convention).
+    let d = std::env::temp_dir().join(format!("ec-obj-full-name-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(&d).unwrap();
+    let png = |w: u32| {
+        let img = image::RgbaImage::from_fn(w, 2, |_, _| image::Rgba([255, 0, 0, 255]));
+        let mut out = std::io::Cursor::new(Vec::new());
+        img.write_to(&mut out, image::ImageFormat::Png).unwrap();
+        out.into_inner()
+    };
+    std::fs::write(d.join("Map.png"), png(2)).unwrap();
+    std::fs::write(d.join("Diffuse Map.png"), png(4)).unwrap();
+    let mtl = "newmtl Spaced\nmap_Kd Diffuse Map.png\n\
+               newmtl Absolute\nmap_Kd C:\\tex\\Diffuse Map.png\n\
+               newmtl Options\nmap_Kd -bm 1 Map.png\n";
+    let obj = "mtllib quad.mtl\nv -1 -1 0\nv 1 -1 0\nv 1 1 0\nv -1 1 0\nvt 0 0\nvt 1 0\nvt 1 1\nvt 0 1\n\
+               usemtl Spaced\nf 1/1 2/2 3/3\nf 1/1 3/3 4/4\n";
+    // Like the media layer's resolver: a relative name joins the model's folder; an absolute
+    // path is only looked up where it points (here: nowhere else).
+    let resolve = |uri: &str| -> Option<Vec<u8>> {
+        let p = std::path::Path::new(uri);
+        if p.is_absolute() { return None; }
+        std::fs::read(d.join(p)).ok()
+    };
+    let resolver = |uri: &str| -> Option<Vec<u8>> {
+        if uri == "quad.mtl" { Some(mtl.as_bytes().to_vec()) } else { resolve(uri) }
+    };
+    let m = obj::parse(obj.as_bytes(), &resolver).unwrap();
+    assert_eq!(m.materials.len(), 3);
+    let size = |mat: &Material| mat.base_color_tex.map(|t| (m.textures[t.texture].width, m.textures[t.texture].height));
+    assert_eq!(size(&m.materials[0]), Some((4, 2)), "the complete `Diffuse Map.png` wins over its final token `Map.png`");
+    assert_eq!(size(&m.materials[1]), Some((4, 2)), "an absolute path's spaced basename beats its final token");
+    assert_eq!(size(&m.materials[2]), Some((2, 2)), "the `-bm 1 file.png` options convention still finds the final token");
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+#[test]
 fn channel_interpolation_modes() {
     let mut c = Channel { node: 0, path: ChannelPath::Translation, interp: Interp::Step, times: vec![0.0, 1.0], values: vec![0.0, 0.0, 0.0, 10.0, 0.0, 0.0] };
     assert_eq!(c.sample(0.7).unwrap()[0], 0.0);
