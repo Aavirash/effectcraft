@@ -137,7 +137,9 @@ pub fn from_kurbo(path: &BezPath) -> Vec<ShapePath> {
 pub fn rect(size: [f64; 2], pos: [f64; 2], roundness: f64) -> BezPath {
     let (w, h) = (size[0].abs(), size[1].abs());
     let (x0, y0, x1, y1) = (pos[0] - w / 2.0, pos[1] - h / 2.0, pos[0] + w / 2.0, pos[1] + h / 2.0);
-    let rad = if roundness.is_finite() { roundness.clamp(0.0, w.min(h) / 2.0) } else { 0.0 };
+    let max_rad = w.min(h) / 2.0;
+    // `f64::clamp` panics on a NaN bound (both size components NaN): fall back to no roundness.
+    let rad = if roundness.is_finite() && !max_rad.is_nan() { roundness.clamp(0.0, max_rad) } else { 0.0 };
     let mut p = BezPath::new();
     if rad <= 0.0 {
         p.move_to((x1, y0));
@@ -408,6 +410,11 @@ mod tests {
         let swapped = ops::trim(&[rect([400.0, 300.0], [0.0, 0.0], 0.0)], 70.0, 30.0, 0.0);
         let (a, b) = ends(&swapped[0]);
         assert!(near(a, (80.0, 150.0)) && near(b, (-200.0, -130.0)), "{a:?} {b:?}");
+    }
+
+    #[test]
+    fn rect_with_nan_size_does_not_panic() {
+        let _ = rect([f64::NAN, f64::NAN], [0.0, 0.0], 5.0);
     }
 
     #[test]
