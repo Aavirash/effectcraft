@@ -56,6 +56,11 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
     }
 }
 
+/// The Essential Graphics panel's contents for the Primary (else active) comp: its name and Solo
+/// toggle, the template name, the controls list with its drop target for Timeline properties, the
+/// Add Formatting / Add Selected As / Media Replacement / Export Template buttons and the selected
+/// instance's properties. Returns the `essential.*` commands to run directly and the ones that go
+/// through the menu/frontend layer; with no comp it shows a hint and returns empty lists.
 fn body(app: &mut EffectcraftApp, ui: &mut egui::Ui) -> (Actions, Actions) {
     let t = app.tokens;
     let ctx = ui.ctx().clone();
