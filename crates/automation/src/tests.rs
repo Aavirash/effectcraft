@@ -1380,3 +1380,37 @@ fn automation_roots_confine_file_access() {
     assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 1, "only the unconfined save");
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// #2479: a queued output the agent didn't name is derived from where the project sits, so on a
+/// project that has never been saved it lands in the home folder, outside every automation root.
+/// Queueing it there is refused, rather than leaving an item that can never be rendered.
+#[test]
+fn automation_roots_refuse_a_queued_output_from_an_unsaved_project() {
+    use crate::confine::Confinement;
+    let base = std::env::temp_dir().join(format!("ec-mcp-default-out-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let write = base.join("out");
+    std::fs::create_dir_all(&write).unwrap();
+    let p = |f: &str| write.join(f).to_string_lossy().into_owned();
+    let mut s = server();
+    s.backend().confine(Confinement::new(&[], std::slice::from_ref(&write)).unwrap());
+    call_json(&mut s, "execute_command", json!({"command": "comp.new", "params": {"name": "A", "width": 64, "height": 64}}));
+    // Never saved: neither way of queueing a render may fall back to the home folder.
+    for command in ["renderQueue.add", "render.preRender"] {
+        let (c, err) = call(&mut s, "execute_command", json!({"command": command, "params": {"comp": "A"}}));
+        assert!(err, "`{command}` without an output should be refused: {c:?}");
+        let msg = c[0]["text"].as_str().unwrap_or_default();
+        assert!(msg.contains("the project has no file yet"), "`{command}`: {msg}");
+    }
+    let queue = call_json(&mut s, "execute_command", json!({"command": "renderQueue.list"}));
+    assert_eq!(queue["items"].as_array().map(Vec::len), Some(0), "nothing was queued: {queue}");
+    // Naming an output inside a write root is how it is done.
+    call_json(&mut s, "execute_command", json!({"command": "renderQueue.add", "params": {"comp": "A", "output": p("named.mp4")}}));
+    // Once the project is saved there, the default output (beside it) is queued as before.
+    call_json(&mut s, "save_project", json!({"path": p("proj.ecproj")}));
+    call_json(&mut s, "execute_command", json!({"command": "renderQueue.add", "params": {"comp": "A"}}));
+    let queue = call_json(&mut s, "execute_command", json!({"command": "renderQueue.list"}));
+    let out = queue["items"][1]["outputPath"].as_str().unwrap_or_default();
+    assert!(out.starts_with(&*write.to_string_lossy()), "{queue}");
+    let _ = std::fs::remove_dir_all(&base);
+}
