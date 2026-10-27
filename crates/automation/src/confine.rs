@@ -169,6 +169,9 @@ impl Confinement {
             (None, None) => (&[][..], Access::Read),
         };
         let mut given = false;
+        // Whether one of them is a file and not a Render Queue template, whose own output is
+        // relative and resolved like one the agent never gave.
+        let mut gave_a_file = false;
         for key in named {
             let Some(v) = params.get(*key).filter(|v| !v.is_null()) else { continue };
             given = true;
@@ -181,6 +184,7 @@ impl Confinement {
                 match p.as_str() {
                     Some(s) if id == "render.preRender" && !looks_like_path(s) => {}
                     Some(s) => {
+                        gave_a_file = true;
                         self.check(s, access)?;
                     }
                     None => return Err(Error::BadArgs(format!("`{id}`: `{key}` must be a path"))),
@@ -203,7 +207,7 @@ impl Confinement {
         // home folder when the project has never been saved, outside every root (#2479). Only
         // that last case is certainly outside, and reading the preference here would duplicate
         // the engine's precedence, so an unsaved project is told to name its output instead.
-        if QUEUES_AN_OUTPUT.contains(&id) && !given {
+        if QUEUES_AN_OUTPUT.contains(&id) && !gave_a_file {
             lookups.push(Lookup::DefaultOutput);
         }
         if IMPLICIT_WRITES.contains(&id) && !(given && id == "file.save") {

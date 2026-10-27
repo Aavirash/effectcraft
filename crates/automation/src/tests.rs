@@ -1402,6 +1402,10 @@ fn automation_roots_refuse_a_queued_output_from_an_unsaved_project() {
         let msg = c[0]["text"].as_str().unwrap_or_default();
         assert!(msg.contains("the project has no file yet"), "`{command}`: {msg}");
     }
+    // Naming an Output Module template instead of a file is the same: its own output is relative.
+    let (c, err) = call(&mut s, "execute_command", json!({"command": "render.preRender", "params": {"comp": "A", "output": "Lossless"}}));
+    assert!(err, "a template output should be refused too: {c:?}");
+    assert!(c[0]["text"].as_str().unwrap_or_default().contains("the project has no file yet"), "{c:?}");
     let queue = call_json(&mut s, "execute_command", json!({"command": "renderQueue.list"}));
     assert_eq!(queue["items"].as_array().map(Vec::len), Some(0), "nothing was queued: {queue}");
     // Naming an output inside a write root is how it is done.
