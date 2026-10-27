@@ -1402,6 +1402,10 @@ fn automation_roots_refuse_a_queued_output_from_an_unsaved_project() {
         let msg = c[0]["text"].as_str().unwrap_or_default();
         assert!(msg.contains("the project has no file yet"), "`{command}`: {msg}");
     }
+    // An array where a path goes: the engine reads a scalar, so this is no output either.
+    let (c, err) = call(&mut s, "execute_command", json!({"command": "file.createProxy", "params": {"comp": "A", "path": [p("arr.mov")]}}));
+    assert!(err, "an array where the output goes should be refused: {c:?}");
+    assert!(c[0]["text"].as_str().unwrap_or_default().contains("the project has no file yet"), "{c:?}");
     // Naming an Output Module template instead of a file is the same: its own output is relative.
     let (c, err) = call(&mut s, "execute_command", json!({"command": "render.preRender", "params": {"comp": "A", "output": "Lossless"}}));
     assert!(err, "a template output should be refused too: {c:?}");

@@ -169,8 +169,9 @@ impl Confinement {
             (None, None) => (&[][..], Access::Read),
         };
         let mut given = false;
-        // Whether one of them is a file and not a Render Queue template, whose own output is
-        // relative and resolved like one the agent never gave.
+        // Whether one of them is a file: not a Render Queue template, whose own output is relative
+        // and resolved like one the agent never gave, and not an array, which the commands that
+        // take a single output read as nothing at all.
         let mut gave_a_file = false;
         for key in named {
             let Some(v) = params.get(*key).filter(|v| !v.is_null()) else { continue };
@@ -184,7 +185,7 @@ impl Confinement {
                 match p.as_str() {
                     Some(s) if id == "render.preRender" && !looks_like_path(s) => {}
                     Some(s) => {
-                        gave_a_file = true;
+                        gave_a_file |= v.is_string();
                         self.check(s, access)?;
                     }
                     None => return Err(Error::BadArgs(format!("`{id}`: `{key}` must be a path"))),
