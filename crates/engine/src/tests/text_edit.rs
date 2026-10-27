@@ -1265,11 +1265,16 @@ fn duplicate_during_an_edit_copies_the_layer_not_a_selected_property_group() {
         assert_eq!(items(&s).len(), n, "{what}: the selected {what} is not duplicated");
         assert_eq!(layers(&s), before + 1, "{what}: the edited layer is");
         assert_eq!(s.state.selected_layers, vec![LayerId(r[0].as_u64().unwrap())], "{what}: and its copy is selected");
+        // The selection the edit passed over goes with it: the next Duplicate copies the selected
+        // copy rather than reaching back to the original's {what}.
+        s.execute("edit.duplicate", json!({})).unwrap();
+        assert_eq!(items(&s).len(), n, "{what}: a second Duplicate leaves the original's {what} alone");
+        assert_eq!(layers(&s), before + 2, "{what}: and copies the copy");
         // With no edit open, the selected item keeps its precedence over the layers.
         s.execute("prop.select", json!({"layer": owner, "prop": item})).unwrap();
         s.execute("edit.duplicate", json!({})).unwrap();
         assert_eq!(items(&s).len(), n + 1, "{what}: outside an edit Duplicate copies the selected {what}");
-        assert_eq!(layers(&s), before + 1, "{what}: and no layer");
+        assert_eq!(layers(&s), before + 2, "{what}: and no layer");
     }
 }
 

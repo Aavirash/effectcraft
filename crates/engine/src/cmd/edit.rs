@@ -105,10 +105,11 @@ pub(crate) fn reid(layer: &mut Layer, next: &mut u64) {
 }
 
 fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
+    let editing = s.state.text_edit.is_some();
     // Effects selected → duplicate them (Edit ▸ Duplicate in Effect Controls). An open text edit
     // comes first, as it does for Clear: opening the editor keeps the property selection, but
     // while typing, Duplicate means the edited layer, not an effect or item selected before.
-    if p.get("layers").is_none() && s.state.text_edit.is_none() {
+    if p.get("layers").is_none() && !editing {
         let fx = super::effect::selected_effects(s);
         if !fx.is_empty() {
             let mut out = vec![];
@@ -151,6 +152,11 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
         relink_copies(comp, &map);
         proj.next_id = next;
         st.selected_layers = created.clone();
+        // The property selection the edit kept was passed over above and belongs to the
+        // originals: left in place, the next Duplicate or Clear would act on it, not the copies.
+        if editing {
+            st.selected_props.clear();
+        }
         Ok(created)
     })?;
     Ok(json!(new.iter().map(|l| l.0).collect::<Vec<_>>()))
