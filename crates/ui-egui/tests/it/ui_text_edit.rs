@@ -792,6 +792,28 @@ fn duplicate_rebound_onto_a_bare_letter_stays_typing() {
 }
 
 #[test]
+fn duplicate_chord_copies_the_edited_layer_not_an_effect_still_selected() {
+    let mut a = app();
+    let lid = a.session.execute("layer.newText", json!({"text": "alpha beta", "size": 40, "box": [40, 60, 250, 100]})).unwrap()["layer"].as_u64().unwrap();
+    // Applying the blur selects it, as clicking it in Effect Controls does.
+    a.session.execute("effect.apply", json!({"layers": [lid], "effect": "Gaussian Blur"})).unwrap();
+    a.ui.tool = effectcraft_ui_egui::state::Tool::Type;
+    let mut h = harness(a);
+    h.run_steps(3);
+    let comp = rect(&h, "viewer.comp");
+    click(&mut h, comp.min + egui::vec2(80.0, 85.0) * (comp.width() / 640.0), Modifiers::NONE);
+    assert_eq!(edited(&h).0, lid, "the Type tool's click opens the text layer for editing");
+    assert!(!h.state().session.state.selected_props.is_empty(), "and the blur stays selected");
+    let n = layer_ids(&h).len();
+    key(&mut h, Key::D, Modifiers::COMMAND);
+    let s = &h.state().session;
+    assert!(s.state.text_edit.is_none(), "Duplicate ends the edit");
+    assert_eq!(layer_ids(&h).len(), n + 1, "and copies the edited layer");
+    let blurs = s.active_comp().unwrap().layer(LayerId(lid)).unwrap().effects().map_or(0, |fx| fx.groups().count());
+    assert_eq!(blurs, 1, "not the blur");
+}
+
+#[test]
 fn a_chord_bound_to_both_forwarded_commands_resolves_in_list_order() {
     let mut a = app();
     // Shortcuts may hold one chord for several commands (the conflict is a toast, not a

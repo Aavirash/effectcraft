@@ -1235,6 +1235,45 @@ fn duplicate_ends_an_edit_on_already_committed_text() {
 }
 
 #[test]
+fn duplicate_during_an_edit_copies_the_layer_not_a_selected_property_group() {
+    use effectcraft_project::LayerId;
+    // Opening the editor by command, as a Type-tool click does, keeps the property selection, so
+    // an effect, shape item or text animator can still be selected while the user types.
+    for what in ["effect", "shape item", "text animator"] {
+        let (mut s, t) = session("Hello");
+        let (owner, path) = match what {
+            "effect" => {
+                s.execute("effect.apply", json!({"layers": [t], "effect": "Gaussian Blur"})).unwrap();
+                (t, "effects")
+            }
+            "shape item" => (s.execute("layer.newShape", json!({"kind": "rect"})).unwrap()["layer"].as_u64().unwrap(), "contents"),
+            _ => {
+                s.execute("layer.addTextAnimator", json!({"layer": t, "properties": ["opacity"]})).unwrap();
+                (t, "text/animators")
+            }
+        };
+        let items =
+            |s: &Session| s.active_comp().unwrap().layer(LayerId(owner)).unwrap().props.group(path).unwrap().groups().map(|g| g.uid).collect::<Vec<_>>();
+        let item = items(&s)[0];
+        let n = items(&s).len();
+        let layers = |s: &Session| s.active_comp().map_or(0, |c| c.layers.len());
+        let before = layers(&s);
+        s.execute("prop.select", json!({"layer": owner, "prop": item})).unwrap();
+        begin_edit_at(&mut s, t, 5);
+        let r = s.execute("edit.duplicate", json!({})).unwrap();
+        assert!(s.state.text_edit.is_none(), "{what}: Duplicate ends the open edit");
+        assert_eq!(items(&s).len(), n, "{what}: the selected {what} is not duplicated");
+        assert_eq!(layers(&s), before + 1, "{what}: the edited layer is");
+        assert_eq!(s.state.selected_layers, vec![LayerId(r[0].as_u64().unwrap())], "{what}: and its copy is selected");
+        // With no edit open, the selected item keeps its precedence over the layers.
+        s.execute("prop.select", json!({"layer": owner, "prop": item})).unwrap();
+        s.execute("edit.duplicate", json!({})).unwrap();
+        assert_eq!(items(&s).len(), n + 1, "{what}: outside an edit Duplicate copies the selected {what}");
+        assert_eq!(layers(&s), before + 1, "{what}: and no layer");
+    }
+}
+
+#[test]
 fn duplicate_ends_the_open_edit_and_selects_the_copy() {
     let (mut s, t) = editing("Hello", 5);
     s.execute("text.insert", json!({"text": "!"})).unwrap();
