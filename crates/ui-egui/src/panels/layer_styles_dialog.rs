@@ -61,7 +61,7 @@ pub fn open(app: &mut EffectcraftApp, params: &Value) -> Result<(), String> {
     Ok(())
 }
 
-/// Menu routing: choosing one of the Layer ▸ Layer Styles ▸ <style> items (no parameters) adds
+/// Menu routing: choosing one of the Layer ▸ Layer Styles ▸ `<style>` items (no parameters) adds
 /// the style as usual and opens the dialog on it.
 pub fn route(app: &mut EffectcraftApp, id: &str, params: &Value) -> Result<bool, String> {
     let Some(style) = id.strip_prefix("layer.style.").filter(|s| STYLES.iter().any(|x| x.0 == *s)) else { return Ok(false) };

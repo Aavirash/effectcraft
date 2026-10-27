@@ -51,6 +51,8 @@ fn current(app: &EffectcraftApp) -> Option<(LayerId, Uid)> {
     l.trackers().next().map(|(g, _)| (l.id, g.uid))
 }
 
+/// The `egui::Id` of the Motion Source dropdown's transient state; picking a new source removes
+/// whatever is stored under it, so the choice starts fresh.
 fn source_id() -> egui::Id {
     egui::Id::unique("tracker-motion-source")
 }
@@ -113,6 +115,11 @@ fn analyze_glyph(p: &egui::Painter, r: Rect, forward: bool, frame: bool, stop: b
     }
 }
 
+/// The Tracker panel: the camera/warp and motion/stabilize buttons, Motion Source and Current
+/// Track pickers, the track type and its channels, Motion Target with Edit Target and Options, the
+/// four Analyze buttons (the one whose direction is running offers Stop), Reset and Apply, and the
+/// analysis progress. With a mask selected it switches to its mask-tracking mode. Every change runs a
+/// `track.*` command; while an analysis is running it polls the job and asks for repaints.
 pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
     let t = app.tokens;
     let ctx = ui.ctx().clone();
