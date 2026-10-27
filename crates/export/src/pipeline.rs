@@ -4,9 +4,7 @@
 
 use std::sync::Mutex;
 
-use effectcraft_project::render_queue::{
-    AlphaMode, Channels, ColorDepth, CurrentOrOff, EffectsMode, FrameSample, RenderLog, ResizeQuality, SwitchOverride, log_path,
-};
+use effectcraft_project::render_queue::{AlphaMode, Channels, CurrentOrOff, EffectsMode, FrameSample, RenderLog, ResizeQuality, SwitchOverride, log_path};
 use effectcraft_project::{Comp, Project};
 use effectcraft_raster::Image;
 use effectcraft_render::{Backend, LayerCache, RenderOpts, Renderer};
@@ -166,6 +164,9 @@ impl<'a> Cx<'a> {
     pub fn new(job: &'a Job<'a>) -> Cx<'a> {
         let mut project = job.project.clone();
         apply_overrides(&mut project, job);
+        // Render Settings ▸ Color Depth overrides the project's depth for the whole render (every
+        // layer and effect quantises at it), not just the finished frame (#2022).
+        project.settings.bit_depth = job.settings.color_depth.resolve(project.settings.bit_depth);
         let frame_times = (job.options.log == RenderLog::PlusPerFrameInfo).then(|| Mutex::new(Vec::new()));
         let cache = LayerCache::default();
         // With deferred readbacks, buffers computed from a missed pass's placeholders are not kept.
@@ -289,14 +290,6 @@ impl<'a> Cx<'a> {
                 if second == first { a } else { interleave(&a, &self.render_at(second).await, upper_first) }
             }
         };
-        let mut img = img;
-        // Color Depth: renders run at the project's depth; another depth quantises the frame.
-        let depth = self.job.settings.color_depth;
-        if depth != ColorDepth::Current
-            && let Some(levels) = depth.resolve(self.project.settings.bit_depth).levels()
-        {
-            img.quantize(levels);
-        }
         let img = self.crop_resize(img);
         if let Some(ft) = &self.frame_times {
             ft.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push((i, t0.elapsed().as_secs_f64()));
@@ -325,12 +318,21 @@ impl<'a> Cx<'a> {
 
     /// 8-bit RGBA of the requested channels cropped/padded to `w`×`h` (codec rounding): RGB over
     /// the comp background (opaque), RGB + Alpha straight or premultiplied, or the alpha matte.
+    /// The colour is dithered on its way to 8 bits, as After Effects dithers colours converted to
+    /// 8 bpc for rendering and export, so gradients rendered at 16 or 32 bpc don't band (#2022).
     pub fn pixels(&self, img: &Image, comp: &Comp, channels: Channels, w: u32, h: u32) -> Vec<u8> {
+        self.pixels_with(img, comp, channels, w, h, true)
+    }
+
+    /// [`Cx::pixels`], dithering the colour or not (a GIF palette gains nothing from dither noise).
+    pub fn pixels_with(&self, img: &Image, comp: &Comp, channels: Channels, w: u32, h: u32, dither: bool) -> Vec<u8> {
         let px = match channels {
+            Channels::Rgb if dither => img.to_rgba8_over_dithered(comp.background),
             Channels::Rgb => img.to_rgba8_over(comp.background),
-            Channels::Rgba => match self.job.output.alpha_mode {
-                AlphaMode::Straight => img.to_rgba8(),
-                AlphaMode::Premultiplied => premultiplied8(img),
+            Channels::Rgba => match (self.job.output.alpha_mode, dither) {
+                (AlphaMode::Straight, true) => img.to_rgba8_dithered(),
+                (AlphaMode::Straight, false) => img.to_rgba8(),
+                (AlphaMode::Premultiplied, _) => premultiplied8(img, dither),
             },
             Channels::Alpha => img
                 .data
@@ -491,15 +493,20 @@ fn bicubic(src: &Image, w: u32, h: u32) -> Image {
     out
 }
 
-/// Premultiplied 8-bit RGBA (colour matted with black).
-fn premultiplied8(img: &Image) -> Vec<u8> {
-    img.data
-        .iter()
-        .flat_map(|p| {
-            let a = p[3].clamp(0.0, 1.0);
-            [0, 1, 2].map(|c| (p[c].clamp(0.0, a) * 255.0 + 0.5) as u8).into_iter().chain([(a * 255.0 + 0.5) as u8])
-        })
-        .collect()
+/// Premultiplied 8-bit RGBA (colour matted with black), the colour dithered when `dither`.
+fn premultiplied8(img: &Image, dither: bool) -> Vec<u8> {
+    let w = img.width.max(1) as usize;
+    let mut out = Vec::with_capacity(img.data.len() * 4);
+    for (i, p) in img.data.iter().enumerate() {
+        let a = p[3].clamp(0.0, 1.0);
+        let (x, y) = ((i % w) as u32, (i / w) as u32);
+        for c in 0..3 {
+            let v = p[c].clamp(0.0, a);
+            out.push(if dither { effectcraft_raster::dither_u8(v, x, y) } else { (v * 255.0 + 0.5) as u8 });
+        }
+        out.push((a * 255.0 + 0.5) as u8);
+    }
+    out
 }
 
 #[cfg(test)]
