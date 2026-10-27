@@ -7,6 +7,20 @@
 //
 // Plain functions only: the Rust side owns the logic.
 
+// ------------------------------------------------------------------ shortcuts
+
+/// Keep Duplicate on the app canvas instead of also opening the browser's bookmarks.
+/// eframe still receives the key; other chords and HTML inputs keep their browser behavior.
+export function installCanvasShortcuts(canvas) {
+  canvas.addEventListener("keydown", (event) => {
+    if (event.target === canvas && (event.ctrlKey || event.metaKey)
+      && !event.shiftKey && !event.altKey && !event.isComposing
+      && event.key.toLowerCase() === "d") {
+      event.preventDefault();
+    }
+  }, { capture: true });
+}
+
 // ------------------------------------------------------------------ storage
 
 const DIR = "effectcraft";
