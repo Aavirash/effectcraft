@@ -580,7 +580,7 @@ fn type_tool_selected_text_preference_skips_ineligible_layers_and_falls_back_to_
 }
 
 /// Opens a fresh Type-tool edit holding `text` and returns the harness with the new layer id,
-/// so the Deselect All tests start from the same state.
+/// so the Deselect All and Duplicate tests start from the same state.
 fn type_tool_edit(a: EffectcraftApp, text: &str) -> (Harness<'static, EffectcraftApp>, u64) {
     let mut h = harness(a);
     h.run_steps(3);

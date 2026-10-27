@@ -136,8 +136,8 @@ pub fn chord_matches(session: &effectcraft_engine::Session, command: &str, key: 
     bindings(session).into_iter().any(|(m, k, id, _)| id == command && k == key && mods_match(m, mods))
 }
 
-/// Whether a Deselect All chord matched by [`chord_matches`] may run while a text editor holds
-/// the keyboard. Chords carrying Cmd/Ctrl/Alt are command chords (the editor treats them as
+/// Whether a Deselect All or Duplicate chord matched by [`chord_matches`] may run while a text
+/// editor holds the keyboard. Chords carrying Cmd/Ctrl/Alt are command chords (the editor treats them as
 /// such for undo and the rest), and function keys never type, so those forward from the editor;
 /// a chord that could instead produce a character — a bare or Shift-only letter, digit or
 /// punctuation key, as from a pathological bare-letter rebinding — stays with the editor so

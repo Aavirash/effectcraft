@@ -7,6 +7,7 @@ use serde_json::json;
 
 use crate::Session;
 use crate::commands::text_edit::{MAX_IME_TEXT_BYTES, ime_stamp_revision, ime_surrounding, layer_doc};
+use crate::tests::three_d::layer_count;
 
 fn session(text: &str) -> (Session, u64) {
     let mut s = Session::default();
@@ -278,7 +279,7 @@ fn type_tool_layers_point_box_and_empty_cleanup() {
     let pos = l.props.prop("transform/position").unwrap().value.as_vec3();
     assert_eq!([pos[0], pos[1]], [190.0, 110.0]);
     s.execute("text.endEdit", json!({})).unwrap();
-    assert_eq!(s.active_comp().unwrap().layers.len(), 1);
+    assert_eq!(layer_count(&s), 1);
     // Resizing the box (layer space) is an attribute too.
     s.execute("layer.setText", json!({"layer": b, "box": [-100, -60, 200, 120]})).unwrap();
     assert_eq!(doc(&s, b).box_size, Some([200.0, 120.0]));
@@ -1209,14 +1210,13 @@ fn deselect_all_discards_an_empty_type_tool_layer() {
         s.state.text_edit.as_ref().is_some_and(|e| e.created && e.layer == effectcraft_project::LayerId(new)),
         "the Type tool opens the edit on its new, empty layer"
     );
-    let count = |s: &Session| s.active_comp().map_or(0, |c| c.layers.len());
-    let before = count(&s);
+    let before = layer_count(&s);
     s.execute("edit.deselectAll", json!({})).unwrap();
     assert!(s.state.text_edit.is_none());
     assert!(s.state.selected_layers.is_empty());
-    assert_eq!(count(&s), before - 1, "a Type-tool layer left empty is removed, as text.endEdit does");
+    assert_eq!(layer_count(&s), before - 1, "a Type-tool layer left empty is removed, as text.endEdit does");
     s.execute("edit.undo", json!({})).unwrap();
-    assert_eq!(count(&s), before, "that removal is one undo step of its own, as on text.endEdit");
+    assert_eq!(layer_count(&s), before, "that removal is one undo step of its own, as on text.endEdit");
 }
 
 #[test]
@@ -1230,7 +1230,7 @@ fn duplicate_ends_an_edit_on_already_committed_text() {
     assert_eq!(doc(&s, t).text, "Hello", "the committed text is kept on the original");
     assert_eq!(doc(&s, copy).text, "Hello", "and carried by the copy");
     s.execute("edit.undo", json!({})).unwrap();
-    assert_eq!(s.active_comp().map_or(0, |c| c.layers.len()), 1, "undo removes the copy");
+    assert_eq!(layer_count(&s), 1, "undo removes the copy");
     assert!(s.state.text_edit.is_none(), "undo does not reopen the edit");
 }
 
@@ -1256,25 +1256,24 @@ fn duplicate_during_an_edit_copies_the_layer_not_a_selected_property_group() {
             |s: &Session| s.active_comp().unwrap().layer(LayerId(owner)).unwrap().props.group(path).unwrap().groups().map(|g| g.uid).collect::<Vec<_>>();
         let item = items(&s)[0];
         let n = items(&s).len();
-        let layers = |s: &Session| s.active_comp().map_or(0, |c| c.layers.len());
-        let before = layers(&s);
+        let before = layer_count(&s);
         s.execute("prop.select", json!({"layer": owner, "prop": item})).unwrap();
         begin_edit_at(&mut s, t, 5);
         let r = s.execute("edit.duplicate", json!({})).unwrap();
         assert!(s.state.text_edit.is_none(), "{what}: Duplicate ends the open edit");
         assert_eq!(items(&s).len(), n, "{what}: the selected {what} is not duplicated");
-        assert_eq!(layers(&s), before + 1, "{what}: the edited layer is");
+        assert_eq!(layer_count(&s), before + 1, "{what}: the edited layer is");
         assert_eq!(s.state.selected_layers, vec![LayerId(r[0].as_u64().unwrap())], "{what}: and its copy is selected");
         // The selection the edit passed over goes with it: the next Duplicate copies the selected
         // copy rather than reaching back to the original's {what}.
         s.execute("edit.duplicate", json!({})).unwrap();
         assert_eq!(items(&s).len(), n, "{what}: a second Duplicate leaves the original's {what} alone");
-        assert_eq!(layers(&s), before + 2, "{what}: and copies the copy");
+        assert_eq!(layer_count(&s), before + 2, "{what}: and copies the copy");
         // With no edit open, the selected item keeps its precedence over the layers.
         s.execute("prop.select", json!({"layer": owner, "prop": item})).unwrap();
         s.execute("edit.duplicate", json!({})).unwrap();
         assert_eq!(items(&s).len(), n + 1, "{what}: outside an edit Duplicate copies the selected {what}");
-        assert_eq!(layers(&s), before + 2, "{what}: and no layer");
+        assert_eq!(layer_count(&s), before + 2, "{what}: and no layer");
     }
 }
 
@@ -1294,12 +1293,12 @@ fn duplicate_ends_the_open_edit_and_selects_the_copy() {
     // The edit ending is no undoable step of its own (as with text.endEdit): undo takes the
     // duplicate, it does not reopen the edit or undo the typing.
     s.execute("edit.undo", json!({})).unwrap();
-    assert_eq!(s.active_comp().map_or(0, |c| c.layers.len()), 1, "undo removed the copy");
+    assert_eq!(layer_count(&s), 1, "undo removed the copy");
     assert_eq!(doc(&s, t).text, "Hello!", "the typed text stays committed");
     assert!(s.state.text_edit.is_none(), "undo does not reopen the edit");
     // With no open edit Duplicate is untouched by all of this: same behavior, no extra steps.
     s.execute("edit.duplicate", json!({"layers": [t]})).unwrap();
-    assert_eq!(s.active_comp().map_or(0, |c| c.layers.len()), 2, "a plain duplicate still duplicates");
+    assert_eq!(layer_count(&s), 2, "a plain duplicate still duplicates");
     assert!(s.state.text_edit.is_none());
 }
 
@@ -1311,18 +1310,17 @@ fn duplicate_of_an_empty_type_tool_layer_discards_it_as_endedit_does() {
         s.state.text_edit.as_ref().is_some_and(|e| e.created && e.layer == effectcraft_project::LayerId(new)),
         "the Type tool opens the edit on its new, empty layer"
     );
-    let count = |s: &Session| s.active_comp().map_or(0, |c| c.layers.len());
-    let before = count(&s);
+    let before = layer_count(&s);
     s.execute("edit.duplicate", json!({})).unwrap();
     assert!(s.state.text_edit.is_none(), "the edit ends the way text.endEdit ends it");
-    assert_eq!(count(&s), before - 1, "a Type-tool layer left empty is discarded, not duplicated");
+    assert_eq!(layer_count(&s), before - 1, "a Type-tool layer left empty is discarded, not duplicated");
     assert!(s.state.selected_layers.is_empty(), "nothing is selected: the layer that would be copied is gone");
     // The edit is committed before Duplicate resolves its layers, so naming the very layer
     // the empty edit was on addresses nothing: the commit still happened, the duplicate errors.
     let new2 = s.execute("layer.newText", json!({"text": "", "position": [90.0, 90.0], "edit": true})).unwrap()["layer"].as_u64().unwrap();
     assert!(s.execute("edit.duplicate", json!({"layers": [new2]})).is_err(), "the named layer is gone once the edit commits");
     assert!(s.state.text_edit.is_none(), "and the edit ended all the same");
-    assert_eq!(count(&s), before - 1, "with the empty layer discarded, nothing left to duplicate");
+    assert_eq!(layer_count(&s), before - 1, "with the empty layer discarded, nothing left to duplicate");
     s.execute("edit.undo", json!({})).unwrap();
-    assert_eq!(count(&s), before, "that removal is one undo step of its own, as on text.endEdit");
+    assert_eq!(layer_count(&s), before, "that removal is one undo step of its own, as on text.endEdit");
 }
