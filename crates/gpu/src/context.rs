@@ -351,6 +351,7 @@ pub struct GpuContext {
     pub queue: wgpu::Queue,
     pub(crate) name: String,
     pub(crate) max_dim: u32,
+    pub(crate) median_kernel: crate::fx_noise::MedianKernel,
     bgl: wgpu::BindGroupLayout,
     bgl_ext: wgpu::BindGroupLayout,
     pipelines: HashMap<&'static str, wgpu::ComputePipeline>,
@@ -462,6 +463,12 @@ pub(crate) fn buffer_init(device: &wgpu::Device, queue: &wgpu::Queue, label: Opt
     buffer
 }
 
+/// The descriptor for a device the compositor owns: `MemoryUsage` so freed textures give their
+/// allocator blocks back instead of a few long-lived objects pinning large ones.
+pub(crate) fn device_descriptor(required_limits: wgpu::Limits) -> wgpu::DeviceDescriptor<'static> {
+    wgpu::DeviceDescriptor { label: Some("effectcraft gpu"), required_limits, memory_hints: wgpu::MemoryHints::MemoryUsage, ..Default::default() }
+}
+
 impl GpuContext {
     /// [`buffer_init`] on this context's device.
     pub(crate) fn buffer_init(&self, label: Option<&str>, contents: &[u8], usage: wgpu::BufferUsages) -> wgpu::Buffer {
@@ -475,6 +482,9 @@ impl GpuContext {
     /// [`Self::device_failure_notifier`] for immediate readback cancellation.
     pub fn new(adapter: &wgpu::Adapter, device: wgpu::Device, queue: wgpu::Queue) -> Result<GpuContext, String> {
         let info = adapter.get_info();
+        let median_kernel = crate::fx_noise::MedianKernel::for_adapter(info.backend, info.device_type);
+        #[cfg(test)]
+        let median_kernel = median_kernel.test_override()?;
         if !adapter.get_downlevel_capabilities().flags.contains(wgpu::DownlevelFlags::COMPUTE_SHADERS) {
             return Err(format!("{} ({:?}): no compute shaders", info.name, info.backend));
         }
@@ -494,6 +504,7 @@ impl GpuContext {
             ("max_compute_workgroup_size_x", l.max_compute_workgroup_size_x, 64),
             ("max_compute_workgroup_size_y", l.max_compute_workgroup_size_y, 16),
             ("max_compute_invocations_per_workgroup", l.max_compute_invocations_per_workgroup, 256),
+            ("max_compute_workgroup_storage_size", l.max_compute_workgroup_storage_size, median_kernel.workgroup_storage()),
         ];
         if let Some((limit, have, need)) = needs.iter().find(|(_, have, need)| have < need) {
             return Err(format!("{} ({:?}): device limit {limit} is {have}, needs {need}", info.name, info.backend));
@@ -519,6 +530,7 @@ impl GpuContext {
             include_str!("shaders/fx_key.wgsl"),
             include_str!("shaders/fx_stylize.wgsl"),
             include_str!("shaders/fx_noise.wgsl"),
+            median_kernel.source(),
             include_str!("shaders/fx_tone.wgsl"),
             include_str!("shaders/fx_warp.wgsl"),
             include_str!("shaders/fx_extra.wgsl"),
@@ -700,6 +712,7 @@ impl GpuContext {
             queue,
             name,
             max_dim,
+            median_kernel,
             bgl,
             bgl_ext,
             pipelines,
@@ -870,10 +883,7 @@ impl GpuContext {
             max_buffer_size: limits.max_buffer_size,
             ..wgpu::Limits::default()
         };
-        let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor { label: Some("effectcraft gpu"), required_limits, ..Default::default() })
-            .await
-            .map_err(|e| match by_name {
+        let (device, queue) = adapter.request_device(&device_descriptor(required_limits)).await.map_err(|e| match by_name {
             true => format!("no device on {} (picked by WGPU_ADAPTER_NAME): {e}", adapter.get_info().name),
             false => format!("no device: {e}"),
         })?;
@@ -1079,6 +1089,13 @@ pub(crate) struct Enc<'g> {
     owner: u64,
 }
 
+/// Images bound to a compute kernel's source, optional auxiliary and output slots.
+pub(crate) struct KernelImages<'a> {
+    pub src: &'a GpuImage,
+    pub aux: Option<&'a GpuImage>,
+    pub out: &'a GpuImage,
+}
+
 impl Drop for Enc<'_> {
     fn drop(&mut self) {
         // Unsubmitted work is discarded, so nothing recorded will read pooled textures.
@@ -1152,32 +1169,21 @@ impl<'g> Enc<'g> {
     }
 
     /// Run kernel `entry` writing `out` (dispatched over `groups` workgroups).
-    pub fn dispatch(
-        &mut self,
-        entry: &str,
-        p: &Params,
-        src: &GpuImage,
-        aux: Option<&GpuImage>,
-        out: &GpuImage,
-        data: Option<&wgpu::Buffer>,
-        groups: (u32, u32),
-    ) {
-        self.dispatch_ext(entry, p, src, aux, out, data, groups, None);
+    pub fn dispatch(&mut self, entry: &str, p: &Params, images: KernelImages<'_>, data: Option<&wgpu::Buffer>, groups: (u32, u32)) {
+        self.dispatch_ext(entry, p, images, data, groups, None);
     }
 
     /// [`Enc::dispatch`] for the kernels in `EXT_ENTRIES`, with their group 1 storage buffers.
-    #[allow(clippy::too_many_arguments)]
     pub fn dispatch_ext(
         &mut self,
         entry: &str,
         p: &Params,
-        src: &GpuImage,
-        aux: Option<&GpuImage>,
-        out: &GpuImage,
+        images: KernelImages<'_>,
         data: Option<&wgpu::Buffer>,
         groups: (u32, u32),
         ext: Option<[&wgpu::Buffer; 4]>,
     ) {
+        let KernelImages { src, aux, out } = images;
         let g = self.g;
         let Some(pipe) = g.pipelines.get(entry) else {
             if !g.unavailable.iter().any(|(e, _)| *e == entry) {
@@ -1233,7 +1239,7 @@ impl<'g> Enc<'g> {
     /// Per-pixel kernel over `out`'s size (16×16 workgroups).
     pub fn pixels(&mut self, entry: &str, p: &Params, src: &GpuImage, aux: Option<&GpuImage>, out: &GpuImage, data: Option<&wgpu::Buffer>) {
         let groups = (out.width.div_ceil(16), out.height.div_ceil(16));
-        self.dispatch(entry, p, src, aux, out, data, groups);
+        self.dispatch(entry, p, KernelImages { src, aux, out }, data, groups);
     }
 
     /// Copy `src` into a larger zeroed image at (`x`, `y`) (Buf::pad).
@@ -1244,6 +1250,24 @@ impl<'g> Enc<'g> {
             wgpu::TexelCopyTextureInfo { texture: &dst.texture, mip_level: 0, origin: wgpu::Origin3d { x, y, z: 0 }, aspect: wgpu::TextureAspect::All },
             wgpu::Extent3d { width: src.width, height: src.height, depth_or_array_layers: 1 },
         );
+    }
+
+    /// A `w` × `h` image showing `src` with its pixel (`x`, `y`) at the top-left, transparent
+    /// where `src` doesn't reach (Image::crop).
+    pub fn crop(&mut self, src: &GpuImage, x: i64, y: i64, w: u32, h: u32) -> GpuImage {
+        let dst = self.image(w, h);
+        let span = |o: i64, n: u32, len: u32| {
+            let (a, b) = (o.max(0), (o + n as i64).min(len as i64));
+            (b > a).then(|| (a as u32, (a - o) as u32, (b - a) as u32))
+        };
+        let (Some((sx, dx, cw)), Some((sy, dy, ch))) = (span(x, w, src.width), span(y, h, src.height)) else { return dst };
+        let enc = self.encoder();
+        enc.copy_texture_to_texture(
+            wgpu::TexelCopyTextureInfo { texture: &src.texture, mip_level: 0, origin: wgpu::Origin3d { x: sx, y: sy, z: 0 }, aspect: wgpu::TextureAspect::All },
+            wgpu::TexelCopyTextureInfo { texture: &dst.texture, mip_level: 0, origin: wgpu::Origin3d { x: dx, y: dy, z: 0 }, aspect: wgpu::TextureAspect::All },
+            wgpu::Extent3d { width: cw, height: ch, depth_or_array_layers: 1 },
+        );
+        dst
     }
 
     /// Submit recorded work.

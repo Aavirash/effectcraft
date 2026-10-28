@@ -688,8 +688,10 @@ Fixes from measured reports:
   step (undo and redo keep it) and keeps the comp's cached frames; projects saved before open
   with Auto. View ▸ Resolution and the panel's popup run `view.res.full|half|third|quarter|auto`
   and `view.res.custom {factor}`, which now work headless too; `comp.info` reports `resolution`
-  and `resolutionFactor` (#417). Not yet: the magnification is not saved per comp, and the
-  Composition Settings dialog has no Resolution popup.
+  and `resolutionFactor` (#417). Composition Settings ▸ Basic has the same Resolution menu, with
+  the frame size and memory per 8bpc frame at that resolution beside it; OK sets it as the popup
+  does, outside the undo step of the other settings (#2167). Not yet: the magnification is not
+  saved per comp.
 
 ### Update: plug-ins and extensions as in After Effects; ease presets become a ScriptUI panel
 

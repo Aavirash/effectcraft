@@ -1,6 +1,7 @@
 //! The crate's integration tests, one binary (each module is a former `tests/<name>.rs`).
 
 mod background_presets;
+mod cryptomatte_pick;
 mod determinism;
 mod exr_layers;
 mod footage_reload;
