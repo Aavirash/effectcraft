@@ -1835,6 +1835,120 @@ fn timeline_rows_drag_to_top_after_scrolling() {
     }
 }
 
+/// An intermediate scroll must not turn the viewport's lower edge into the stack's end.
+fn timeline_reorder_at_viewport_edge(below: bool, multiple: bool) {
+    let mut h = harness();
+    for i in 0..38 {
+        h.state_mut().session.execute("layer.newSolid", json!({"name": format!("Layer {i}"), "color": "#406080", "width": 80, "height": 80})).unwrap();
+    }
+    h.state_mut().session.execute("edit.deselectAll", json!({})).unwrap();
+    h.run_steps(3);
+    let before = timeline_layer_order(&h);
+    let moving = before[..if multiple { 2 } else { 1 }].to_vec();
+    h.state_mut().session.execute("layer.select", json!({"layers": moving})).unwrap();
+    h.run_steps(2);
+    h.state_mut().session.history.clear();
+    let from = timeline_layer_row(&h, moving[0]).center();
+    start_timeline_row_drag(&mut h, from);
+    scroll_timeline(&mut h, -200.0);
+    let visible = |h: &Harness<'_, EffectcraftApp>| {
+        before.iter().copied().filter(|id| h.state().auto.find(&format!("timeline.layer.{id}.row")).is_some()).collect::<Vec<_>>()
+    };
+    // Leave space inside the viewport below the last rendered layer's midpoint.
+    for _ in 0..20 {
+        let last = timeline_layer_row(&h, *visible(&h).last().unwrap());
+        if last.center().y < rect(&h, "timeline.layerMarquee").max.y - 3.0 {
+            break;
+        }
+        scroll_timeline(&mut h, -10.0);
+    }
+    let shown = visible(&h);
+    assert!(!shown.contains(&moving[0]), "the drag owner is culled");
+    let last = *shown.last().unwrap();
+    assert_ne!(last, *before.last().unwrap(), "layers remain below the viewport");
+    let row = timeline_layer_row(&h, last);
+    let viewport = rect(&h, "timeline.layerMarquee");
+    let y = if below { (row.center().y + row.height() * 0.4).min(viewport.max.y - 1.0) } else { row.min.y + row.height() * 0.2 };
+    let to = pos2(row.center().x, y);
+    assert!(viewport.contains(to));
+    assert_eq!(to.y > row.center().y, below);
+    let mut expected: Vec<u64> = before.iter().copied().filter(|id| !moving.contains(id)).collect();
+    let at = expected.iter().position(|id| *id == last).unwrap() + usize::from(below);
+    expected.splice(at..at, moving);
+    release_timeline_row_drag(&mut h, to);
+    assert_eq!(timeline_layer_order(&h), expected, "the drop follows the indicated row boundary");
+    assert_eq!(h.state().session.history.undo.len(), 1);
+    assert_ne!(h.output().platform_output.cursor_icon, egui::CursorIcon::Grabbing);
+    h.state_mut().session.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(timeline_layer_order(&h), before);
+    h.state_mut().session.execute("edit.redo", json!({})).unwrap();
+    assert_eq!(timeline_layer_order(&h), expected);
+}
+
+#[test]
+fn timeline_rows_drag_after_last_visible_row() {
+    for multiple in [false, true] {
+        timeline_reorder_at_viewport_edge(true, multiple);
+    }
+}
+
+#[test]
+fn timeline_rows_drag_before_last_visible_row() {
+    for multiple in [false, true] {
+        timeline_reorder_at_viewport_edge(false, multiple);
+    }
+}
+
+/// A removed ID must not be reinterpreted as a one-based index by layer.arrange.
+fn timeline_reorder_after_deletion(delete_owner: bool) {
+    let mut h = harness();
+    for i in 0..6 {
+        h.state_mut().session.execute("layer.newSolid", json!({"name": format!("Layer {i}"), "color": "#406080", "width": 80, "height": 80})).unwrap();
+    }
+    let before = timeline_layer_order(&h);
+    let removed = *before.last().unwrap();
+    assert!(removed > 0 && removed < before.len() as u64, "the missing ID would also resolve as a surviving layer index");
+    let owner = if delete_owner { removed } else { before[0] };
+    let moving = if delete_owner { vec![removed] } else { vec![owner, removed] };
+    h.state_mut().session.execute("layer.select", json!({"layers": moving})).unwrap();
+    h.run_steps(3);
+    h.state_mut().session.history.clear();
+    let from = timeline_layer_row(&h, owner).center();
+    start_timeline_row_drag(&mut h, from);
+    if !delete_owner {
+        // Changing the selection does not change the group captured by the held drag.
+        h.state_mut().session.execute("layer.select", json!({"layers": [removed]})).unwrap();
+        h.run_steps(2);
+    }
+    key(&mut h, egui::Key::Delete, Default::default());
+    assert!(h.ctx.input(|i| i.pointer.primary_down()), "Delete happened during the held drag");
+    let survivors: Vec<u64> = before.iter().copied().filter(|id| *id != removed).collect();
+    assert_eq!(timeline_layer_order(&h), survivors, "Delete removed only the selected layer");
+    let steps = h.state().session.history.undo.len();
+    let row = timeline_layer_row(&h, survivors[0]);
+    release_timeline_row_drag(&mut h, row.center() - vec2(0.0, row.height() * 0.4));
+    assert_eq!(timeline_layer_order(&h), survivors, "a stale drag cannot move any surviving layer");
+    assert_eq!(h.state().session.history.undo.len(), steps, "release adds no undo step");
+    assert_ne!(h.output().platform_output.cursor_icon, egui::CursorIcon::Grabbing);
+    let from = timeline_layer_row(&h, survivors[0]).center();
+    let row = timeline_layer_row(&h, survivors[1]);
+    drag(&mut h, from, row.center() + vec2(0.0, row.height() * 0.4));
+    let mut expected = survivors;
+    expected.swap(0, 1);
+    assert_eq!(timeline_layer_order(&h), expected, "a later independent drag still works");
+    assert_eq!(h.state().session.history.undo.len(), steps + 1);
+}
+
+#[test]
+fn timeline_rows_drag_cancels_when_the_owner_is_deleted() {
+    timeline_reorder_after_deletion(true);
+}
+
+#[test]
+fn timeline_rows_drag_cancels_when_a_group_member_is_deleted() {
+    timeline_reorder_after_deletion(false);
+}
+
 #[test]
 fn timeline_rows_drag_cancels_without_a_primary_release() {
     for escape in [false, true] {

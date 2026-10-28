@@ -1509,6 +1509,20 @@ fn insertion(layer_rows: &[(Rect, LayerId)], py: f32, top: f32) -> (Option<usize
     (at, y)
 }
 
+/// Resolve a visible insertion boundary through the full outline, including offscreen layers.
+fn layer_drop_target(rows: &[Row], visible: &[(Rect, LayerId)], at: Option<usize>, moving: &[u64]) -> Option<LayerId> {
+    let (anchor, after) = match at {
+        Some(i) => (visible.get(i)?.1, false),
+        None => (visible.last()?.1, true),
+    };
+    rows.iter()
+        .filter(|row| matches!(row.kind, RowKind::Layer))
+        .skip_while(|row| row.layer != anchor)
+        .skip(usize::from(after))
+        .find(|row| !moving.contains(&row.layer.0))
+        .map(|row| row.layer)
+}
+
 /// Whether a Project item can replace a layer's source (the same set `layer.replaceSource`
 /// accepts): compositions, footage and solids; not folders, data files or 3D models.
 fn replaceable_item(it: &effectcraft_engine::project::Item) -> bool {
@@ -4365,7 +4379,11 @@ fn layer_reorder_drag(ui: &mut egui::Ui, g: &mut Rw) {
         let (down, released, escape) =
             ctx.input(|i| (i.pointer.primary_down(), i.pointer.button_released(egui::PointerButton::Primary), i.key_pressed(egui::Key::Escape)));
         let dropped = ctx.drag_stopped_id() == Some(drag.owner) && released;
-        let valid = ui.is_enabled() && drag.comp == cid && !escape && (dropped || (down && ctx.dragged_id() == Some(drag.owner)));
+        let valid = ui.is_enabled()
+            && drag.comp == cid
+            && drag.layers.iter().all(|id| comp.layer(LayerId(*id)).is_some())
+            && !escape
+            && (dropped || (down && ctx.dragged_id() == Some(drag.owner)));
         if dropped || !valid {
             ctx.data_mut(|d| d.remove::<LayerDrag>(layer_drag_id()));
         }
@@ -4376,7 +4394,7 @@ fn layer_reorder_drag(ui: &mut egui::Ui, g: &mut Rw) {
             && !layer_rows.is_empty()
         {
             let (at, line_y) = insertion(&layer_rows, py, rows_rect.min.y);
-            let target = at.and_then(|i| layer_rows[i..].iter().find(|(_, l)| !moving.contains(&l.0)).map(|(_, l)| *l));
+            let target = layer_drop_target(&g.tl.rows, &layer_rows, at, moving);
             if dropped {
                 // Only when the order changes (no empty undo step for a drop in place).
                 let mut order: Vec<u64> = comp.layers.iter().map(|l| l.id.0).filter(|id| !moving.contains(id)).collect();
