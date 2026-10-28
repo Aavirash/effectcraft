@@ -41,19 +41,39 @@ fn type_value(h: &mut Harness<'_, EffectcraftApp>, id: &str, v: &str) {
     h.run_steps(3);
 }
 
-#[test]
-fn linked_audio_levels_move_both_channels_by_the_same_db() {
-    let mut s = Session::default();
+/// A precomp layer (which has Audio Levels) in comp Main at `levels`; its layer id and the
+/// property's uid.
+fn add_sound_layer(s: &mut Session, levels: [f64; 2]) -> (u64, u64) {
+    let l = s.execute("layer.addItem", json!({"item": "Sound"})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("prop.set", json!({"layer": l, "path": "audio/levels", "value": levels})).unwrap();
+    (l, s.active_comp().unwrap().layer(LayerId(l)).unwrap().props.prop("audio/levels").unwrap().uid)
+}
+
+/// Comps Sound and Main.
+fn comps(s: &mut Session) {
     s.execute("comp.new", json!({"name": "Sound", "width": 64, "height": 36, "duration": 4})).unwrap();
     s.execute("comp.new", json!({"name": "Main", "width": 320, "height": 180, "duration": 4})).unwrap();
-    let l = s.execute("layer.addItem", json!({"item": "Sound"})).unwrap()["layer"].as_u64().unwrap();
-    let uid = s.active_comp().unwrap().layer(LayerId(l)).unwrap().props.prop("audio/levels").unwrap().uid;
-    s.execute("prop.set", json!({"layer": l, "path": "audio/levels", "value": [-6.0, -12.0]})).unwrap();
-    let mut h = Harness::builder().with_size(vec2(1600.0, 1000.0)).build_eframe(|_| EffectcraftApp::new(s));
+}
+
+/// Twirl layer `l` open to its property `uid`.
+fn reveal(h: &mut Harness<'_, EffectcraftApp>, l: u64, uid: u64) {
     h.state_mut().ui.timeline.open_layers.insert(l);
     h.state_mut().ui.timeline.layer_reveal.insert(l, vec!["props".into()]);
     h.state_mut().ui.timeline.reveal_props.insert(uid);
     h.run_steps(3);
+}
+
+fn levels_of(h: &Harness<'_, EffectcraftApp>, l: u64) -> Vec<f64> {
+    h.state().session.active_comp().unwrap().layer(LayerId(l)).unwrap().props.prop("audio/levels").unwrap().value.components()
+}
+
+#[test]
+fn linked_audio_levels_move_both_channels_by_the_same_db() {
+    let mut s = Session::default();
+    comps(&mut s);
+    let (l, uid) = add_sound_layer(&mut s, [-6.0, -12.0]);
+    let mut h = Harness::builder().with_size(vec2(1600.0, 1000.0)).build_eframe(|_| EffectcraftApp::new(s));
+    reveal(&mut h, l, uid);
     let levels =
         |h: &Harness<'_, EffectcraftApp>| h.state().session.active_comp().unwrap().layer(LayerId(l)).unwrap().props.prop("audio/levels").unwrap().clone();
     let set = |h: &mut Harness<'_, EffectcraftApp>, v: [f64; 2]| {
@@ -104,4 +124,43 @@ fn linked_audio_levels_move_both_channels_by_the_same_db() {
     type_value(&mut h, &left, "-4");
     let keys: Vec<Vec<f64>> = levels(&h).keys.iter().map(|k| k.value.components()).collect();
     assert_eq!(keys[0], vec![-4.0, -16.0], "unlinked again, the right channel stays");
+}
+
+/// With several layers selected, a linked typed Left sets each layer's Left and moves its Right
+/// by that layer's own change: every layer keeps its own balance.
+#[test]
+fn linked_typing_keeps_each_selected_layers_own_balance() {
+    let mut s = Session::default();
+    comps(&mut s);
+    let (a, uid) = add_sound_layer(&mut s, [-6.0, -12.0]);
+    let (b, other) = add_sound_layer(&mut s, [-20.0, -30.0]);
+    s.execute("layer.select", json!({"layers": [a, b]})).unwrap();
+    let mut h = Harness::builder().with_size(vec2(1600.0, 1000.0)).build_eframe(|_| EffectcraftApp::new(s));
+    reveal(&mut h, a, uid);
+    reveal(&mut h, b, other);
+    click(&mut h, &format!("timeline.prop.{uid}.link"));
+    type_value(&mut h, &format!("timeline.prop.{uid}.value.0"), "-3");
+    assert_eq!(levels_of(&h, a), vec![-3.0, -9.0]);
+    assert_eq!(levels_of(&h, b), vec![-3.0, -13.0], "B rises 17 dB on both channels, keeping its 10 dB balance");
+}
+
+/// A link turned on does not carry into a new project whose Audio Levels reuse the property uid.
+#[test]
+fn a_new_project_starts_with_its_audio_levels_unlinked() {
+    let mut s = Session::default();
+    comps(&mut s);
+    let (l, uid) = add_sound_layer(&mut s, [0.0, 0.0]);
+    let mut h = Harness::builder().with_size(vec2(1600.0, 1000.0)).build_eframe(|_| EffectcraftApp::new(s));
+    reveal(&mut h, l, uid);
+    click(&mut h, &format!("timeline.prop.{uid}.link"));
+    assert!(h.state().ui.timeline.is_linked(uid, false));
+
+    h.state_mut().session.execute("file.newProject", json!({})).unwrap();
+    comps(&mut h.state_mut().session);
+    let (l, again) = add_sound_layer(&mut h.state_mut().session, [0.0, 0.0]);
+    assert_eq!(again, uid, "the new project reuses the property uid");
+    reveal(&mut h, l, again);
+    assert!(!h.state().ui.timeline.is_linked(again, false), "the new project's levels start unlinked");
+    type_value(&mut h, &format!("timeline.prop.{again}.value.0"), "-3");
+    assert_eq!(levels_of(&h, l), vec![-3.0, 0.0]);
 }
