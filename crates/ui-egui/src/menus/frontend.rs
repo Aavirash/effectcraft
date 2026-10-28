@@ -479,7 +479,15 @@ pub fn frontend(app: &mut EffectcraftApp, ctx: &egui::Context, id: &str, p: Valu
             app.ui.home_templates = true;
             Value::Null
         }
-        "effect.manage" | "anim.browsePresets" => {
+        "effect.manage" => {
+            app.show_panel(PanelKind::EffectsPresets);
+            Value::Null
+        }
+        "anim.browsePresets" => {
+            app.ui.effects_search.clear();
+            app.ui.effects_view.presets = true;
+            app.ui.effects_open.insert("presets".into());
+            ctx.data_mut(|data| data.insert_temp(egui::Id::unique("fx-reveal-presets"), true));
             app.show_panel(PanelKind::EffectsPresets);
             Value::Null
         }
