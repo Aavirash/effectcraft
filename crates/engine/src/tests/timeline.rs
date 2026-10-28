@@ -1430,3 +1430,23 @@ fn a_typed_component_applies_only_that_component_to_the_selected_layers() {
     s.execute("prop.set", json!({"layer": a, "prop": uid, "value": [1.0, 2.0, 3.0], "selected": true})).unwrap();
     assert_eq!(pos(&s, c), vec![1.0, 2.0, 3.0]);
 }
+
+/// #2485: linked Audio Levels typed with several layers selected: each takes the typed Left, and
+/// its Right moves by its own change, so every layer keeps its own stereo balance.
+#[test]
+fn a_typed_component_moves_its_follow_components_by_each_layers_own_change() {
+    let mut s = Session::default();
+    s.execute("comp.new", json!({"name": "Sound", "width": 64, "height": 36, "duration": 4})).unwrap();
+    s.execute("comp.new", json!({"name": "Main", "width": 320, "height": 180, "duration": 4})).unwrap();
+    let a = s.execute("layer.addItem", json!({"item": "Sound"})).unwrap()["layer"].as_u64().unwrap();
+    let b = s.execute("layer.addItem", json!({"item": "Sound"})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("prop.set", json!({"layer": a, "path": "audio/levels", "value": [-6.0, -12.0]})).unwrap();
+    s.execute("prop.set", json!({"layer": b, "path": "audio/levels", "value": [-20.0, -30.0]})).unwrap();
+    s.execute("layer.select", json!({"layers": [a, b]})).unwrap();
+    let uid = prop(&s, a, "audio/levels").uid;
+    let undo = s.history.undo.len();
+    s.execute_checked("prop.set", json!({"layer": a, "prop": uid, "value": [-3.0, -9.0], "selected": true, "dims": [0], "follow": [1]})).unwrap();
+    assert_eq!(prop(&s, a, "audio/levels").value.components(), vec![-3.0, -9.0]);
+    assert_eq!(prop(&s, b, "audio/levels").value.components(), vec![-3.0, -13.0], "B rises 17 dB on both channels");
+    assert_eq!(s.history.undo.len(), undo + 1, "one undo step");
+}
