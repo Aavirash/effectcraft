@@ -211,6 +211,10 @@ fn shape_size_chain_starts_unlinked_and_keeps_the_ratio_when_linked() {
     click(&mut h, &format!("timeline.prop.{size}.link"));
     type_value(&mut h, size, 0, "40");
     assert_eq!(value(&h, l, size), vec![40.0, 100.0], "unlinked again, H stays");
+    // The ellipse's Size links the same way: 60x40 linked, W to 90 makes H 60.
+    click(&mut h, &format!("timeline.prop.{oval}.link"));
+    type_value(&mut h, oval, 0, "90");
+    assert_eq!(value(&h, o, oval), vec![90.0, 60.0], "linked, the ellipse keeps its ratio too");
     type_value(&mut h, scale, 0, "50");
     assert_eq!(value(&h, l, scale)[..2], [50.0, 50.0], "Scale still starts linked");
 }
