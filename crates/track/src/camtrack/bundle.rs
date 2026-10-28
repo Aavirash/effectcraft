@@ -12,7 +12,7 @@ use rayon::prelude::*;
 
 use super::Distortion;
 use super::geometry::Pose;
-use super::linalg::*;
+use super::linalg::{M3, V3, add, cholesky_solve, conjugate_gradient, dot, inv3, mm, mtv, mv, rodrigues, scale, skew, sub};
 
 /// A camera in the adjustment.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -269,6 +269,71 @@ fn iterative_schur(u: &[f64], rhs: &[f64], systems: &[PtSys], vinv: &[Option<M3>
     )
 }
 
+/// Smooth per-camera log focal lengths in the normal equations.
+fn add_focal_prior(cams: &[BaCam], o: &BaOpts, l: &Layout, s_mat: &mut [f64], bc: &mut [f64]) {
+    let n = l.n;
+    // Focal prior.
+    if let FocalMode::PerCamera(k) = o.focal {
+        for i in 0..cams.len().saturating_sub(1) {
+            let r = k * (cams[i].f.ln() - cams[i + 1].f.ln());
+            let (a, b) = (l.fidx[i], l.fidx[i + 1]);
+            let ia = (a != usize::MAX).then_some(a);
+            let ib = (b != usize::MAX).then_some(b);
+            for (idx, g) in [(ia, k), (ib, -k)] {
+                let Some(x) = idx else { continue };
+                bc[x] -= g * r;
+                for (idy, h) in [(ia, k), (ib, -k)] {
+                    if let Some(y) = idy {
+                        s_mat[x * n + y] += g * h;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Eliminate the points into the camera system explicitly (`S -= W V^-1 W^T`, `rhs -= W V^-1 bp`).
+fn reduce_points(systems: &[PtSys], vinv: &[Option<M3>], n: usize, s: &mut [f64], rhs: &mut [f64]) {
+    let npts = systems.len();
+    let reduce = |range: std::ops::Range<usize>, s: &mut [f64], rhs: &mut [f64]| {
+        for j in range {
+            let (Some(vi), ps) = (&vinv[j], &systems[j]) else { continue };
+            let vb = mv(vi, ps.bp);
+            let wv: Vec<V3> = ps.w.iter().map(|(_, w)| mv(vi, *w)).collect();
+            for (a, (ia, wa)) in ps.w.iter().enumerate() {
+                rhs[*ia] -= dot(*wa, vb);
+                for (ib, wb) in &ps.w[a..] {
+                    let d = dot(wv[a], *wb);
+                    s[ia * n + ib] -= d;
+                    if ia != ib {
+                        s[ib * n + ia] -= d;
+                    }
+                }
+            }
+        }
+    };
+    let chunks = rayon::current_num_threads().clamp(1, 8);
+    if n <= 1200 && npts >= 64 && chunks > 1 {
+        let per = npts.div_ceil(chunks);
+        let parts: Vec<(Vec<f64>, Vec<f64>)> = (0..chunks)
+            .into_par_iter()
+            .map(|t| {
+                let (mut ds, mut dr) = (vec![0.0; n * n], vec![0.0; n]);
+                reduce(t * per..((t + 1) * per).min(npts), &mut ds, &mut dr);
+                (ds, dr)
+            })
+            .collect();
+        for (ds, dr) in parts {
+            s.par_iter_mut().zip(ds.par_iter()).for_each(|(x, y)| *x += y);
+            for (x, y) in rhs.iter_mut().zip(dr) {
+                *x += y;
+            }
+        }
+    } else {
+        reduce(0..npts, s, rhs);
+    }
+}
+
 /// Run Levenberg–Marquardt. `cams` and `pts` are updated in place.
 pub fn adjust(cams: &mut [BaCam], pts: &mut [V3], obs: &[BaObs], o: &BaOpts) -> BaReport {
     adjust_impl(cams, pts, obs, o, true)
@@ -392,24 +457,7 @@ fn adjust_impl(cams: &mut [BaCam], pts: &mut [V3], obs: &[BaObs], o: &BaOpts, al
             let sys = (0..npts).map(|j| build_point(j, &mut s, &mut b)).collect();
             (s, b, sys)
         };
-        // Focal prior.
-        if let FocalMode::PerCamera(k) = o.focal {
-            for i in 0..cams.len().saturating_sub(1) {
-                let r = k * (cams[i].f.ln() - cams[i + 1].f.ln());
-                let (a, b) = (l.fidx[i], l.fidx[i + 1]);
-                let ia = (a != usize::MAX).then_some(a);
-                let ib = (b != usize::MAX).then_some(b);
-                for (idx, g) in [(ia, k), (ib, -k)] {
-                    let Some(x) = idx else { continue };
-                    bc[x] -= g * r;
-                    for (idy, h) in [(ia, k), (ib, -k)] {
-                        if let Some(y) = idy {
-                            s_mat[x * n + y] += g * h;
-                        }
-                    }
-                }
-            }
-        }
+        add_focal_prior(cams, o, &l, &mut s_mat, &mut bc);
         let base_s = s_mat.clone();
         let base_bc = bc.clone();
         let mean_diag = ((0..n).map(|i| base_s[i * n + i]).sum::<f64>() / n.max(1) as f64).max(1e-12);
@@ -455,43 +503,7 @@ fn adjust_impl(cams: &mut [BaCam], pts: &mut [V3], obs: &[BaObs], o: &BaOpts, al
                 dc
             } else {
                 if !o.fix_points {
-                    let reduce = |range: std::ops::Range<usize>, s: &mut [f64], rhs: &mut [f64]| {
-                        for j in range {
-                            let (Some(vi), ps) = (&vinv[j], &systems[j]) else { continue };
-                            let vb = mv(vi, ps.bp);
-                            let wv: Vec<V3> = ps.w.iter().map(|(_, w)| mv(vi, *w)).collect();
-                            for (a, (ia, wa)) in ps.w.iter().enumerate() {
-                                rhs[*ia] -= dot(*wa, vb);
-                                for (ib, wb) in &ps.w[a..] {
-                                    let d = dot(wv[a], *wb);
-                                    s[ia * n + ib] -= d;
-                                    if ia != ib {
-                                        s[ib * n + ia] -= d;
-                                    }
-                                }
-                            }
-                        }
-                    };
-                    let chunks = rayon::current_num_threads().clamp(1, 8);
-                    if n <= 1200 && npts >= 64 && chunks > 1 {
-                        let per = npts.div_ceil(chunks);
-                        let parts: Vec<(Vec<f64>, Vec<f64>)> = (0..chunks)
-                            .into_par_iter()
-                            .map(|t| {
-                                let (mut ds, mut dr) = (vec![0.0; n * n], vec![0.0; n]);
-                                reduce(t * per..((t + 1) * per).min(npts), &mut ds, &mut dr);
-                                (ds, dr)
-                            })
-                            .collect();
-                        for (ds, dr) in parts {
-                            s.par_iter_mut().zip(ds.par_iter()).for_each(|(x, y)| *x += y);
-                            for (x, y) in rhs.iter_mut().zip(dr) {
-                                *x += y;
-                            }
-                        }
-                    } else {
-                        reduce(0..npts, &mut s, &mut rhs);
-                    }
+                    reduce_points(&systems, &vinv, n, &mut s, &mut rhs);
                 }
                 let mut dc = rhs;
                 if n > 0 && !cholesky_solve(&mut s, n, &mut dc) {
@@ -573,6 +585,7 @@ fn adjust_impl(cams: &mut [BaCam], pts: &mut [V3], obs: &[BaObs], o: &BaOpts, al
 mod tests {
     use super::*;
     use crate::camtrack::geometry::Rng;
+    use crate::camtrack::linalg::{I3, log_rot, mt, norm};
 
     #[test]
     fn long_track_adjustment_matches_direct_reprojections_and_outliers() {
