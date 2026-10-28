@@ -452,7 +452,8 @@ struct Desktop {
 }
 
 impl eframe::App for Desktop {
-    /// The desktop host's logic tick: update the macOS menu bar, run the shared app tick and close the IME pass.
+    /// The desktop host's logic tick: update the macOS menu bar, run the shared app tick, close the IME pass, show the
+    /// file dialogs asked for and, last, hand a close to the platform quit.
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         #[cfg(target_os = "macos")]
         self.menu.update(&mut self.app, ctx);
@@ -461,6 +462,7 @@ impl eframe::App for Desktop {
         if let Some(asked) = &self.file_dialogs {
             sheet_dialogs::show_asked(asked, frame, ctx);
         }
+        effectcraft_ui_egui::panels::unsaved::quit_on_close(ctx);
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {

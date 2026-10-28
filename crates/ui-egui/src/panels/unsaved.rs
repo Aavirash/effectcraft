@@ -58,12 +58,12 @@ pub fn on_close_requested(app: &mut EffectcraftApp, ctx: &egui::Context) {
     }
 }
 
-/// [`on_close_requested`], then on macOS a close that nothing held open quits through
-/// `-[NSApplication terminate:]` instead: closing the window while AppKit's run loop is running
-/// crashes on a Mac with a Touch Bar (#341). `on_exit` still runs. Returns whether that quit was
-/// scheduled; other platforms close the window as before.
-pub fn close_or_quit(app: &mut EffectcraftApp, ctx: &egui::Context) -> bool {
-    on_close_requested(app, ctx);
+/// On macOS a close that nothing held open quits through `-[NSApplication terminate:]` instead:
+/// closing the window while AppKit's run loop is running crashes on a Mac with a Touch Bar
+/// (#341). `on_exit` still runs. A desktop host calls it last in `logic`, after
+/// `EffectcraftApp::tick` (which runs [`on_close_requested`]) and its own work. Returns whether
+/// that quit was scheduled; other platforms close the window as before.
+pub fn quit_on_close(ctx: &egui::Context) -> bool {
     craft_quit::on_close_request(ctx)
 }
 
@@ -216,16 +216,17 @@ mod tests {
         out.viewport_output.get(&egui::ViewportId::ROOT).is_some_and(|v| v.commands.contains(&egui::ViewportCommand::CancelClose))
     }
 
-    /// One frame of the dialogs with the window's close button pressed, through [`close_or_quit`]
-    /// as the app runs it; returns whether the close was canceled and whether the platform quit
-    /// was scheduled.
+    /// One frame of the dialogs with the window's close button pressed, through
+    /// [`on_close_requested`] and then [`quit_on_close`] as the app runs them; returns whether the
+    /// close was canceled and whether the platform quit was scheduled.
     fn close_frame(app: &mut EffectcraftApp, ctx: &egui::Context) -> (bool, bool) {
         let mut raw = egui::RawInput::default();
         raw.viewports.entry(egui::ViewportId::ROOT).or_default().events.push(egui::ViewportEvent::Close);
         let mut quits = false;
         let mut out = ctx.run_ui(raw, |ui| {
             app.auto.begin_frame();
-            quits = close_or_quit(app, ui.ctx());
+            on_close_requested(app, ui.ctx());
+            quits = quit_on_close(ui.ctx());
             crate::panels::dialogs::show(app, ui.ctx());
         });
         out.textures_delta.clear();
@@ -423,5 +424,24 @@ mod tests {
         assert!(app.session.is_dirty(), "the answer ran");
         assert!(canceled, "the close is canceled");
         assert_eq!(app.dialog, Some(Dialog::UnsavedChanges));
+    }
+
+    /// The tick makes the close decision and leaves the platform quit to the host, which runs it
+    /// last in `logic`, after its own work (the desktop host shows the file dialogs asked for).
+    /// On macOS `logic` cancels the close and quits; other platforms close the window.
+    #[test]
+    fn the_platform_quit_runs_after_the_tick() {
+        let (mut app, ctx) = app();
+        let mut raw = egui::RawInput::default();
+        raw.viewports.entry(egui::ViewportId::ROOT).or_default().events.push(egui::ViewportEvent::Close);
+        let frame = eframe::Frame::_new_kittest();
+        let canceled =
+            |out: &egui::LogicOutput| out.viewport_commands.get(&egui::ViewportId::ROOT).is_some_and(|c| c.contains(&egui::ViewportCommand::CancelClose));
+        let out = ctx.run_logic(&raw, |ctx| app.tick(ctx, &frame));
+        assert!(!canceled(&out), "the tick leaves a saved project's close to the host");
+        let mut frame = eframe::Frame::_new_kittest();
+        let out = ctx.run_logic(&raw, |ctx| eframe::App::logic(&mut app, ctx, &mut frame));
+        assert_eq!(canceled(&out), cfg!(target_os = "macos"), "logic quits through the platform on macOS");
+        assert!(app.dialog.is_none(), "nothing to ask");
     }
 }
