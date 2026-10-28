@@ -5536,8 +5536,15 @@ fn vector_editor(app: &mut EffectcraftApp, ui: &mut egui::Ui, ve: &ValueEdit<'_>
             ve.set(actions, json!(nc));
             // Typed into these components only: other selected layers keep the rest of
             // their own value (#1434).
+            // Linked Audio Levels: the typed channel, the other following by that layer's own
+            // change, so each keeps its balance (#2485).
             if let Some((_, a)) = actions.last_mut() {
-                a["dims"] = json!((from..from + shown).collect::<Vec<_>>());
+                if levels {
+                    a["dims"] = json!([d]);
+                    a["follow"] = json!((from..from + shown).filter(|&e| e != d).collect::<Vec<_>>());
+                } else {
+                    a["dims"] = json!((from..from + shown).collect::<Vec<_>>());
+                }
             }
         }
         x = r.max.x + if d + 1 < n { 2.0 } else { 0.0 };
