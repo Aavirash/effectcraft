@@ -820,6 +820,13 @@ pub(crate) fn constrained(c: &[f64], d: usize, v: f64) -> Vec<f64> {
         .collect()
 }
 
+/// Linked values after component `d` of `c` became `v`: the others move by the same amount, so
+/// linked Audio Levels keep their stereo balance in dB (#2485).
+pub(crate) fn shifted(c: &[f64], d: usize, v: f64) -> Vec<f64> {
+    let Some(&old) = c.get(d) else { return c.to_vec() };
+    c.iter().enumerate().map(|(e, &x)| if e == d { v } else { x + (v - old) }).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
