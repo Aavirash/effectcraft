@@ -286,6 +286,7 @@ impl EffectcraftApp {
     /// `eframe::App::ui` and by tests with the root `Ui`.
     pub fn draw(&mut self, ui: &mut egui::Ui, frame: &eframe::Frame) {
         panels::viewer_text::begin_ui(ui.ctx());
+        self.ui.timeline.scope_links(self.session.script_ui.project_epoch);
         self.draw_inner(ui, frame);
         // All exits, including fonts/device loss, observe this pass's real custom availability.
         panels::viewer_text::finish_ime(self, ui);

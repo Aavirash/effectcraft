@@ -322,6 +322,16 @@ impl TimelineState {
         }
     }
 
+    /// Forget the chain links when the project was replaced (new or opened): they are keyed by
+    /// property uid, which the next project reuses, so a link turned on must not carry into it.
+    pub fn scope_links(&mut self, project_epoch: u64) {
+        if self.link_epoch != project_epoch {
+            self.link_epoch = project_epoch;
+            self.unlinked.clear();
+            self.linked.clear();
+        }
+    }
+
     /// Show `kinds` on `layers` (twirled open; empty: twirled closed) and remember it as the last
     /// reveal. Other layers keep theirs.
     pub fn apply_reveal(&mut self, layers: &[u64], kinds: Vec<String>) {
@@ -432,6 +442,9 @@ pub struct TimelineState {
     /// Audio Levels properties whose channel link (off by default) was turned on (#2485).
     #[serde(default)]
     pub linked: BTreeSet<u64>,
+    /// The project (its epoch) `unlinked` and `linked` belong to.
+    #[serde(skip)]
+    pub link_epoch: u64,
     /// Visible optional columns (column header right-click ▸ Columns): `av`, `keys`, `label`,
     /// `num`, `comment`, `switches`, `parent`, `in`, `out`, `duration`, `stretch`. The name
     /// column is always shown; Modes follows `show_modes` (F4).
@@ -485,6 +498,7 @@ impl Default for TimelineState {
             expr_lines: BTreeMap::new(),
             unlinked: BTreeSet::new(),
             linked: BTreeSet::new(),
+            link_epoch: 0,
             columns: default_tl_columns(),
             source_name: false,
             scroll_to: None,
