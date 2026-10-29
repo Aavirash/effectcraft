@@ -1024,8 +1024,11 @@ fn decode_tracked(cache: &TrackCache, f: i64) -> Option<FrameSeg> {
     // The size comes from the project file: checked, so a corrupt one is ignored rather than overflowing.
     let [w, h] = cache.size;
     let n = w.checked_mul(h)?;
-    let matte = rle::decode(&fr.m)?;
-    let refine = rle::decode(&fr.r)?;
+    if n == 0 || n > rle::MAX_PLANE_BYTES {
+        return None;
+    }
+    let matte = rle::decode_bounded(&fr.m, n)?;
+    let refine = rle::decode_bounded(&fr.r, n)?;
     (matte.len() == n && refine.len() == n).then(|| FrameSeg { w, h, matte, refine, fg: fr.fg.clone(), bg: fr.bg.clone() })
 }
 
@@ -1034,8 +1037,11 @@ fn decode_object(cache: &TrackCache, f: i64, o: u32) -> Option<FrameSeg> {
     let fr = cache.objects.get(&o)?.get(&f)?;
     let [w, h] = cache.size;
     let n = w.checked_mul(h)?;
-    let matte = rle::decode(&fr.m)?;
-    let refine = rle::decode(&fr.r)?;
+    if n == 0 || n > rle::MAX_PLANE_BYTES {
+        return None;
+    }
+    let matte = rle::decode_bounded(&fr.m, n)?;
+    let refine = rle::decode_bounded(&fr.r, n)?;
     (matte.len() == n && refine.len() == n).then(|| FrameSeg { w, h, matte, refine, ..Default::default() })
 }
 
@@ -1461,6 +1467,35 @@ mod tests {
         let seg = chain.object_seg(1, 1).expect("the saved object matte");
         assert_eq!(seg.matte.len(), 100 * 80);
         assert!(cached(object_key(other[&1], 1), 1.0).is_none(), "the other model's cache holds none of it");
+    }
+
+    #[test]
+    fn saved_tracking_decoders_validate_dimensions_and_plane_lengths() {
+        let valid = rle::encode(&[255, 0, 255, 0]);
+        let mut cache = TrackCache {
+            size: [2, 2],
+            frames: [(0, TrackFrame { m: valid.clone(), r: valid.clone(), ..Default::default() })].into_iter().collect(),
+            objects: [(1, [(0, ObjectFrame { m: valid.clone(), r: valid.clone() })].into_iter().collect())].into_iter().collect(),
+            ..Default::default()
+        };
+        assert_eq!(decode_tracked(&cache, 0).unwrap().matte, [255, 0, 255, 0]);
+        assert_eq!(decode_object(&cache, 0, 1).unwrap().refine, [255, 0, 255, 0]);
+        for (size, matte, refine) in [
+            ([0, 2], rle::encode(&[]), rle::encode(&[])),
+            ([2, 0], rle::encode(&[]), rle::encode(&[])),
+            ([usize::MAX, 2], valid.clone(), valid.clone()),
+            ([rle::MAX_PLANE_BYTES + 1, 1], valid.clone(), valid.clone()),
+            ([2, 2], rle::encode(&[0; 5]), valid.clone()),
+            ([2, 2], valid.clone(), rle::encode(&[0; 5])),
+            ([2, 2], rle::encode(&[0; 3]), valid.clone()),
+            ([2, 2], valid, rle::encode(&[0; 3])),
+        ] {
+            cache.size = size;
+            cache.frames.insert(0, TrackFrame { m: matte.clone(), r: refine.clone(), ..Default::default() });
+            cache.objects.insert(1, [(0, ObjectFrame { m: matte, r: refine })].into_iter().collect());
+            assert!(decode_tracked(&cache, 0).is_none(), "tracked plane {size:?}");
+            assert!(decode_object(&cache, 0, 1).is_none(), "object plane {size:?}");
+        }
     }
 
     #[test]
