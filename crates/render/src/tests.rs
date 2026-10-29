@@ -1185,3 +1185,82 @@ fn an_instance_of_a_model_is_cached_and_follows_the_camera() {
     let (a, b) = (cover_x(&here), cover_x(&panned));
     assert!(b < a - 20.0, "panning the camera right moves the copy left: {a} -> {b}");
 }
+
+/// The camera's depth of field blurs the solo render (focus, aperture, iris, highlights) —
+/// none of it is in the projection matrix: changing any of it must change the copy's key, or
+/// it would serve the un-blurred pixels.
+#[test]
+fn the_copy_key_covers_the_cameras_depth_of_field() {
+    let t = Tick::from_seconds_f64(1.0);
+    let (p, cid) = instance_scene(0.0);
+    let set_dof = |p: &Project, on: bool, focus: f64, aperture: f64| {
+        let mut q = p.clone();
+        let cam = &mut q.comp_mut(cid).unwrap().layers[0];
+        for (path, v) in
+            [("cameraOptions/dof", Value::Bool(on)), ("cameraOptions/focusDistance", Value::Scalar(focus)), ("cameraOptions/aperture", Value::Scalar(aperture))]
+        {
+            cam.props.prop_mut(path).unwrap().value = v;
+        }
+        q
+    };
+    let key_at = |p: &Project| {
+        let c = p.comp(cid).unwrap();
+        crate::cache::layer_key(&crate::EvalCtx::new(p, cid, c, t), &c.layers[1], 1.0, false, false).unwrap()
+    };
+    let ka = key_at(&set_dof(&p, true, 500.0, 20.0));
+    let kb = key_at(&set_dof(&p, true, 500.0, 40.0)); // aperture
+    let kc = key_at(&set_dof(&p, true, 700.0, 20.0)); // focus
+    let kd = key_at(&set_dof(&p, false, 500.0, 20.0)); // the switch off
+    assert!(ka != kb && ka != kc && ka != kd && kb != kc, "aperture, focus and the switch each change the key");
+}
+
+/// A model with an animation clip selected is posed at its layer time: every time is its own
+/// entry. Without one (the default) the pose is the same at every time: one key inside the
+/// in/out range, as before.
+#[test]
+fn the_copy_key_covers_an_animated_models_layer_time() {
+    let (p, cid) = instance_scene(0.0);
+    let (t0, t1) = (Tick::from_seconds_f64(0.5), Tick::from_seconds_f64(1.0));
+    let key_at = |p: &Project, t: Tick| {
+        let c = p.comp(cid).unwrap();
+        crate::cache::layer_key(&crate::EvalCtx::new(p, cid, c, t), &c.layers[1], 1.0, false, false).unwrap()
+    };
+    assert_eq!(key_at(&p, t0), key_at(&p, t1), "a model without a clip keeps one key across times");
+    let mut q = p.clone();
+    q.comp_mut(cid).unwrap().layers[2].props.prop_mut("geometryOptions/animation").unwrap().value = Value::Enum(1);
+    assert_ne!(key_at(&q, t0), key_at(&q, t1), "an animated model's key follows its layer time");
+    // Two times and back: each is rendered fresh, none served another time's pixels.
+    let cache = crate::LayerCache::default();
+    let first = render_models(&q, cid, t0, Some(&cache));
+    let second = render_models(&q, cid, t1, Some(&cache));
+    assert_eq!(cache.stats().hits, 0, "the second time is not served the first time's pixels");
+    assert_same(&second, &render_models(&q, cid, t1, None), "the second time is a fresh render");
+    let again = render_models(&q, cid, t0, Some(&cache));
+    assert_eq!(cache.stats().hits, 1, "the first time is served on the way back");
+    assert_same(&again, &first, "the way back is the first time's pixels");
+}
+
+/// An Environment light's image lights Advanced 3D models — its source can be any layer's
+/// render: with one on, the read is not cached, so changes to it cannot reuse stale pixels.
+#[test]
+fn an_environment_light_makes_the_copy_uncached() {
+    let (p, cid) = instance_scene(0.0);
+    let mut q = p.clone();
+    let comp = q.comp(cid).unwrap().clone();
+    let env = build::layer(&mut q, &comp, "Env", LayerSource::Light { kind: effectcraft_project::LightKind::Environment }, (200, 100), None);
+    q.comp_mut(cid).unwrap().layers.insert(0, env);
+    let t = Tick::from_seconds_f64(1.0);
+    let key_at = |p: &Project| {
+        let c = p.comp(cid).unwrap();
+        crate::cache::layer_key(&crate::EvalCtx::new(p, cid, c, t), &c.layers[2], 1.0, false, false)
+    };
+    assert!(key_at(&q).is_none(), "with an Environment light the read is not cached");
+    let cache = crate::LayerCache::default();
+    let a = render_models(&q, cid, t, Some(&cache));
+    let b = render_models(&q, cid, t, Some(&cache));
+    assert_same(&a, &b, "two fresh renders agree");
+    assert_eq!(cache.stats().hits, 0, "nothing is served from the cache");
+    // The light off (not lighting): the cache comes back.
+    q.comp_mut(cid).unwrap().layers[0].switches.video = false;
+    assert!(key_at(&q).is_some(), "the light off, the read is cached again");
+}
