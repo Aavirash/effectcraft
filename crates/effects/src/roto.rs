@@ -457,20 +457,24 @@ impl Chain {
     }
 
     /// What Show Object asks for at frame `f`: `None` shows the whole matte (all objects, a single object, or a frame
-    /// the tracker did not follow); an object the instance does not have shows nothing.
+    /// the tracker did not follow); a missing object on a tracked frame shows nothing.
     fn shown_object(&self, f: i64) -> Option<Arc<FrameSeg>> {
         let o = self.show_object.checked_sub(1)?;
         let objects = self.data.objects();
         if objects.len() < 2 {
             return None;
         }
-        if !objects.contains(&o) {
-            let sc = self.opts.scale;
-            let [w, h] =
-                self.saved.as_ref().map(|t| t.cache.size).or_else(|| self.keys.get(&f).and_then(|k| cached(tracked_key(*k), sc)).map(|s| [s.w, s.h]))?;
-            return Some(Arc::new(FrameSeg::empty(w, h)));
+        if objects.contains(&o)
+            && let Some(seg) = self.object_seg(f, o)
+        {
+            return Some(seg);
         }
-        self.object_seg(f, o)
+        let sc = self.opts.scale;
+        let tracked = self.saved_seg(f, sc).or_else(|| {
+            let key = tracked_key(*self.keys.get(&f)?);
+            cached(key, sc).or_else(|| cached(key, 1.0).map(|seg| Arc::new(downscale(&seg, sc))))
+        })?;
+        Some(Arc::new(FrameSeg::empty(tracked.w, tracked.h)))
     }
 
     /// The tracker's trust in frame `f`: from the saved tracking, else from this session's tracking.
@@ -1467,6 +1471,50 @@ mod tests {
         let seg = chain.object_seg(1, 1).expect("the saved object matte");
         assert_eq!(seg.matte.len(), 100 * 80);
         assert!(cached(object_key(other[&1], 1), 1.0).is_none(), "the other model's cache holds none of it");
+    }
+
+    #[test]
+    fn showing_a_missing_tracked_object_never_falls_back_to_other_objects() {
+        let mut d = RotoData::default();
+        for object in 0..2 {
+            d.add(Stroke { kind: StrokeKind::Fg, frame: 0, radius: 1.0, points: vec![[1.0, 1.0]], object }, 1, [0, 1]);
+        }
+        let union = Arc::new(FrameSeg { w: 4, h: 2, matte: vec![255; 8], refine: vec![0; 8], ..Default::default() });
+        for saved in [false, true] {
+            for scale in [1.0, 0.5] {
+                let mut params = params_with(&d);
+                params.values.insert("version".into(), Value::Scalar(0.0));
+                params.values.insert(INPUT_KEY.into(), Value::Str(format!("missing-object-{saved}-{scale}")));
+                let keys = d.chain_keys(seed(&params, [4.0, 2.0], 25.0));
+                if saved {
+                    let matte = rle::encode(&union.matte);
+                    let refine = rle::encode(&union.refine);
+                    let cache = TrackCache {
+                        key: tracks_key(&keys),
+                        model: effectcraft_segment::CLASSICAL.into(),
+                        size: [4, 2],
+                        frames: [(0, TrackFrame { m: matte.clone(), r: refine.clone(), ..Default::default() })].into_iter().collect(),
+                        objects: [(0, [(0, ObjectFrame { m: matte, r: refine })].into_iter().collect())].into_iter().collect(),
+                    };
+                    params.values.insert(TRACKED.into(), Value::Str(cache.to_json()));
+                } else {
+                    store(tracked_key(keys[&0]), 1.0, union.clone());
+                    store(object_key(keys[&0], 0), 1.0, union.clone());
+                }
+                let mut chain = Chain::new(&params, [4.0, 2.0], 25.0, scale);
+                let expected = downscale(&union, scale);
+                for object in [2, 7] {
+                    chain.show_object = object;
+                    let shown = chain.ensure(0, &mut |_| None, &|| false).expect("tracked frame");
+                    assert_eq!((shown.w, shown.h, shown.area()), (expected.w, expected.h, 0), "saved={saved}, scale={scale}, object={object}");
+                }
+                assert!(chain.shown_object(1).is_none(), "untracked frames keep their existing fallback");
+                for object in [0, 1] {
+                    chain.show_object = object;
+                    assert_eq!(chain.ensure(0, &mut |_| None, &|| false).unwrap().matte, expected.matte);
+                }
+            }
+        }
     }
 
     #[test]
