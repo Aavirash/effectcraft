@@ -126,6 +126,9 @@ fn spatial_tangents(s: &mut Session, p: &Value) -> Result<Value> {
     let brk = b_p(p, "break").unwrap_or(false);
     s.edit("Edit Spatial Tangents", merge_p(p), |proj, _| {
         let l = super::layer_mut(proj, cid, lid)?;
+        if l.switches.locked {
+            return Err(bad("keys.setSpatialTangents", "the layer is locked"));
+        }
         let pr = l.props.find_mut(uid).ok_or_else(|| bad("keys.setSpatialTangents", "no property"))?;
         if !pr.spatial {
             return Err(bad("keys.setSpatialTangents", "not a spatial property"));

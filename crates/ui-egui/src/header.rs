@@ -883,21 +883,41 @@ mod tests {
         let mut s = effectcraft_engine::Session::default();
         s.execute("comp.new", json!({"width": 400, "height": 300, "duration": 2})).unwrap();
         let first = s.execute("layer.newShape", json!({"kind": "rect"})).unwrap()["layer"].as_u64().unwrap();
+        s.execute("shape.fillStroke", json!({"layers": [first], "fill": "#00ff00", "stroke": false})).unwrap();
         s.execute("shape.toolOptions", json!({"fill": "#00ff00", "stroke": false})).unwrap();
         let mut app = EffectcraftApp::new(s);
         let ctx = egui::Context::default();
         assert_eq!(app.session.state.selected_layers.first().map(|l| l.0), Some(first), "a shape layer is selected");
-        comp_sized_shape(&mut app, &ctx, Tool::Star).unwrap();
+        crate::theme::install(&ctx, &app.tokens, crate::i18n::language(&app));
+        frame(&mut app, &ctx, 0.0, vec![]);
+        frame(&mut app, &ctx, 0.1, vec![]);
+        assert_eq!(app.session.state.shape_tool.fill.color, [0.0, 1.0, 0.0], "the visible toolbar paint");
+        let [x, y, w, h] = app.auto.find("tools.Rectangle").unwrap().rect;
+        let at = egui::pos2(x + w / 2.0, y + h / 2.0);
+        let pointer = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+        frame(&mut app, &ctx, 1.0, vec![egui::Event::PointerMoved(at), pointer(true)]);
+        frame(&mut app, &ctx, 1.05, vec![pointer(false)]);
+        assert_eq!(app.session.active_comp().unwrap().layers.len(), 1, "a single click only selects the tool");
+        // A separate double-click must route through the toolbar response, not just its helper.
+        for (time, pressed) in [(2.0, true), (2.05, false), (2.1, true), (2.15, false)] {
+            frame(&mut app, &ctx, time, vec![pointer(pressed)]);
+        }
         let comp = app.session.active_comp().unwrap();
         assert_eq!(comp.layers.len(), 2, "a new layer, not a group in the selected one");
         let layer = comp.layers.iter().find(|l| l.id.0 != first).unwrap();
+        assert_eq!(layer.props.prop("transform/position").unwrap().value.components(), vec![200.0, 150.0, 0.0]);
         let mut fill = None;
+        let mut size = None;
         layer.props.walk("", &mut |_, pr| {
+            if pr.name == "Size" {
+                size = Some(pr.value.clone());
+            }
             if fill.is_none() && matches!(pr.value, effectcraft_engine::keyframe::Value::Color(_)) {
                 fill = Some(pr.value.clone());
             }
         });
         let fill = fill.expect("a fill colour");
+        assert_eq!(size, Some(effectcraft_engine::keyframe::Value::Vec2([400.0, 300.0])));
         assert_eq!(fill, effectcraft_engine::keyframe::Value::Color([0.0, 1.0, 0.0, 1.0]), "the Tools bar's Fill, not the default blue");
     }
 }

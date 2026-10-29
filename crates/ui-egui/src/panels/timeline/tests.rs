@@ -583,3 +583,34 @@ fn the_key_menu_is_translated_and_cannot_edit_a_locked_layers_keys() {
     assert!(enabled(false, true, &copy));
     crate::i18n::set_current("en");
 }
+
+#[test]
+fn a_key_menu_edit_selects_the_clicked_key_before_applying_the_command() {
+    use egui_kittest::{Harness, kittest::Queryable};
+    let mut s = effectcraft_engine::Session::default();
+    s.execute("comp.new", json!({"width": 64, "height": 64, "duration": 2})).unwrap();
+    let id = s.execute("layer.newSolid", json!({"color": "#fff"})).unwrap()["layer"].as_u64().unwrap();
+    for (time, value) in [(0.0, 0), (1.0, 50)] {
+        s.execute("prop.addKey", json!({"layer": id, "path": "transform/opacity", "time": time, "value": value})).unwrap();
+    }
+    let layer = s.active_comp().unwrap().layer(LayerId(id)).unwrap().clone();
+    let prop = layer.props.prop("transform/opacity").unwrap().clone();
+    s.execute("keys.select", json!({"keys": [{"layer": id, "prop": prop.uid, "time": 1.0}]})).unwrap();
+    let mut app = EffectcraftApp::new(s);
+    let mut actions = vec![];
+    {
+        let mut h = Harness::new_ui(|ui| key_menu(ui, &app, &layer, &prop, &prop.keys[0], false, &mut actions));
+        h.run();
+        h.get_by_label("Easy Ease").click();
+        h.run();
+    }
+    assert_eq!(actions.iter().map(|(command, _)| command.as_str()).collect::<Vec<_>>(), ["keys.select", "keys.easyEase"]);
+    for (command, params) in actions {
+        app.session.execute(&command, params).unwrap();
+    }
+    let keys = &app.session.active_comp().unwrap().layer(LayerId(id)).unwrap().props.find(prop.uid).unwrap().keys;
+    assert_ne!(keys[0], prop.keys[0], "the clicked key was eased");
+    assert_eq!(keys[1], prop.keys[1], "the previously selected key was not edited");
+    assert_eq!(app.session.state.selected_keys.len(), 1);
+    assert_eq!(app.session.state.selected_keys[0].time, prop.keys[0].time);
+}

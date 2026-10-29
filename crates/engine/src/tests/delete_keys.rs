@@ -86,6 +86,35 @@ fn selection_based_key_edits_skip_a_locked_layer() {
 }
 
 #[test]
+fn spatial_handles_cannot_edit_a_locked_layer() {
+    let (mut s, layer, _) = setup();
+    for (time, value) in [(0, [10, 20, 0]), (1, [80, 60, 0])] {
+        s.execute("prop.addKey", json!({"layer": layer, "path": "transform/position", "time": time, "value": value})).unwrap();
+    }
+    let prop = s.active_comp().unwrap().layer(LayerId(layer)).unwrap().props.prop("transform/position").unwrap().uid;
+    s.execute("keys.select", json!({"keys": [{"layer": layer, "prop": prop, "time": 0}]})).unwrap();
+    s.execute("layer.setSwitch", json!({"layers": [layer], "switch": "locked", "value": true})).unwrap();
+    let before = s.project.to_json();
+    let selected = s.state.selected_keys.clone();
+    let undo_len = s.history.undo.len();
+    let params = json!({"layer": layer, "prop": prop, "time": 0, "out": [15, 25, 0]});
+    let error = s.execute("keys.setSpatialTangents", params.clone()).unwrap_err().to_string();
+    assert!(error.contains("locked"), "{error}");
+    assert_eq!(s.project.to_json(), before);
+    assert_eq!(s.state.selected_keys, selected);
+    assert_eq!(s.history.undo.len(), undo_len);
+    s.execute("layer.setSwitch", json!({"layers": [layer], "switch": "locked", "value": false})).unwrap();
+    let unlocked = s.project.to_json();
+    s.execute("keys.setSpatialTangents", params).unwrap();
+    let edited = s.project.to_json();
+    assert_ne!(edited, unlocked);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(s.project.to_json(), unlocked);
+    s.execute("edit.redo", json!({})).unwrap();
+    assert_eq!(s.project.to_json(), edited);
+}
+
+#[test]
 fn key_transform_preserves_locked_keys_in_a_mixed_selection() {
     let (mut s, locked, locked_prop) = setup();
     let unlocked = s.execute("layer.newSolid", json!({"name": "Unlocked", "color": "#fff"})).unwrap()["layer"].as_u64().unwrap();
