@@ -7715,7 +7715,7 @@ mod tests {
         app.session.execute("prefs.set", json!({"key":"general.language", "value":"ru"})).unwrap();
         assert_eq!(entry(&app, &undo, "Can't Undo".into()), "Нечего отменять");
         app.session.execute("prefs.set", json!({"key":"general.language", "value":"de"})).unwrap();
-        assert_eq!(entry(&app, &undo, "Can't Undo".into()), "Can't Undo", "no German undo wording yet: the shown label");
+        assert_eq!(entry(&app, &undo, "Can't Undo".into()), "Rückgängig nicht möglich");
         app.session.execute("prefs.set", json!({"key":"general.language", "value":"en"})).unwrap();
         assert_eq!(entry(&app, &new_comp, new_comp.label.clone()), "New Composition...");
     }
