@@ -840,6 +840,45 @@ fn saved_tracking_is_kept_in_the_project_and_applies_when_it_reopens() {
     let _ = std::fs::remove_dir_all(std::path::Path::new(&path).parent().unwrap());
 }
 
+/// A reopened project propagated again with the same model and nothing new to track keeps the tracking it has: the
+/// saved frames are not replaced by an empty one, so a later reopen still finds them.
+#[test]
+fn propagating_with_nothing_new_keeps_the_saved_tracking() {
+    let (s, clip, uid, path) = saved_project("keep-saved");
+    forget(&s, clip, uid);
+    let mut s2 = Session::default();
+    s2.execute_checked("file.open", json!({"path": path})).unwrap();
+    s2.footage = s.footage.clone();
+    effectcraft_effects::roto::set_model(Some(std::sync::Arc::new(Exact)));
+    let result = s2.execute_checked("roto.propagate", json!({"layer": clip.0, "direction": "both", "wait": true}));
+    effectcraft_effects::roto::set_model(None);
+    result.unwrap();
+    let st = s2.execute("roto.status", json!({"layer": clip.0, "frame": 12})).unwrap();
+    assert_eq!(st["tracker"]["saved"], "sam2.1-hiera-tiny", "{st}");
+    assert_eq!(st["tracker"]["frames"].as_object().unwrap().len(), 21, "{st}");
+    // and it is still in the file after saving and reopening
+    s2.execute_checked("file.save", json!({})).unwrap();
+    let mut s3 = Session::default();
+    s3.execute_checked("file.open", json!({"path": path})).unwrap();
+    let st = s3.execute("roto.status", json!({"layer": clip.0, "frame": 12})).unwrap();
+    assert_eq!(st["tracker"]["frames"].as_object().unwrap().len(), 21, "{st}");
+    let _ = std::fs::remove_dir_all(std::path::Path::new(&path).parent().unwrap());
+}
+
+/// Freeze reads saved tracking without its model: choosing a model that is not installed does not stop it when
+/// the saved frames cover every frame it freezes.
+#[test]
+fn freeze_uses_complete_saved_tracking_without_the_model() {
+    let (s, clip, uid, path) = saved_project("freeze-saved");
+    forget(&s, clip, uid);
+    let mut s2 = Session::default();
+    s2.execute_checked("file.open", json!({"path": path})).unwrap();
+    s2.footage = s.footage.clone();
+    s2.execute_checked("roto.model.select", json!({"id": "sam2.1-hiera-tiny"})).unwrap();
+    s2.execute_checked("roto.freeze", json!({"layer": clip.0, "wait": true})).unwrap();
+    let _ = std::fs::remove_dir_all(std::path::Path::new(&path).parent().unwrap());
+}
+
 /// Propagate replaces a fully saved span when a different tracking model is active.
 #[test]
 fn propagating_saved_tracking_uses_the_new_model() {

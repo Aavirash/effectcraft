@@ -642,6 +642,21 @@ impl Session {
         }
     }
 
+    /// Whether the tracking saved with Roto Brush `effect` covers every frame a Freeze would write.
+    fn freeze_is_saved(&self, comp: ItemId, layer: LayerId, effect: Uid) -> bool {
+        let Some(c) = self.project.comp(comp) else { return false };
+        let Some(l) = c.layer(layer) else { return false };
+        let Some(g) = l.effects().and_then(|f| f.groups().find(|g| g.uid == effect)).filter(|g| is_roto(g)) else { return false };
+        let pstat = params_static(g);
+        let d = fx::data(&pstat);
+        if d.is_empty() {
+            return false;
+        }
+        let t = comp_time_of(c, l, d.base.unwrap_or(0));
+        let params = params_at(&self.project, comp, l, g, t, self.expr.as_deref());
+        fx::saved_covers(&params, layer_size(&self.project, c, l), c.frame_rate.as_f64(), &job_frames(&d, Direction::Both))
+    }
+
     /// Whether `effect` on `layer` segments with the model Settings chose: Object Matte always,
     /// Roto Brush unless it is version 1.0 (the classic engine).
     pub(crate) fn uses_roto_model(&self, comp: ItemId, layer: LayerId, effect: Uid) -> bool {
@@ -654,7 +669,8 @@ impl Session {
     pub fn start_roto(&mut self, comp: ItemId, layer: LayerId, effect: Uid, task: RotoTask, dir: Direction, wait: bool) -> Result<usize, String> {
         // The model must be in use before the job starts: otherwise it would run on the classic
         // engine without saying so.
-        if self.uses_roto_model(comp, layer, effect) {
+        // A Freeze whose frames all have saved tracking reads them without the model.
+        if self.uses_roto_model(comp, layer, effect) && !(task == RotoTask::Freeze && self.freeze_is_saved(comp, layer, effect)) {
             self.ensure_roto_model(wait)?;
         }
         if self.is_roto_running() {

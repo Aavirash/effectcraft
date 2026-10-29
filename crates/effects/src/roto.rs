@@ -428,7 +428,13 @@ impl Chain {
     /// has several objects and the tracker followed them there; computes nothing.
     pub fn object_seg(&self, f: i64, o: u32) -> Option<Arc<FrameSeg>> {
         let sc = self.opts.scale;
-        let k = *self.keys.get(&f)?;
+        // A frame the saved tracking has is read from it, under the keys it was made with: the model chosen now
+        // may not be the one that tracked it, and its own cache must not hold another model's matte.
+        let saved = self.saved.as_ref().filter(|t| t.cache.frames.contains_key(&f)).and_then(|t| t.keys.get(&f).map(|k| (t, *k)));
+        let k = match saved {
+            Some((_, saved_key)) => saved_key,
+            None => *self.keys.get(&f)?,
+        };
         let ok = object_key(k, o);
         if let Some(s) = cached(ok, sc) {
             return Some(s);
@@ -436,7 +442,7 @@ impl Chain {
         let full = match cached(ok, 1.0) {
             Some(s) => s,
             None => {
-                let t = self.saved.as_ref()?;
+                let (t, _) = saved?;
                 let s = Arc::new(decode_object(&t.cache, f, o)?);
                 store(ok, 1.0, s.clone());
                 s
@@ -594,6 +600,11 @@ impl Chain {
     pub fn is_cached(&self, f: i64, scale: f64) -> bool {
         self.keys.get(&f).is_some_and(|k| [*k, tracked_key(*k)].iter().any(|k| cached(*k, 1.0).is_some() || cached(*k, scale).is_some()))
             || self.saved.as_ref().is_some_and(|t| t.cache.frames.contains_key(&f) && t.keys.contains_key(&f))
+    }
+
+    /// Whether the tracking saved with the project has frame `f` (and applies to this chain).
+    pub fn saved_has(&self, f: i64) -> bool {
+        self.saved.as_ref().is_some_and(|t| t.cache.frames.contains_key(&f) && t.keys.contains_key(&f))
     }
 
     /// Whether the chosen model can follow an object through a clip (SAM 2).
@@ -1032,15 +1043,21 @@ fn decode_object(cache: &TrackCache, f: i64, o: u32) -> Option<FrameSeg> {
 /// tracker followed, at full resolution, with its trust. `None` when it followed none.
 pub fn tracks_of(ch: &Chain) -> Option<TrackCache> {
     let model = ch.model.as_ref()?.info().id;
-    let mut size = None;
+    // The saved tracking applies to this chain's frames when the same model made it: what it has and this session did
+    // not track again stays (a project reopened and propagated with nothing new to track must keep its tracking).
+    let saved = ch.saved.as_ref().filter(|t| t.cache.model == model);
+    let mut size = saved.map(|t| t.cache.size);
     let mut frames = BTreeMap::new();
     for (f, k) in &ch.keys {
-        let (Some(seg), Some(t)) = (cached(tracked_key(*k), 1.0), trust(*k)) else { continue };
-        size.get_or_insert([seg.w, seg.h]);
-        frames.insert(
-            *f,
-            TrackFrame { m: rle::encode(&seg.matte), r: rle::encode(&seg.refine), fg: seg.fg.clone(), bg: seg.bg.clone(), c: t.confidence, o: t.occluded },
-        );
+        if let (Some(seg), Some(t)) = (cached(tracked_key(*k), 1.0), trust(*k)) {
+            size.get_or_insert([seg.w, seg.h]);
+            frames.insert(
+                *f,
+                TrackFrame { m: rle::encode(&seg.matte), r: rle::encode(&seg.refine), fg: seg.fg.clone(), bg: seg.bg.clone(), c: t.confidence, o: t.occluded },
+            );
+        } else if let Some(kept) = saved.filter(|t| t.keys.get(f) == Some(k)).and_then(|t| t.cache.frames.get(f)) {
+            frames.insert(*f, kept.clone());
+        }
     }
     let mut objects: BTreeMap<u32, BTreeMap<i64, ObjectFrame>> = BTreeMap::new();
     let ids = ch.data.objects();
@@ -1052,12 +1069,20 @@ pub fn tracks_of(ch: &Chain) -> Option<TrackCache> {
             for o in &ids {
                 if let Some(seg) = cached(object_key(*k, *o), 1.0) {
                     objects.entry(*o).or_default().insert(*f, ObjectFrame { m: rle::encode(&seg.matte), r: rle::encode(&seg.refine) });
+                } else if let Some(kept) = saved.filter(|t| t.keys.get(f) == Some(k)).and_then(|t| t.cache.objects.get(o)).and_then(|m| m.get(f)) {
+                    objects.entry(*o).or_default().insert(*f, kept.clone());
                 }
             }
         }
     }
     let cache = TrackCache { key: tracks_key(&ch.keys), model: model.to_string(), size: size?, frames, objects };
     (!cache.frames.is_empty()).then_some(cache)
+}
+
+/// Whether the tracking saved with `params` covers every one of `frames`: they need no model to be read.
+pub fn saved_covers(params: &Params, layer_size: [f64; 2], fps: f64, frames: &[i64]) -> bool {
+    let chain = Chain::new(params, layer_size, fps, 1.0);
+    !frames.is_empty() && frames.iter().all(|f| chain.saved_has(*f))
 }
 
 /// Encode one frame for [`FrozenCache`].
@@ -1400,6 +1425,42 @@ mod tests {
         assert!(fake.cancelled.load(Relaxed), "the model must see cancellation before allocating the rest of the clip");
         assert_eq!(fake.emitted.load(Relaxed), 2);
         assert_eq!(completed, 0, "partial objects are not complete tracked frames");
+    }
+
+    /// A cold chain with saved tracking and the same model keeps the saved frames when asked what to save (nothing
+    /// was tracked this session), and Show Object reads a frame the saved tracking has under its own keys.
+    #[test]
+    fn saved_tracking_is_kept_and_its_objects_stay_out_of_another_models_keys() {
+        let mut d = RotoData::default();
+        d.add(Stroke { kind: StrokeKind::Fg, frame: 0, radius: 3.0, points: vec![[35.0, 40.0]], object: 0 }, 2, [0, 24]);
+        let mut params = params_with(&d);
+        params.values.insert(INPUT_KEY.into(), Value::Str("keep-saved-and-objects".into()));
+        let size = [100.0, 80.0];
+        let model = effectcraft_segment::SAM2_TINY.id;
+        let keys = d.chain_keys(seed_with(&params, size, 25.0, model));
+        let (matte, empty) = (vec![1u8; 100 * 80], vec![0u8; 100 * 80]);
+        let frame = TrackFrame { m: rle::encode(&matte), r: rle::encode(&empty), c: 0.9, ..Default::default() };
+        let object = ObjectFrame { m: rle::encode(&matte), r: rle::encode(&empty) };
+        let saved = TrackCache {
+            key: tracks_key(&keys),
+            model: model.into(),
+            size: [100, 80],
+            frames: keys.keys().map(|f| (*f, frame.clone())).collect(),
+            objects: [(1, keys.keys().map(|f| (*f, object.clone())).collect())].into_iter().collect(),
+        };
+        params.values.insert(TRACKED.into(), Value::Str(saved.to_json()));
+        let mut chain = Chain::new(&params, size, 25.0, 1.0);
+        chain.model = Some(Arc::new(TwoObjects(Default::default())));
+        chain.keys = keys.clone();
+        let kept = tracks_of(&chain).expect("the saved tracking is kept");
+        assert_eq!(kept.frames.keys().collect::<Vec<_>>(), saved.frames.keys().collect::<Vec<_>>());
+        assert_eq!(kept.frames.get(&1), saved.frames.get(&1));
+        // another model is chosen now: its keys differ, and the saved object matte is not stored under them
+        let other = d.chain_keys(seed_with(&params, size, 25.0, effectcraft_segment::SAM2_SMALL.id));
+        chain.keys = other.clone();
+        let seg = chain.object_seg(1, 1).expect("the saved object matte");
+        assert_eq!(seg.matte.len(), 100 * 80);
+        assert!(cached(object_key(other[&1], 1), 1.0).is_none(), "the other model's cache holds none of it");
     }
 
     #[test]
