@@ -117,7 +117,14 @@ pub fn preview(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
         for (k, (key, text, v)) in [("preRoll", "Pre-roll", o.pre_roll), ("postRoll", "Post-roll", o.post_roll)].into_iter().enumerate() {
             let lx = xv + k as f32 * 100.0;
             p.text(pos2(lx, yy), Align2::LEFT_CENTER, text, Tokens::ui(11.5), t.text_dim);
-            let (r, nv, _) = widgets::hot_number_at(ui, pos2(lx + 52.0, yy - 9.0), egui::Id::unique(("pv-roll", key)), v, 0.05, (0.0, 600.0), 1, "s", &t);
+            let (r, nv, _) = widgets::hot_number_at(
+                ui,
+                pos2(lx + 52.0, yy - 9.0),
+                egui::Id::unique(("pv-roll", key)),
+                v,
+                &widgets::HotSpec { speed: 0.05, range: (0.0, 600.0), decimals: 1, suffix: "s" },
+                &t,
+            );
             app.auto.add(&format!("preview.{key}"), r, text);
             if let Some(nv) = nv {
                 changes.push(json!({"shortcut": current.id(), key: nv}));
@@ -160,7 +167,14 @@ pub fn preview(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
     }
     let sx = xv + 106.0;
     p.text(pos2(sx, yy), Align2::LEFT_CENTER, tr("Skip"), Tokens::ui(12.0), t.text_dim);
-    let (r, nv, _) = widgets::hot_number_at(ui, pos2(sx + 30.0, yy - 9.0), egui::Id::unique("pv-skip"), o.skip as f64, 0.1, (0.0, 99.0), 0, "", &t);
+    let (r, nv, _) = widgets::hot_number_at(
+        ui,
+        pos2(sx + 30.0, yy - 9.0),
+        egui::Id::unique("pv-skip"),
+        o.skip as f64,
+        &widgets::HotSpec { speed: 0.1, range: (0.0, 99.0), decimals: 0, suffix: "" },
+        &t,
+    );
     app.auto.add("preview.skip", r, "Skip");
     if let Some(nv) = nv {
         changes.push(json!({"shortcut": current.id(), "skip": nv.round() as u32}));
@@ -181,8 +195,14 @@ pub fn preview(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
         changes.push(json!({"shortcut": current.id(), "resolution": res_ids[i]}));
     }
     if o.resolution == PreviewResolution::Custom {
-        let (r, nv, _) =
-            widgets::hot_number_at(ui, pos2(xv + 106.0, yy - 9.0), egui::Id::unique("pv-custom-res"), o.custom_resolution as f64, 0.1, (1.0, 40.0), 0, "", &t);
+        let (r, nv, _) = widgets::hot_number_at(
+            ui,
+            pos2(xv + 106.0, yy - 9.0),
+            egui::Id::unique("pv-custom-res"),
+            o.custom_resolution as f64,
+            &widgets::HotSpec { speed: 0.1, range: (1.0, 40.0), decimals: 0, suffix: "" },
+            &t,
+        );
         app.auto.add("preview.customResolution", r, "Custom Resolution");
         if let Some(nv) = nv {
             changes.push(json!({"shortcut": current.id(), "customResolution": nv.round() as u32}));
@@ -362,6 +382,10 @@ pub fn audio(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
     }
 }
 
+/// The History panel: every state of the session's branching history, indented under the state it
+/// grew from, with the current state highlighted and future/abandoned branches dimmed. Only the
+/// rows in view are drawn; the current state is scrolled into view when it changes. Clicking a
+/// state runs `edit.history.goto`, reporting a failure in `app.ui.status`.
 pub fn history(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
     let t = app.tokens;
     let p = ui.painter().with_clip_rect(rect);
@@ -419,6 +443,9 @@ pub fn history(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
     }
 }
 
+/// The Markers panel: the active comp's markers in time order, each with its timecode and comment;
+/// clicking a row moves the current time to that marker. Shows a hint when the comp has none and
+/// draws nothing without an active comp.
 pub fn markers(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
     let t = app.tokens;
     let p = ui.painter().with_clip_rect(rect);

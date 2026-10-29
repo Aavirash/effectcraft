@@ -15,6 +15,8 @@ use wasm_bindgen::prelude::*;
 extern "C" {
     #[wasm_bindgen(js_name = showDeviceLost)]
     fn show_device_lost(message: &str, kept: bool);
+    #[wasm_bindgen(js_name = installCanvasShortcuts)]
+    fn install_canvas_shortcuts(canvas: &web_sys::HtmlCanvasElement);
 }
 
 /// Work for the UI thread with access to the app (posted by async tasks: picked files…).
@@ -86,6 +88,8 @@ pub struct WebApp {
 }
 
 impl eframe::App for WebApp {
+    /// Take dropped files out of `raw_input` before eframe can replay them on a hidden tab, read them asynchronously
+    /// through `open_or_import`, then run the shared app's input hook.
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
         // Files dropped on the page are input: read them here, where the browser's drop event is
         // still the current pass's, not from a later (possibly logic-only) tick.
@@ -101,6 +105,9 @@ impl eframe::App for WebApp {
         self.app.raw_input_hook(ctx, raw_input);
     }
 
+    /// The browser host's logic tick: run queued UI actions, tick the shared app, poll API replies, flush Render
+    /// Queue downloads, persist the session snapshot when enabled, publish GPU/frame-worker/disk-cache info and close
+    /// the IME pass.
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         let actions = ACTIONS.with(|a| std::mem::take(&mut *a.borrow_mut()));
         for f in actions {
@@ -199,6 +206,7 @@ pub async fn start(canvas_id: String) -> Result<(), JsValue> {
     effectcraft_ui_egui::i18n::set_system_locales(query_value("lang"), browser.collect());
     let doc = web_sys::window().and_then(|w| w.document()).ok_or("no document")?;
     let canvas: web_sys::HtmlCanvasElement = doc.get_element_by_id(&canvas_id).ok_or("no canvas")?.dyn_into()?;
+    install_canvas_shortcuts(&canvas);
     let empty = query_flag("empty");
     let home = query_flag("home");
     // Browser storage: settings, recent projects, imported media, saved projects, auto-saves and

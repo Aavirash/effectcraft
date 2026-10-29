@@ -86,6 +86,13 @@ fn panel_param(value: &Value) -> Result<PanelKind, String> {
     }
 }
 
+fn check_raw_action(action: &Action<PanelKind>) -> Result<(), String> {
+    if matches!(action, Action::Open { .. } | Action::OpenAt { .. }) {
+        return Err("use the panel open commands to preserve viewer and ScriptUI lifecycle callbacks".into());
+    }
+    Ok(())
+}
+
 /// The docking commands: `window.dockAction {action}`, craft-ui's `window.panel.*` commands,
 /// `ui.dock` and `ui.dock.reset`. `None` for any other id.
 pub(crate) fn route(app: &mut EffectcraftApp, ctx: &egui::Context, id: &str, params: &Value) -> Option<Result<Value, String>> {
@@ -93,9 +100,7 @@ pub(crate) fn route(app: &mut EffectcraftApp, ctx: &egui::Context, id: &str, par
         "window.dockAction" => Some((|| {
             let value = params.get("action").cloned().ok_or("missing docking action")?;
             let action: Action<PanelKind> = serde_json::from_value(value).map_err(|error| format!("invalid docking action: {error}"))?;
-            if matches!(&action, Action::Open { .. } | Action::OpenAt { .. }) {
-                return Err("use the panel open commands to preserve viewer and ScriptUI lifecycle callbacks".into());
-            }
+            check_raw_action(&action)?;
             app.apply_dock(action)?;
             Ok(Value::Null)
         })()),
@@ -153,6 +158,9 @@ impl EffectcraftApp {
     /// Run a craft-ui docking command on the current workspace, all or nothing. Named
     /// workspaces and Reset are EffectCraft's own (`window.workspace`, `window.resetWorkspace`).
     pub(crate) fn run_dock_command(&mut self, ctx: &egui::Context, command: DockCommand<PanelKind>) -> Result<(), String> {
+        if let DockCommand::Layout { action } | DockCommand::UiDock(UiDock::Action { action }) = &command {
+            check_raw_action(action)?;
+        }
         if command.is_app_owned() {
             if matches!(command, DockCommand::ResetWorkspace {}) {
                 let name = self.ui.workspace.clone();
@@ -372,6 +380,8 @@ impl EffectcraftApp {
         v
     }
 
+    /// Draw panel `p`'s body in `rect`: register its automation region, put the Composition Navigator above an active
+    /// viewer when a nested-comp flow exists, then call the panel's `show` and (for a viewer) the sketch overlay.
     fn panel_body(&mut self, ui: &mut egui::Ui, p: PanelKind, rect: Rect) {
         self.auto.add(&format!("panel.{}", p.id()), rect, p.title());
         let mut content = rect.shrink(1.0);
@@ -412,6 +422,9 @@ impl EffectcraftApp {
         self.dialog.is_some() || panels::dialogs::modal_open(ctx) || file_dialog
     }
 
+    /// Draw the Home screen or workspace in `body`. Shared craft-ui docking owns the dock tree,
+    /// group chrome, tab dragging and floating native windows; this adapter draws panel bodies,
+    /// applies the returned events/actions and shows the panel menu.
     pub(crate) fn dock_area(&mut self, ui: &mut egui::Ui, body: Rect) {
         let t = self.tokens;
         let ctx = ui.ctx().clone();

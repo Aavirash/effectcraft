@@ -106,6 +106,52 @@ fn font_search_preserves_edited_text_and_applies_only_to_selected_characters() {
     assert_eq!(doc.style_at(8).font, "Inter");
 }
 
+/// A font file of just `name`: the family and Regular in English, and the family again in
+/// Simplified Chinese (language 0x804).
+fn font_with_native_name(family: &str, native: &str) -> Vec<u8> {
+    let u16s = |v: &[u16]| -> Vec<u8> { v.iter().flat_map(|x| x.to_be_bytes()).collect() };
+    let records = [(0x409, 1, family), (0x409, 2, "Regular"), (0x804, 1, native)];
+    let strings: Vec<Vec<u8>> = records.iter().map(|(_, _, s)| s.encode_utf16().flat_map(|u| u.to_be_bytes()).collect()).collect();
+    let mut name = u16s(&[0, records.len() as u16, 6 + 12 * records.len() as u16]);
+    let mut off = 0;
+    for ((lang, id, _), st) in records.iter().zip(&strings) {
+        name.extend(u16s(&[3, 1, *lang, *id, st.len() as u16, off]));
+        off += st.len() as u16;
+    }
+    strings.iter().for_each(|st| name.extend(st));
+    let mut out = u16s(&[1, 0, 1, 0, 0, 0]);
+    out.extend(b"name");
+    out.extend([0u8; 4]);
+    out.extend(28u32.to_be_bytes());
+    out.extend((name.len() as u32).to_be_bytes());
+    out.extend(name);
+    out
+}
+
+/// A family whose own-language name has a character no interface font has is listed under its
+/// English name: the harness fails on a missing glyph, and the app would draw boxes. Picking the
+/// row still applies the family.
+#[test]
+fn font_menu_lists_a_name_the_interface_fonts_lack_in_english() {
+    const FAMILY: &str = "Native Name Menu Test";
+    // U+F1234 is in a private use plane that no interface font maps.
+    const NATIVE: &str = "中文\u{F1234}字体";
+    assert_eq!(effectcraft_engine::text::fonts::add_font_data(font_with_native_name(FAMILY, NATIVE)).len(), 1);
+    assert_eq!(effectcraft_engine::text::fonts::native_families().get(FAMILY).map(String::as_str), Some(NATIVE));
+    let mut s = Session::default();
+    s.execute("comp.new", json!({"width": 320, "height": 180})).unwrap();
+    let lid = s.execute("layer.newText", json!({"text": "Native", "font": "Inter"})).unwrap()["layer"].as_u64().unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1600.0, 1000.0)).build_eframe(move |_| EffectcraftApp::new(s));
+    h.state_mut().show_panel(PanelKind::Character);
+    h.run_steps(3);
+    click(&mut h, "character.font");
+    type_text(&mut h, "native name menu");
+    let shown: Vec<String> = h.state().auto.query("character.font.option.").iter().map(|e| e.id.clone()).collect();
+    assert_eq!(shown, vec![format!("character.font.option.{FAMILY}")]);
+    click(&mut h, &format!("character.font.option.{FAMILY}"));
+    assert_eq!(layer_doc(&h.state().session, LayerId(lid)).unwrap().font, FAMILY);
+}
+
 /// A font file of just `name` (the family, Regular) and an `fvar` table with one axis pinned at
 /// 400: a variable font as far as the font menu's filter is concerned.
 fn pinned_variable_font(family: &str) -> Vec<u8> {
@@ -175,4 +221,38 @@ fn font_menu_filters_variable_fonts() {
     assert!(families(&h).iter().any(|f| f == "Inter"), "{:?}", families(&h));
     key(&mut h, Key::Escape);
     assert_eq!(layer_doc(&h.state().session, LayerId(lid)).unwrap().font, "Inter", "filtering changes nothing");
+}
+
+/// The font menu grows back when a query that matched nothing is cleared, while the search
+/// field keeps its place and the keyboard; a click on a row then picks that font.
+#[test]
+fn font_menu_grows_back_after_an_empty_search() {
+    let mut s = Session::default();
+    s.execute("comp.new", json!({"width": 320, "height": 180})).unwrap();
+    let lid = s.execute("layer.newText", json!({"text": "Grow", "font": "Inter"})).unwrap()["layer"].as_u64().unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1600.0, 1000.0)).build_eframe(move |_| EffectcraftApp::new(s));
+    h.state_mut().show_panel(PanelKind::Character);
+    h.run_steps(3);
+    let rows = |h: &Harness<'_, EffectcraftApp>| h.state().auto.query("character.font.option.").len();
+    let search = |h: &Harness<'_, EffectcraftApp>| h.state().auto.find("character.font.search").map(|e| e.rect);
+    click(&mut h, "character.font");
+    h.run_steps(2);
+    let (full, field) = (rows(&h), search(&h));
+    assert!(full > 3, "the open menu shows the fonts: {full} rows");
+    let query = "no_such_font_123456789";
+    type_text(&mut h, query);
+    assert_eq!(rows(&h), 0);
+    assert!(h.state().auto.find("character.font.empty").is_some());
+    for pressed in query.chars().flat_map(|_| [true, false]) {
+        h.input_mut().events.push(Event::Key { key: Key::Backspace, physical_key: None, pressed, repeat: false, modifiers: Modifiers::NONE });
+    }
+    h.run_steps(3);
+    // (Within a row: the list scrolls to the current font on opening and to the top when cleared.)
+    assert!(rows(&h) + 1 >= full, "cleared, the menu shows as many fonts as when it opened: {} of {full}", rows(&h));
+    assert_eq!(search(&h), field, "the search field stays put");
+    // The field still has the keyboard: typing filters again.
+    type_text(&mut h, "JetBrains");
+    assert!(rows(&h) > 0 && h.state().auto.query("character.font.option.").iter().all(|r| r.label.contains("JetBrains")));
+    click(&mut h, "character.font.option.JetBrains Mono");
+    assert_eq!(layer_doc(&h.state().session, LayerId(lid)).unwrap().font, "JetBrains Mono", "a click on a row picks the font");
 }
