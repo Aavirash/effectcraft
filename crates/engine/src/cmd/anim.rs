@@ -352,6 +352,9 @@ fn set_ease(s: &mut Session, p: &Value) -> Result<Value> {
     let influence = f_p(p, "influence").map(|v| (v / 100.0).clamp(0.001, 1.0));
     s.edit("Keyframe Velocity", merge_p(p), |proj, _| {
         let l = super::layer_mut(proj, cid, lid)?;
+        if l.switches.locked {
+            return Err(bad("keys.setEase", "the layer is locked"));
+        }
         let pr = l.props.find_mut(uid).ok_or_else(|| bad("keys.setEase", "no property"))?;
         let i = nearest_key(&pr.keys, t).ok_or_else(|| bad("keys.setEase", "no keyframes"))?;
         let spatial = pr.spatial;

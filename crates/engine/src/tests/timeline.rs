@@ -345,6 +345,34 @@ fn graph_editor_key_and_handle_edits() {
 }
 
 #[test]
+fn graph_editor_ease_edits_reject_a_locked_layer() {
+    let (mut s, l) = setup();
+    animate(&mut s, l, "transform/opacity", &[(0.0, json!(0)), (1.0, json!(100)), (2.0, json!(0))]);
+    select_prop_keys(&mut s, l, "transform/opacity");
+    s.execute("layer.setSwitch", json!({"layers": [l], "switch": "locked", "value": true})).unwrap();
+    let before = prop(&s, l, "transform/opacity");
+    let selected = s.state.selected_keys.clone();
+    let undo = s.history.undo.len();
+    for side in ["in", "out"] {
+        let error =
+            s.execute("keys.setEase", json!({"layer": l, "path": "transform/opacity", "time": 1.0, "side": side, "speed": 200, "influence": 60})).unwrap_err();
+        assert!(error.to_string().contains("locked"), "{error}");
+        assert_eq!(prop(&s, l, "transform/opacity").keys, before.keys);
+        assert_eq!(s.state.selected_keys, selected);
+        assert_eq!(s.history.undo.len(), undo);
+    }
+    s.execute("layer.setSwitch", json!({"layers": [l], "switch": "locked", "value": false})).unwrap();
+    s.execute("keys.setEase", json!({"layer": l, "path": "transform/opacity", "time": 1.0, "side": "out", "speed": 200, "influence": 60})).unwrap();
+    let after = prop(&s, l, "transform/opacity");
+    assert_eq!(after.keys[1].out_interp, Interp::Bezier);
+    assert_eq!(after.keys[1].out_ease[0].speed, 200.0);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(prop(&s, l, "transform/opacity").keys, before.keys);
+    s.execute("edit.redo", json!({})).unwrap();
+    assert_eq!(prop(&s, l, "transform/opacity").keys, after.keys);
+}
+
+#[test]
 fn convert_expression_to_keyframes_on_a_reversed_layer_keeps_values() {
     let (mut s, l) = setup();
     // These tests run without an expression host, so the conversion bakes the keyed ramp under the expression.
