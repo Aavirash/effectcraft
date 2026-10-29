@@ -191,50 +191,42 @@ fn save_frame_as_png_preserves_alpha_channel() {
 }
 
 #[test]
-fn save_frame_as_defaults_to_png_sequence_with_alpha() {
+fn save_frame_as_queued_respects_frame_default_template() {
     let mut s = Session::default();
     s.execute("comp.new", json!({"name": "Comp", "width": 32, "height": 32, "frameRate": 24, "duration": 1})).unwrap();
+
+    // Default Still template is "PNG Sequence" (Channels::Rgb)
     let r = s.execute_checked("comp.saveFrameAs", json!({"queue": true})).unwrap();
     assert_eq!(r["queued"], true);
     let it = s.project.render_queue.last().unwrap();
-    assert_eq!(it.output.name, "PNG Sequence with Alpha");
-    assert_eq!(it.output.channels, effectcraft_project::render_queue::Channels::Rgba);
-
-    // Queued save with transparent: false sets Channels::Rgb (composited over background).
-    s.execute_checked("comp.saveFrameAs", json!({"queue": true, "transparent": false})).unwrap();
-    let it = s.project.render_queue.last().unwrap();
+    assert_eq!(it.output.name, "PNG Sequence");
     assert_eq!(it.output.channels, effectcraft_project::render_queue::Channels::Rgb);
 
-    // Queued save with transparent: true preserves Channels::Rgba.
-    s.execute_checked("comp.saveFrameAs", json!({"queue": true, "transparent": true})).unwrap();
-    let it = s.project.render_queue.last().unwrap();
-    assert_eq!(it.output.channels, effectcraft_project::render_queue::Channels::Rgba);
-
-    s.execute("edit.undo", json!({})).unwrap();
-    s.execute("edit.undo", json!({})).unwrap();
+    // Test undo and redo of queuing a frame
     s.execute("edit.undo", json!({})).unwrap();
     assert!(s.project.render_queue.is_empty());
     s.execute("edit.redo", json!({})).unwrap();
     let it = s.project.render_queue.last().unwrap();
-    assert_eq!(it.output.name, "PNG Sequence with Alpha");
-    assert_eq!(it.output.channels, effectcraft_project::render_queue::Channels::Rgba);
-}
+    assert_eq!(it.output.name, "PNG Sequence");
 
-#[test]
-fn save_frame_as_defaults_to_transparent_even_with_rgb_frame_template() {
-    let mut s = Session::default();
-    s.execute("comp.new", json!({"name": "Comp", "width": 32, "height": 32, "frameRate": 24, "duration": 1})).unwrap();
-
-    // Set Frame Default to an RGB output template ("PNG Sequence")
-    s.execute_checked("renderQueue.setTemplateDefault", json!({"kind": "outputModule", "slot": "still", "name": "PNG Sequence"})).unwrap();
-
-    // Omitting `transparent` must default to true and promote to Channels::Rgba
-    s.execute_checked("comp.saveFrameAs", json!({"queue": true})).unwrap();
-    let it = s.project.render_queue.last().unwrap();
-    assert_eq!(it.output.channels, effectcraft_project::render_queue::Channels::Rgba);
-
-    // Explicit `transparent: false` respects the request and stays Channels::Rgb
+    // Explicit transparent: false forces Channels::Rgb
     s.execute_checked("comp.saveFrameAs", json!({"queue": true, "transparent": false})).unwrap();
     let it = s.project.render_queue.last().unwrap();
     assert_eq!(it.output.channels, effectcraft_project::render_queue::Channels::Rgb);
+
+    // When Frame Default is set to an RGBA template, it is respected
+    s.execute_checked("renderQueue.setTemplateDefault", json!({"kind": "outputModule", "slot": "still", "name": "PNG Sequence with Alpha"})).unwrap();
+    s.execute_checked("comp.saveFrameAs", json!({"queue": true})).unwrap();
+    let it = s.project.render_queue.last().unwrap();
+    assert_eq!(it.output.name, "PNG Sequence with Alpha");
+    assert_eq!(it.output.channels, effectcraft_project::render_queue::Channels::Rgba);
+
+    // Passing transparent: false forces Channels::Rgb even with an RGBA template
+    s.execute_checked("comp.saveFrameAs", json!({"queue": true, "transparent": false})).unwrap();
+    let it = s.project.render_queue.last().unwrap();
+    assert_eq!(it.output.channels, effectcraft_project::render_queue::Channels::Rgb);
+
+    // With JPEG Sequence as Frame Default (non-alpha format), queue succeeds without error
+    s.execute_checked("renderQueue.setTemplateDefault", json!({"kind": "outputModule", "slot": "still", "name": "JPEG Sequence"})).unwrap();
+    assert!(s.execute_checked("comp.saveFrameAs", json!({"queue": true})).is_ok());
 }

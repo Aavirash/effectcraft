@@ -91,13 +91,8 @@ fn queue_frame(s: &mut Session, p: &Value) -> Result<Value> {
     it.settings = s.project.render_templates.default_render_settings(TemplateSlot::Still);
     it.settings.time_span = TimeSpan::Custom { start: t, end: t + comp.frame_duration() };
     it.output = s.project.render_templates.default_output_module(TemplateSlot::Still);
-    let transparent = b_p(p, "transparent").unwrap_or(true);
-    if !transparent {
+    if b_p(p, "transparent") == Some(false) {
         it.output.channels = Channels::Rgb;
-    } else if it.output.supports_alpha() {
-        it.output.channels = Channels::Rgba;
-    } else {
-        return Err(bad("comp.saveFrameAs", format!("{} doesn't support an alpha channel", it.output.format.label())));
     }
     if let Some(path) = str_p(p, "path") {
         it.output.output = path.to_string();
