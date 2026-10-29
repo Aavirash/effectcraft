@@ -610,7 +610,7 @@ fn presets_saved_by_the_old_core_panel_carry_over() {
 }
 
 /// #2465: the Linear preset sets Linear interpolation on every side it applies to, including the
-/// first key's out side and the last key's in side; editing its speeds makes a Bezier curve.
+/// unused first-in and last-out sides; editing its speeds makes a Bezier curve.
 #[test]
 fn the_linear_preset_sets_linear_interpolation_and_edited_speeds_give_bezier() {
     let store = Arc::new(MemoryConfig::default());
@@ -620,9 +620,15 @@ fn the_linear_preset_sets_linear_interpolation_and_edited_speeds_give_bezier() {
     s.execute("prop.select", json!({"layer": l, "path": "transform/opacity"})).unwrap();
     let win = open_panel(&mut s);
     // Start from Bezier keys so Linear has something to restore.
-    set(&mut s, win, "presets", json!("Ease In-Out"));
+    ok(
+        &mut s,
+        r#"var p = app.project.activeItem.layer(1).transform.opacity, K = KeyframeInterpolationType;
+        for (var i = 1; i <= p.numKeys; i++) p.setInterpolationTypeAtKey(i, K.BEZIER, K.BEZIER);"#,
+    );
     let op = prop(&s, l, "transform/opacity");
-    assert!(op.keys[0].out_interp == Interp::Bezier && op.keys[2].in_interp == Interp::Bezier);
+    for (i, k) in op.keys.iter().enumerate() {
+        assert_eq!((k.in_interp, k.out_interp), (Interp::Bezier, Interp::Bezier), "initial key {i}");
+    }
     let steps = s.history.undo.len();
     set(&mut s, win, "presets", json!("Linear"));
     assert_eq!(s.history.undo.len(), steps + 1, "one undo step");
