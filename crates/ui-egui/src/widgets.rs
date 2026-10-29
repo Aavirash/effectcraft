@@ -421,15 +421,50 @@ struct CheckboxDrag {
     press_frame: u64,
     target: Option<bool>,
     visited: std::collections::HashSet<egui::Id>,
+    /// Checkboxes the pointer crossed in the frame of the press, before the checkbox it pressed on
+    /// had been drawn (so the value to set was not known): they take it in the next frame.
+    pending: std::collections::HashSet<egui::Id>,
+}
+
+/// A primary-button event of the frame, in the order it happened.
+#[derive(Clone, Copy, PartialEq)]
+enum Step {
+    Press,
+    Move,
+    Release,
+}
+
+/// The frame's primary-button events in order, each with its position. egui hit-tests the whole
+/// frame at the last pointer position, so a press followed by a move in one frame would otherwise
+/// be taken for a press where the pointer ended.
+fn pointer_steps(ui: &Ui) -> Vec<(Step, egui::Pos2)> {
+    ui.input(|i| {
+        i.events
+            .iter()
+            .filter_map(|e| match e {
+                egui::Event::PointerMoved(pos) => Some((Step::Move, *pos)),
+                egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, .. } => {
+                    Some((if *pressed { Step::Press } else { Step::Release }, *pos))
+                }
+                _ => None,
+            })
+            .collect()
+    })
 }
 
 /// Returns the requested value. Mixed checkboxes (`None`) and disabled controls are
-/// skipped. Each checkbox is visited once, so crossing it again cannot toggle it back.
+/// skipped. Each checkbox is visited once, so crossing it again cannot toggle it back. The
+/// checkbox a press lands on, and the ones the pointer passes over after it, are found from the
+/// frame's ordered pointer events, not from where the pointer ended.
 fn drag_toggle(ui: &Ui, response: &Response, value: Option<bool>) -> Option<bool> {
     let (pressed, down, released) = ui.input(|i| (i.pointer.primary_pressed(), i.pointer.primary_down(), i.pointer.primary_released()));
     let frame = ui.ctx().cumulative_frame_nr();
     // clicked() reads Context input; do not call it while Context data is locked.
     let clicked = response.clicked();
+    // Whether the pointer at `pos` is over this checkbox itself (not a window above it).
+    let over = |pos: egui::Pos2| response.rect.contains(pos) && ui.clip_rect().contains(pos) && ui.ctx().layer_id_at(pos) == Some(response.layer_id);
+    // Resolved before the data lock below: layer_id_at reads the Context.
+    let steps: Vec<(Step, bool)> = pointer_steps(ui).into_iter().map(|(step, pos)| (step, over(pos))).collect();
     ui.data_mut(|data| {
         let drag = data.get_temp_mut_or_default::<CheckboxDrag>(egui::Id::unique("checkbox-drag"));
         if (!down && !released) || (pressed && drag.press_frame != frame) {
@@ -439,10 +474,43 @@ fn drag_toggle(ui: &Ui, response: &Response, value: Option<bool>) -> Option<bool
         if !response.enabled() {
             return None;
         }
-        if pressed && drag.target.is_none() && response.is_pointer_button_down_on() && response.contains_pointer() {
-            drag.target = Some(!on);
-        }
+        // Crossed in the frame of the press before the value was known: take it now.
         if down
+            && drag.pending.remove(&response.id)
+            && let Some(target) = drag.target
+            && drag.visited.insert(response.id)
+            && on != target
+        {
+            return Some(target);
+        }
+        let mut press_seen = false;
+        for (step, over) in steps {
+            match step {
+                Step::Press => {
+                    press_seen = true;
+                    if drag.target.is_none() && over {
+                        drag.target = Some(!on);
+                        drag.visited.insert(response.id);
+                        return Some(!on);
+                    }
+                }
+                Step::Move if press_seen || down => match drag.target {
+                    Some(target) if over => {
+                        if drag.visited.insert(response.id) && on != target {
+                            return Some(target);
+                        }
+                    }
+                    None if press_seen && over => {
+                        drag.pending.insert(response.id);
+                    }
+                    _ => {}
+                },
+                _ => {}
+            }
+        }
+        // The pointer held still over this checkbox in a later frame of the gesture.
+        if down
+            && !pressed
             && response.contains_pointer()
             && let Some(target) = drag.target
         {
@@ -969,6 +1037,66 @@ mod tests {
         assert_eq!(values, [Some(false), Some(false), None, Some(false), Some(false)]);
         checkbox_frame(&ctx, &mut values, checkbox_pointer(58.0, None));
         assert_eq!(values[1], Some(false), "hover after release must not paint");
+    }
+
+    fn button(y: f32, pressed: bool) -> Vec<egui::Event> {
+        let pos = pos2(28.0, y);
+        vec![egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() }]
+    }
+
+    fn moved(y: f32) -> egui::Event {
+        egui::Event::PointerMoved(pos2(28.0, y))
+    }
+
+    /// A press and the moves after it can arrive in one frame (a quick flick): the press belongs to
+    /// the checkbox it landed on, not to the one the pointer ended over, and the ones passed over
+    /// follow the pressed one's new state, whether they are drawn before it or after it.
+    #[test]
+    fn a_press_and_a_move_in_one_frame_start_on_the_checkbox_pressed() {
+        // Rows are 30 apart, from y = 28; index 3 is disabled.
+        let (a, b) = (28.0, 58.0);
+        // Pressed on the first, moved to the second (drawn after it).
+        let ctx = egui::Context::default();
+        let mut values = [Some(false); 5];
+        values[2] = None;
+        checkbox_frame(&ctx, &mut values, vec![]);
+        let mut events = vec![moved(a)];
+        events.extend(button(a, true));
+        events.push(moved(b));
+        checkbox_frame(&ctx, &mut values, events);
+        assert_eq!((values[0], values[1]), (Some(true), Some(true)), "the pressed one is the source, the one passed over follows");
+        let mut events = vec![moved(b)];
+        events.extend(button(b, false));
+        checkbox_frame(&ctx, &mut values, events);
+        assert_eq!((values[0], values[1]), (Some(true), Some(true)), "release changes nothing");
+        // Pressed on the second, moved to the first (drawn before it): the first takes the state in
+        // the next frame, while the button is still down.
+        let ctx = egui::Context::default();
+        let mut values = [Some(false); 5];
+        values[2] = None;
+        checkbox_frame(&ctx, &mut values, vec![]);
+        let mut events = vec![moved(b)];
+        events.extend(button(b, true));
+        events.push(moved(a));
+        checkbox_frame(&ctx, &mut values, events);
+        assert_eq!(values[1], Some(true), "the pressed one is the source");
+        checkbox_frame(&ctx, &mut values, vec![]);
+        assert_eq!(values[0], Some(true), "the one passed over takes the state");
+        let mut events = vec![moved(a)];
+        events.extend(button(a, false));
+        checkbox_frame(&ctx, &mut values, events);
+        assert_eq!((values[0], values[1]), (Some(true), Some(true)));
+        // Pressed outside every checkbox, then moved onto one in the same frame: nothing starts.
+        let ctx = egui::Context::default();
+        let mut values = [Some(false); 5];
+        values[2] = None;
+        checkbox_frame(&ctx, &mut values, vec![]);
+        let mut events = vec![moved(200.0)];
+        events.extend(button(200.0, true));
+        events.push(moved(a));
+        checkbox_frame(&ctx, &mut values, events);
+        checkbox_frame(&ctx, &mut values, vec![]);
+        assert_eq!(values, [Some(false), Some(false), None, Some(false), Some(false)], "a press outside starts no gesture");
     }
 
     #[test]
