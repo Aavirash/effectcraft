@@ -895,7 +895,7 @@ fn save_as(s: &mut Session, p: &Value) -> Result<Value> {
     let t = s.time_of(cid);
     let mut entries: Vec<(String, Vec<u8>)> = vec![
         ("manifest.json".into(), serde_json::to_vec_pretty(&manifest).unwrap_or_default()),
-        ("project.ecproj".into(), proj.to_json_compact().into_bytes()),
+        ("project.ecproj".into(), proj.to_json().into_bytes()),
     ];
     entries.extend(media_entries);
     if let Ok((w, h, rgba)) = s.render_rgba8(cid, t, 320) {
