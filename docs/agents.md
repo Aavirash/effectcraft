@@ -272,10 +272,10 @@ build real projects through these interfaces; they are worked examples of everyt
   then `keys.velocity {"outSpeed":0,"outInfluence":33.33}`.
 * **Gradients**: `set_property {"path":"contents/gfill/colors","value":["#0080ff","#ffff00"]}` or
   `{"colors":[[0,"#0080ff"],[1,[1,1,0]]],"opacities":[[0,1],[1,0.5]]}`.
-* **Image sequences**: `file.import {"paths":["/r/shot_0001.png"]}` imports the file's whole
-  numbered run as one item (several picked frames: that range; a folder: each run in it;
-  `"sequence": false`: one still; dropped files, `"drag": true`, import as stills unless
-  `"sequence": true`, as in After Effects; `"alphabetical": true`: Force Alphabetical Order, the files
+* **Image sequences**: `file.import {"paths":["/r/shot_0001.png"], "sequence": true}` imports the
+  file's whole numbered run as one item (several picked frames: that range; a folder: each run in
+  it, also without `sequence`). Without `"sequence": true` a picked or dropped numbered file imports
+  as one still, as in After Effects; `"alphabetical": true`: Force Alphabetical Order, the files
   play one after another) at `frameRate` or 30 fps (Settings ▸ Import). Missing frames show
   colour bars, as in After Effects. `file.interpretFootage {"items":[id], "frameRate":12,
   "startTimecode":1001}` conforms them and sets Override Start (the item and layers that ran to its end get the new
@@ -540,7 +540,7 @@ indices): character attributes
 3. `layer.setText {"range":[6,11], "size":40, "fill":"#ff5500"}` styles the selection (the
    Character panel does the same); with an empty range it sets the style the next typed text takes.
 4. `edit.copy`, `edit.paste`, `edit.pasteTextMatchFormatting` and `edit.pasteTextFormattingOnly`
-   work on the selected text; `text.endEdit` commits (an empty Type-tool layer is removed).
+   work on the selected text; `text.endEdit` commits (an empty Type-tool layer is kept, as After Effects does).
 
 Fonts: `text.fonts` (MCP `list_fonts`) lists every family a text layer can use, bundled and installed, with its
 styles, origin (`bundled`, `system`, `user`), `variable` (it has variation axes) and own-language name
