@@ -55,6 +55,10 @@ fn compatible(a: &Property, b: &effectcraft_keyframe::Value) -> bool {
     a.value.kind_name() == b.kind_name() && a.value.components().len() == b.components().len()
 }
 
+fn locked_selection(comp: &effectcraft_project::Comp, selected: &[KeyRef]) -> Vec<KeyRef> {
+    selected.iter().filter(|k| comp.layer(k.layer).is_some_and(|l| l.switches.locked)).copied().collect()
+}
+
 /// Paste copied keyframes at the current time into the target layers' properties.
 fn paste(s: &mut Session, p: &Value) -> Result<Value> {
     let clip = s.state.key_clipboard.clone();
@@ -117,7 +121,7 @@ fn paste(s: &mut Session, p: &Value) -> Result<Value> {
     }
     s.edit("Paste Keyframes", merge_p(p), |proj, st| {
         let comp = proj.comp_mut(cid).ok_or(EngineError::NoComp)?;
-        let mut sel: Vec<KeyRef> = st.selected_keys.iter().filter(|k| comp.layer(k.layer).is_some_and(|l| l.switches.locked)).copied().collect();
+        let mut sel = locked_selection(comp, &st.selected_keys);
         let retained = sel.len();
         for (lid, uid, ci) in &plan {
             let Some(l) = comp.layer_mut(*lid) else { continue };
@@ -210,6 +214,9 @@ pub(super) fn paste_path(s: &mut Session, p: &Value, (cid, lid, uid): (ItemId, L
         })
         .collect();
     s.edit("Paste Keyframes", merge_p(p), |proj, st| {
+        let comp = proj.comp(cid).ok_or(EngineError::NoComp)?;
+        let mut selected = locked_selection(comp, &st.selected_keys);
+        let retained = selected.len();
         let l = super::layer_mut(proj, cid, lid)?;
         let pr = l.props.find_mut(uid).ok_or_else(|| bad("keys.paste", "no property"))?;
         let mut sel = vec![];
@@ -224,8 +231,10 @@ pub(super) fn paste_path(s: &mut Session, p: &Value, (cid, lid, uid): (ItemId, L
         // Re-timing keeps the keys' order, so the pasted keys are found again by index.
         let pasted: Vec<usize> = pr.keys.iter().enumerate().filter(|(_, k)| sel.contains(&k.time)).map(|(i, _)| i).collect();
         retime_roving(&mut pr.keys, pr.spatial);
-        st.selected_keys = pasted.iter().filter_map(|&i| pr.keys.get(i)).map(|k| KeyRef { layer: lid, prop: uid, time: k.time }).collect();
-        Ok(json!(st.selected_keys.len()))
+        selected.extend(pasted.iter().filter_map(|&i| pr.keys.get(i)).map(|k| KeyRef { layer: lid, prop: uid, time: k.time }));
+        let count = selected.len().saturating_sub(retained);
+        st.selected_keys = selected;
+        Ok(json!(count))
     })
 }
 

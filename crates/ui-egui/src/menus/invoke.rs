@@ -217,12 +217,13 @@ pub fn invoke(app: &mut EffectcraftApp, ctx: &egui::Context, id: &str, params: V
     // Close follows panel focus too: with the Render Queue active, Cmd+W closes that panel and
     // leaves the active composition open (it used to close the composition next to it).
     if id == "file.close" && no_params(&params) && app.ui.focused == PanelKind::RenderQueue {
-        app.close_panel(PanelKind::RenderQueue);
+        app.apply_dock(craft_ui::docking::Action::Close { panel: PanelKind::RenderQueue })?;
         // The focus goes to a panel that is still there, so the next Close acts on the composition
         // instead of on the queue that is gone.
         let next =
             [PanelKind::Timeline, PanelKind::Composition, PanelKind::Project].into_iter().find(|p| app.ui.dock.is_visible(*p)).unwrap_or(PanelKind::Project);
         app.show_panel(next);
+        app.focus_panel(ctx, next);
         return Ok(Value::Null);
     }
     // Edit ▸ Paste with SVG markup on the system clipboard pastes it as a shape layer (After

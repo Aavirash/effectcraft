@@ -474,6 +474,50 @@ fn closing_the_render_queue_reveals_the_panel_receiving_focus() {
 }
 
 #[test]
+fn queue_close_preserves_state_when_workspace_is_locked() {
+    let ctx = egui::Context::default();
+    let mut app = EffectcraftApp::new(effectcraft_engine::Session::default());
+    app.session.execute("comp.new", json!({"name": "A", "duration": 2})).unwrap();
+    app.show_panel(PanelKind::RenderQueue);
+    app.ui.dock.locked = true;
+    let workspace = app.ui.dock.clone();
+    let comp = app.session.active_comp_id();
+    for _ in 0..2 {
+        assert!(invoke(&mut app, &ctx, "file.close", Value::Null).is_err());
+        assert_eq!(app.ui.dock, workspace);
+        assert_eq!(app.ui.focused, PanelKind::RenderQueue);
+        assert_eq!(app.session.active_comp_id(), comp);
+    }
+    assert!(!menu_items(&app).iter().find(|item| item.id == "file.close").unwrap().enabled);
+    app.ui.dock.locked = false;
+    invoke(&mut app, &ctx, "file.close", Value::Null).unwrap();
+    assert!(!app.ui.dock.is_open(PanelKind::RenderQueue));
+}
+
+#[test]
+fn queue_close_preserves_viewer_command_target() {
+    let ctx = egui::Context::default();
+    let mut app = EffectcraftApp::new(effectcraft_engine::Session::default());
+    let a = app.session.execute("comp.new", json!({"name": "A", "duration": 2})).unwrap()["comp"].as_u64().unwrap();
+    let b = app.session.execute("comp.new", json!({"name": "B", "duration": 2})).unwrap()["comp"].as_u64().unwrap();
+    app.show_panel(PanelKind::Viewer(1));
+    app.ui.viewers.insert(0, Some(a));
+    app.ui.viewers.insert(1, Some(b));
+    app.ui.active_viewer = 1;
+    app.close_panel(PanelKind::Timeline);
+    app.show_panel(PanelKind::Composition);
+    app.show_panel(PanelKind::RenderQueue);
+    assert_eq!(app.session.active_comp_id().map(|id| id.0), Some(b));
+    invoke(&mut app, &ctx, "file.close", json!({})).unwrap();
+    assert_eq!(app.ui.focused, PanelKind::Composition);
+    assert_eq!(app.ui.active_viewer, 0);
+    assert_eq!(app.session.active_comp_id().map(|id| id.0), Some(a));
+    invoke(&mut app, &ctx, "file.close", json!({})).unwrap();
+    assert!(!app.session.state.open_comps.iter().any(|id| id.0 == a));
+    assert!(app.session.state.open_comps.iter().any(|id| id.0 == b));
+}
+
+#[test]
 fn menu_items_cover_the_tree() {
     assert_eq!(menus().last(), Some(&"Help"));
     assert!(effectcraft_engine::menus::entries().len() > 500);

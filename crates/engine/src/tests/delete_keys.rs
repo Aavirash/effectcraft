@@ -182,6 +182,34 @@ fn key_paste_skips_locked_targets_without_changing_layer_pairing() {
 }
 
 #[test]
+fn motion_path_paste_preserves_locked_source_selection() {
+    for explicit in [false, true] {
+        let (mut s, source, _) = setup();
+        s.execute("mask.new", json!({"layer": source, "vertices": [[0, 0], [20, 10], [40, 0]], "closed": false})).unwrap();
+        s.execute("prop.toggleAnimation", json!({"layer": source, "path": "masks/#1/path"})).unwrap();
+        let uid = s.active_comp().unwrap().layer(LayerId(source)).unwrap().props.prop("masks/#1/path").unwrap().uid;
+        s.execute("keys.select", json!({"keys": [{"layer": source, "prop": uid, "time": 0}]})).unwrap();
+        s.execute("keys.copy", json!({})).unwrap();
+        let locked_keys = s.state.selected_keys.clone();
+        let target = s.execute("layer.newSolid", json!({"name": "Target", "color": "#fff"})).unwrap()["layer"].as_u64().unwrap();
+        s.execute("prop.select", json!({"layer": target, "path": "transform/position"})).unwrap();
+        s.execute("layer.setSwitch", json!({"layers": [source], "switch": "locked", "value": true})).unwrap();
+        s.state.selected_keys = locked_keys.clone();
+        let params = if explicit { json!({"layer": target, "path": "transform/position"}) } else { json!({}) };
+        let before = s.project.to_json();
+        assert_eq!(s.execute("keys.paste", params).unwrap(), json!(3));
+        assert!(locked_keys.iter().all(|k| s.state.selected_keys.contains(k)));
+        assert_eq!(s.state.selected_keys.len(), 4);
+        assert_eq!(s.state.selected_keys.iter().filter(|k| k.layer == LayerId(target)).count(), 3);
+        let pasted = s.project.to_json();
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(s.project.to_json(), before);
+        s.execute("edit.redo", json!({})).unwrap();
+        assert_eq!(s.project.to_json(), pasted);
+    }
+}
+
+#[test]
 fn key_transform_preserves_locked_keys_in_a_mixed_selection() {
     let (mut s, locked, locked_prop) = setup();
     let unlocked = s.execute("layer.newSolid", json!({"name": "Unlocked", "color": "#fff"})).unwrap()["layer"].as_u64().unwrap();
