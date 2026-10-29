@@ -286,7 +286,6 @@ impl EffectcraftApp {
     /// `eframe::App::ui` and by tests with the root `Ui`.
     pub fn draw(&mut self, ui: &mut egui::Ui, frame: &eframe::Frame) {
         panels::viewer_text::begin_ui(ui.ctx());
-        self.ui.timeline.scope_links(self.session.script_ui.project_epoch);
         self.draw_inner(ui, frame);
         // All exits, including fonts/device loss, observe this pass's real custom availability.
         panels::viewer_text::finish_ime(self, ui);
@@ -394,6 +393,8 @@ impl EffectcraftApp {
         let header = egui::Rect::from_min_size(egui::pos2(full.min.x, top), egui::vec2(full.width(), header_h));
         header::show(self, ui, header);
         let body = egui::Rect::from_min_max(egui::pos2(full.min.x + 4.0, header.max.y + 2.0), egui::pos2(full.max.x - 4.0, full.max.y - 4.0));
+        // After the shortcuts, menus and header, which can replace the project (New, Open).
+        self.ui.timeline.scope_links(self.session.script_ui.project_epoch);
         self.dock_area(ui, body);
         #[cfg(not(target_arch = "wasm32"))]
         prefs_live::dropped_files(self, ui, full);
