@@ -62,6 +62,9 @@ page!(ProjectPrefs {
     /// Open a template project for File ▸ New ▸ New Project.
     use_template: bool = false,
     template_path: String = String::new(),
+    /// Write `.ecproj` files as compact JSON on one line (smaller, faster to save and open). Off:
+    /// indented, one value per line, so they read and diff cleanly in version control.
+    compact_project_files: bool = false,
 });
 
 page!(AutoSave {
@@ -179,7 +182,7 @@ page!(Audio {
 
 page!(Disk {
     disk_cache_enabled: bool = true,
-    disk_cache_max_gb: u32 = 100,
+    disk_cache_max_gb: u32 = 20,
     disk_cache_folder: String = String::new(),
     media_cache_folder: String = String::new(),
     conformed_media_folder: String = String::new(),

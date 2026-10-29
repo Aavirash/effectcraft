@@ -8,6 +8,7 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod analysis_cache;
 pub mod audio_fx;
 mod blur2;
 mod blur3;
@@ -78,7 +79,7 @@ pub use color_fx::{
 pub use color_fx::{COLORAMA_PRESETS, ColoramaPalette};
 pub use color2::{Curve, auto_correct_settings, color_link_mode, color_link_sample, equalize_tables, luma_clip_points, shadow_highlight_amounts};
 pub use color3::OffsetCurve;
-pub use distort::transform_shutter;
+pub use distort::{transform_grow, transform_matrix_px, transform_shutter};
 pub use distort2::{MAGNIFY_MODES, bezier_grid, parse_mesh};
 pub use distort3::{RESHAPE_POINTS, ReshapeSetup, SmearSetup, cc_smear_pad, reshape_setup, smear_setup, warp_inverse_map};
 pub use distort4::liquify_mesh;
@@ -86,7 +87,10 @@ use effectcraft_keyframe::Value;
 use effectcraft_project::build::Ids;
 use effectcraft_project::{GroupKind, ParamUi, PropGroup, Property};
 pub use effectcraft_raster::{AuxChannels, Image};
-pub use misc::{INVERT_ALPHA, INVERT_CHANNELS, glow_ab_t, glow_operation};
+pub use misc::{
+    GLOW_GAIN, GLOW_KNEE, INVERT_ALPHA, INVERT_CHANNELS, glow_ab_t, glow_operation, glow_sigma, radial_wipe_sigma, radial_wipe_wedge, venetian_cover,
+    venetian_origin,
+};
 pub use sim::particle_state;
 pub use sim3::{PgBlit, PgPlan, playground_plan, playground_state};
 pub use stylize2::strobe_on;
@@ -104,7 +108,7 @@ pub use transition::place_layer;
 // effectcraft-gpu fx_noise.
 pub use keying2::{InnerOuterPlan, inner_outer_plan};
 pub use noise::remove_grain_level;
-pub use noise3::{FractalGpu, fractal_gpu};
+pub use noise3::{FractalGpu, NOISE_CELL, fractal_gpu};
 pub use stylize3::{BumpLight, bump_layer_id};
 pub use textfx::{TextLayer, text_layer};
 pub use time_fx::{PixelMotion, TimewarpPlan, TwStep, pmb_plan, posterized_time, time_frames, timewarp_crop, timewarp_plan};
@@ -287,15 +291,53 @@ impl Buf {
         self.offset[0] += origin[0] * self.scale;
         self.offset[1] += origin[1] * self.scale;
     }
-    /// Grow by `pad` transparent pixels on every side.
-    pub fn pad(&mut self, pad: u32) {
-        if pad == 0 {
+    /// Grow by transparent pixels: `sides` = left, top, right, bottom. Content keeps its place.
+    pub fn pad_sides(&mut self, sides: [u32; 4]) {
+        let [l, t, r, b] = sides;
+        if l == 0 && t == 0 && r == 0 && b == 0 {
             return;
         }
-        self.img = self.img.padded(pad);
-        self.offset[0] += pad as f64;
-        self.offset[1] += pad as f64;
+        let (Some(w), Some(h)) = (self.img.width.checked_add(l).and_then(|v| v.checked_add(r)), self.img.height.checked_add(t).and_then(|v| v.checked_add(b)))
+        else {
+            return;
+        };
+        let mut out = Image::new(w, h);
+        let (sw, ow) = (self.img.width as usize, w as usize);
+        for y in 0..self.img.height as usize {
+            let at = (y + t as usize) * ow + l as usize;
+            let (Some(src), Some(dst)) = (self.img.data.get(y * sw..(y + 1) * sw), out.data.get_mut(at..at + sw)) else { continue };
+            dst.copy_from_slice(src);
+        }
+        self.img = out;
+        self.offset[0] += l as f64;
+        self.offset[1] += t as f64;
     }
+    /// Grow by `pad` transparent pixels on every side, within [`pad_within_budget`] and as
+    /// clamped by [`Image::effective_pad`].
+    pub fn pad(&mut self, pad: u32) {
+        let eff = self.img.effective_pad(pad_within_budget(self.img.width, self.img.height, pad));
+        if eff == 0 {
+            return;
+        }
+        self.img = self.img.padded(eff);
+        self.offset[0] += eff as f64;
+        self.offset[1] += eff as f64;
+    }
+}
+
+/// `pad` on every side of a `w` × `h` effect buffer, cut so the padded buffer stays within
+/// 16 Mpx (256 MiB of f32 RGBA) or four times its own area, whichever is larger: a small layer
+/// far from an effect's centre can't ask for gigabytes (#2261). Shared with the GPU path.
+pub fn pad_within_budget(w: u32, h: u32, pad: u32) -> u32 {
+    const MIN_BUDGET: f64 = 16_777_216.0;
+    let (w, h) = (f64::from(w), f64::from(h));
+    let budget = MIN_BUDGET.max(4.0 * w * h);
+    if (w + 2.0 * f64::from(pad)) * (h + 2.0 * f64::from(pad)) <= budget {
+        return pad;
+    }
+    // (w + 2p)(h + 2p) = budget, solved for p.
+    let p = (((w - h).powi(2) + 4.0 * budget).sqrt() - (w + h)) / 4.0;
+    (p.floor().max(0.0) as u32).min(pad)
 }
 
 /// Motion Tile's output frame for a buffer with layer origin `offset` (pixels) at `scale`:
@@ -420,6 +462,18 @@ pub trait EffectHost: Sync {
     /// Parameters Are Set At: Birth). `None` when unavailable.
     fn params_at(&self, _layer_time: f64) -> Option<Params> {
         None
+    }
+    /// Parameter `id` (a [`flatten_params`] id such as `birthRate`) of effect `effect_index` in
+    /// the layer's stack (the running effect's [`EffectEnv::effect_index`]) at another **layer
+    /// time**: CC Particle World samples its Birth Rate at every step it simulates (#1373).
+    /// `None` when unavailable.
+    fn param_at(&self, _effect_index: usize, _id: &str, _layer_time: f64) -> Option<Value> {
+        None
+    }
+    /// Parameter `id` of effect `effect_index` has one value at every time (no keyframes, no
+    /// expression), so sampling it over time can be skipped. `false` when unknown.
+    fn param_is_static(&self, _effect_index: usize, _id: &str) -> bool {
+        false
     }
     /// A particle simulation backend (GPU particles; see [`psim`]). `None` = simulate on the
     /// CPU.
@@ -1276,6 +1330,13 @@ pub fn is_time_dependent(id: &str) -> bool {
     id.starts_with("ec.sim.") || TIME_DEPENDENT.contains(&id)
 }
 
+/// Does effect `id` read its own parameters at earlier times (the stepped particle systems sample
+/// their Birth Rate at every step, #1373)? Caches keyed on the current values can't see what an
+/// expression returned then.
+pub fn reads_param_history(id: &str) -> bool {
+    matches!(id, "ec.sim.ccparticleworld" | "ec.sim.ccparticlesystems2" | "ec.sim.ccmrmercury")
+}
+
 /// Run an effect on a buffer.
 pub fn apply(spec: &EffectSpec, ctx: &EffectCtx, buf: Buf) -> Buf {
     (spec.render)(ctx, buf)
@@ -1300,11 +1361,42 @@ pub(crate) fn run_fx(id: &str, vals: &[(&str, Value)], img: Image, time: f64, en
 mod tests {
     use super::*;
 
+    /// #2261: a 20 × 20 layer with CC Radial Fast Blur's Center far away grows to at most 16 Mpx;
+    /// big layers may still grow to four times their area, and small pads are untouched.
+    #[test]
+    fn padded_buffers_stay_within_the_budget() {
+        let area = |w: u32, h: u32, p: u32| (u64::from(w) + 2 * u64::from(p)) * (u64::from(h) + 2 * u64::from(p));
+        let far = radial_fast_pad((6500.0, 6500.0), 20, 20, 0.8);
+        assert_eq!(far, 4096, "the effect asks for its full pad");
+        let mut b = Buf { img: Image::new(20, 20), offset: [0.0; 2], scale: 1.0 };
+        b.pad(far);
+        assert!(area(20, 20, 0) < area(b.img.width, b.img.height, 0) && area(b.img.width, b.img.height, 0) <= 1 << 24, "{}x{}", b.img.width, b.img.height);
+        assert_eq!(b.offset, [f64::from((b.img.width - 20) / 2); 2], "the content keeps its place");
+        let p = pad_within_budget(3840, 2160, 4096);
+        assert!(p > 1000 && area(3840, 2160, p) <= 4 * 3840 * 2160 && area(3840, 2160, p + 1) > 4 * 3840 * 2160);
+        assert_eq!(pad_within_budget(640, 360, 200), 200);
+        assert_eq!(pad_within_budget(20, 20, 0), 0);
+    }
+
     #[test]
     fn run_fx_passthrough() {
         let img = Image::filled(4, 3, [0.5, 0.25, 0.125, 1.0]);
         let out = run_fx("ec.control.slider", &[("slider", num(3.0))], img.clone(), 0.0, EffectEnv::default());
         assert_eq!(out.img.data, img.data);
+    }
+
+    #[test]
+    fn pad_offset_follows_the_clamped_pad() {
+        // Image::padded clamps a hostile pad to keep each side within MAX_PADDED_SIDE; the offset
+        // must move by the pad actually applied, or the content drifts from its layer position.
+        let mut img = Image::new(29_990, 2);
+        img.set(0, 0, [1.0, 0.0, 0.0, 1.0]);
+        let mut buf = Buf { img, offset: [3.0, 4.0], scale: 1.0 };
+        buf.pad(u32::MAX);
+        // Width binds: (MAX_PADDED_SIDE - 29 990) / 2 = 5.
+        assert_eq!(buf.offset, [8.0, 9.0]);
+        let (x, y) = buf.to_px([-3.0, -4.0]);
+        assert_eq!(buf.img.get(x as i64, y as i64), [1.0, 0.0, 0.0, 1.0]);
     }
 
     #[test]
