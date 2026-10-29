@@ -126,9 +126,7 @@ fn obj_textures_from_another_machine_find_the_file_next_to_the_model() {
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).unwrap();
     let png = {
-        let img = image::RgbaImage::from_fn(2, 2, |x, y| {
-            if (x + y) % 2 == 0 { image::Rgba([255, 0, 0, 255]) } else { image::Rgba([0, 0, 255, 255]) }
-        });
+        let img = image::RgbaImage::from_fn(2, 2, |x, y| if (x + y) % 2 == 0 { image::Rgba([255, 0, 0, 255]) } else { image::Rgba([0, 0, 255, 255]) });
         let mut out = std::io::Cursor::new(Vec::new());
         img.write_to(&mut out, image::ImageFormat::Png).unwrap();
         out.into_inner()
@@ -144,12 +142,12 @@ fn obj_textures_from_another_machine_find_the_file_next_to_the_model() {
     // path is only looked up where it points (here: nowhere else).
     let resolve = |uri: &str| -> Option<Vec<u8>> {
         let p = std::path::Path::new(uri);
-        if p.is_absolute() { return None; }
+        if p.is_absolute() {
+            return None;
+        }
         std::fs::read(d.join(p)).ok()
     };
-    let resolver = |uri: &str| -> Option<Vec<u8>> {
-        if uri == "quad.mtl" { Some(mtl.as_bytes().to_vec()) } else { resolve(uri) }
-    };
+    let resolver = |uri: &str| -> Option<Vec<u8>> { if uri == "quad.mtl" { Some(mtl.as_bytes().to_vec()) } else { resolve(uri) } };
     let m = obj::parse(obj.as_bytes(), &resolver).unwrap();
     assert_eq!(m.materials.len(), 3);
     let mat = &m.materials[0];
@@ -192,12 +190,12 @@ fn obj_texture_prefers_the_complete_name_over_its_final_token() {
     // path is only looked up where it points (here: nowhere else).
     let resolve = |uri: &str| -> Option<Vec<u8>> {
         let p = std::path::Path::new(uri);
-        if p.is_absolute() { return None; }
+        if p.is_absolute() {
+            return None;
+        }
         std::fs::read(d.join(p)).ok()
     };
-    let resolver = |uri: &str| -> Option<Vec<u8>> {
-        if uri == "quad.mtl" { Some(mtl.as_bytes().to_vec()) } else { resolve(uri) }
-    };
+    let resolver = |uri: &str| -> Option<Vec<u8>> { if uri == "quad.mtl" { Some(mtl.as_bytes().to_vec()) } else { resolve(uri) } };
     let m = obj::parse(obj.as_bytes(), &resolver).unwrap();
     assert_eq!(m.materials.len(), 3);
     let size = |mat: &Material| mat.base_color_tex.map(|t| (m.textures[t.texture].width, m.textures[t.texture].height));
