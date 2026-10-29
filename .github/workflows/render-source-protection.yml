@@ -32,5 +32,5 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@1.95.0
       - run: cargo test --locked -p effectcraft-engine --lib output_guard::tests
-      - run: cargo test --locked -p effectcraft-engine --lib tests_render_overwrite
+      - run: cargo test --locked -p effectcraft-engine --lib tests::render_overwrite
       - run: cargo test --locked -p effectcraft-project render_queue::tests
