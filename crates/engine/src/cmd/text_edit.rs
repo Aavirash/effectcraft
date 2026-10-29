@@ -372,18 +372,14 @@ fn edit(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(state_json(s))
 }
 
-/// `text.endEdit`: stop editing (a Type-tool layer left empty is deleted).
+/// `text.endEdit`: stop editing.
+///
+/// A Type-tool layer the user clicked away from without typing is **kept**: After Effects leaves it in
+/// the timeline as `<空白のテキストレイヤー>`, and the layer came from the user's click rather than from a
+/// mistake to clean up. Deleting it took away something they could still type into.
 pub(crate) fn end_edit(s: &mut Session, _: &Value) -> Result<Value> {
-    let Some(e) = s.state.text_edit.take() else { return Ok(Value::Null) };
-    if e.created && layer_doc(s, e.layer).is_some_and(|d| d.text.is_empty()) {
-        let cid = s.active_comp_id().ok_or(EngineError::NoComp)?;
-        s.edit("Delete Empty Text Layer", None, |proj, st| {
-            if let Some(c) = proj.comp_mut(cid) {
-                c.layers.retain(|l| l.id != e.layer);
-            }
-            st.selected_layers.retain(|l| *l != e.layer);
-            Ok(())
-        })?;
+    if s.state.text_edit.take().is_none() {
+        return Ok(Value::Null);
     }
     s.bump();
     Ok(Value::Null)

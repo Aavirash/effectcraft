@@ -74,9 +74,9 @@ fn select_all(s: &mut Session, _: &Value) -> Result<Value> {
     Ok(json!(s.state.selected_layers.len()))
 }
 fn deselect_all(s: &mut Session, _: &Value) -> Result<Value> {
-    // A deselected layer never keeps an open text edit: commit the edit first, exactly as
-    // `text.endEdit` (an empty Type-tool layer included), so every route — menu, shortcut,
-    // script, MCP — leaves one final state.
+    // A deselected layer never keeps an open text edit: commit it first, exactly as `text.endEdit`,
+    // so every route — menu, shortcut, script, MCP — leaves one final state. An empty Type-tool
+    // layer survives, as it does in After Effects.
     super::text_edit::end_edit(s, &Value::Null)?;
     s.state.selected_layers.clear();
     s.state.selected_props.clear();
