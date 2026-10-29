@@ -305,6 +305,31 @@ fn tracking_grows_from_each_paragraphs_alignment() {
     assert!((b1.x1 - b0.x1 + 10.0).abs() < 1.0, "the right paragraph grows left: {} {}", b0.x1, b1.x1);
 }
 
+/// #1798: After Effects adds Tracking Amount in absolute pixels between neighbouring characters,
+/// independent of font size.
+#[test]
+fn text_animator_tracking_amount_uses_pixels_independent_of_font_size() {
+    let width_diff = |font_size: f64, amount: f64| {
+        let (mut p, cid, comp) = setup(2000, 400);
+        let mut l = text_layer(&mut p, &comp, doc("ABCDE", font_size));
+        animator(&mut p, &mut l, &["tracking"], &["range"]);
+        set(&mut l, "text/animators/#1/properties/tracking", Value::Scalar(amount));
+        p.comp_mut(cid).unwrap().layers.push(l);
+        let w = bounds_of(&glyph_paths(&ctx(&p, cid, 0.0), &p.comp(cid).unwrap().layers[0])).width();
+        let (mut p0, cid0, comp0) = setup(2000, 400);
+        let l0 = text_layer(&mut p0, &comp0, doc("ABCDE", font_size));
+        p0.comp_mut(cid0).unwrap().layers.push(l0);
+        let w0 = bounds_of(&glyph_paths(&ctx(&p0, cid0, 0.0), &p0.comp(cid0).unwrap().layers[0])).width();
+        w - w0
+    };
+    // 5 characters = 4 gaps. In After Effects, Tracking Amount 100 adds 100 px per gap = 400 px total width delta,
+    // regardless of whether font size is 50 px or 200 px.
+    let diff_50 = width_diff(50.0, 100.0);
+    let diff_200 = width_diff(200.0, 100.0);
+    assert!((diff_50 - 400.0).abs() < 1.0, "font_size 50 px width delta: {diff_50}");
+    assert!((diff_200 - 400.0).abs() < 1.0, "font_size 200 px width delta: {diff_200}");
+}
+
 #[test]
 fn anchor_grouping_line_rotates_around_line_centre() {
     let (mut p, cid, comp) = setup(600, 300);
