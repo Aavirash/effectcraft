@@ -228,7 +228,9 @@ fn segment(l: &mut Lex, c: u8, base: Vec2, p: &mut BezPath, cur: &mut Point, las
             let arc = SvgArc { from: *cur, to: e, radii: Vec2::new(rx, ry), x_rotation: rot.to_radians(), large_arc: large, sweep };
             let mut last_end = None;
             if let Some(a) = kurbo::Arc::from_svg_arc(&arc) {
-                a.to_cubic_beziers(0.1, |c1, c2, end| {
+                // Scale tolerance with the radius so the segment count stays bounded.
+                let tol = 0.1_f64.max(a.radii.x.max(a.radii.y) * 1e-4);
+                a.to_cubic_beziers(tol, |c1, c2, end| {
                     p.curve_to(c1, c2, end);
                     last_end = Some(end);
                 });
@@ -267,6 +269,12 @@ fn strip_trailing_moves(p: BezPath) -> BezPath {
 mod tests {
     use super::*;
     use kurbo::PathEl;
+
+    #[test]
+    fn huge_arc_radius_stays_bounded() {
+        let p = parse_path_data("M0 0A1e36 1e36 0 1 1 1e30 0");
+        assert!(p.elements().len() < 1000, "got {} elements", p.elements().len());
+    }
 
     #[test]
     fn commands() {

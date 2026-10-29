@@ -166,8 +166,31 @@ fn project_files_name_their_version_and_always_read_back() {
     p.comp_mut(cid).unwrap().layers[0].props.prop_mut("transform/opacity").unwrap().value = Value::Scalar(f64::NAN);
     let e = p.to_file_json().unwrap_err().to_string();
     assert!(e.contains("can't be saved"), "{e}");
+    // Infinity too, in either profile: the check doesn't rely on reading the file back.
+    p.comp_mut(cid).unwrap().layers[0].props.prop_mut("transform/opacity").unwrap().value = Value::Scalar(f64::INFINITY);
+    let e = p.to_file_json().unwrap_err().to_string();
+    assert!(e.contains("can't be saved"), "{e}");
     assert!(crate::is_newer_version("0.2.0", "0.1.9") && crate::is_newer_version("1.0.0-rc.1", "0.9.9"));
     assert!(!crate::is_newer_version("0.1.1", "0.1.1") && !crate::is_newer_version("0.1.0", "0.1.1"));
+}
+
+#[test]
+fn project_files_refuse_newer_schemas() {
+    let p = Project { schema: crate::SCHEMA_VERSION + 1, ..Project::default() };
+    let expected = format!(
+        "the project can't be saved: it holds a value a project file can't store (project schema {} is newer than this version supports ({}))",
+        p.schema,
+        crate::SCHEMA_VERSION
+    );
+    assert_eq!(p.to_file_json().unwrap_err().to_string(), expected);
+    assert_eq!(p.to_file_json_with_view(&crate::SavedView::default()).unwrap_err().to_string(), expected);
+}
+
+#[test]
+fn saved_files_reopen_in_pretty_and_compact_form() {
+    let (p, _cid) = project_with_layer();
+    assert_eq!(Project::from_json(&p.to_file_json().unwrap()).unwrap(), p, "the pretty project file");
+    assert_eq!(Project::from_json(&p.to_json_compact()).unwrap(), p, "compact JSON");
 }
 
 #[test]
@@ -266,4 +289,36 @@ fn comp_contains_ends_on_cycles_long_chains_and_shared_precomps() {
     let (p, c) = comp_graph(n, &(0..n - 1).map(|i| (i, i + 1)).collect::<Vec<_>>());
     assert!(p.comp_contains(c[0], c[n - 1]));
     assert!(!p.comp_contains(c[n - 1], c[0]));
+}
+
+/// A Wiggle Paths 100 000 groups deep gets Spatial Phase on a 2 MiB stack.
+#[test]
+fn upgrading_deeply_nested_shape_groups_fits_a_small_stack() {
+    let n = 100_000;
+    let mut next = 1;
+    let mut contents = build::shape_simple_op(&mut Ids(&mut next), "wiggle").unwrap();
+    contents.children.retain(|c| c.match_id() != "spatialPhase");
+    for _ in 0..n {
+        let uid = Ids(&mut next).alloc();
+        contents = crate::PropGroup::new(uid, "group", "Group 1").with(contents);
+    }
+    let h = std::thread::Builder::new()
+        .stack_size(2 << 20)
+        .spawn(move || {
+            let added = build::upgrade_shape_contents(&mut Ids(&mut next), &mut contents);
+            (added, contents)
+        })
+        .unwrap();
+    let (added, mut g) = h.join().unwrap();
+    assert!(added);
+    // One level at a time: dropping the whole tree would recurse as deep as it is nested.
+    let mut depth = 0;
+    while g.match_id == "group" {
+        let Some(crate::Node::Group(child)) = g.children.pop() else { panic!("a nested group") };
+        g = child;
+        depth += 1;
+    }
+    assert_eq!(depth, n);
+    let ids: Vec<&str> = g.children.iter().map(|c| c.match_id()).collect();
+    assert_eq!(ids, ["size", "detail", "points", "speed", "correlation", "phase", "spatialPhase", "seed"]);
 }
