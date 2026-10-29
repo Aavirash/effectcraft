@@ -386,7 +386,9 @@ fn generate(s: &mut Session, p: &Value, cues: &mut Vec<Cue>) -> Result<Value> {
     if !margin.is_finite() {
         return Err(bad(c, "`margin` must be a number"));
     }
-    let precompose = b_p(p, "precompose").unwrap_or(false);
+    // Default true: the captions are finished into their own precomposition, so they stay
+    // non-destructive and can be opened, retimed and restyled as a unit.
+    let precompose = b_p(p, "precompose").unwrap_or(true);
     let name = str_p(p, "name").unwrap_or("Caption").to_string();
     prepare(cues, &comp);
     if cues.is_empty() {
@@ -451,7 +453,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Generate Captions...",
             ["Layer"],
             None,
-            "{comp?, layer?, path: .srt|.vtt|.json, style?: plain|boxed|karaoke|pop, position?: bottom|top|center, margin? (percent of the height, 8), precompose?: bool, name?}",
+            "{comp?, layer?, path: .srt|.vtt|.json, style?: plain|boxed|karaoke|pop, position?: bottom|top|center, margin? (percent of the height, 8), precompose? (default true), name?}",
             |s: &Session| {
                 let comp = s.active_comp().ok_or("no composition is open")?;
                 if comp.layers.is_empty() { Err("the composition has no layers".into()) } else { Ok(()) }
@@ -463,7 +465,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Create Captions",
             [],
             None,
-            "{comp?, layer?, cues: [{start, end, text, words?}], style?: plain|boxed|karaoke|pop, position?: bottom|top|center, margin? (percent of the height, 8), precompose?: bool, name?}",
+            "{comp?, layer?, cues: [{start, end, text, words?}], style?: plain|boxed|karaoke|pop, position?: bottom|top|center, margin? (percent of the height, 8), precompose? (default true), name?}",
             |s: &Session| s.active_comp().map(|_| ()).ok_or_else(|| "no composition is open".to_string()),
             create
         ),

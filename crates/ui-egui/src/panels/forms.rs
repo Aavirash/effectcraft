@@ -726,7 +726,7 @@ pub fn open_form(app: &mut EffectcraftApp, id: &str, p: &Value) -> bool {
                     0,
                 ),
                 Field::choice("position", "Position", &[("Bottom", json!("bottom")), ("Top", json!("top")), ("Center", json!("center"))], 0),
-                Field::bool("precompose", "Put the captions in a precomposition", false),
+                Field::bool("precompose", "Put the captions in a precomposition", true),
             ],
         ),
         "layer.alignVideoToData" if !has(p, &["data", "videoStart"]) => {
