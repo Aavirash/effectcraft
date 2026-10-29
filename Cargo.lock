@@ -7199,6 +7199,7 @@ name = "xtask"
 version = "0.18.0"
 dependencies = [
  "chrono",
+ "pkg-config",
  "serde_json",
  "tempfile",
 ]
