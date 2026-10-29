@@ -552,12 +552,18 @@ function Layer(c, l) {
   delete f.length;
   Object.setPrototypeOf(f, Layer.prototype);
   // Kept across evaluations (`__layer`), so an expression can't change which layer it is, delete
-  // a field or leave its own on it. `__i` and `__s` stay writable: `__info` reads them again in an
-  // evaluation whose `__S` isn't `__s`, and every evaluation has a new `__S`.
+  // a field or leave its own on it. Its info is private to `__info`, which reads it again in an
+  // evaluation whose `__S` isn't the one it was read in (every evaluation has a new `__S`), so
+  // freezing the layer can't keep its info either.
+  var info = null, read = null;
   Object.defineProperty(f, '__c', { value: c });
   Object.defineProperty(f, '__l', { value: l });
-  Object.defineProperty(f, '__i', { value: null, writable: true });
-  Object.defineProperty(f, '__s', { value: null, writable: true });
+  Object.defineProperty(f, '__info', {
+    get: function () {
+      if (read !== __S) { info = __h(__LINFO, c, l); read = __S; }
+      return info;
+    },
+  });
   Object.preventExtensions(f);
   return f;
 }
@@ -609,10 +615,6 @@ function __m4(m, p, vec) {
 
 Layer.prototype = {
   __isLayer: true,
-  get __info() {
-    if (this.__s !== __S) { this.__i = __h(__LINFO, this.__c, this.__l); this.__s = __S; }
-    return this.__i;
-  },
   get name() { return this.__info[0]; },
   get index() { return this.__info[1]; },
   get inPoint() { return this.__info[2]; },
