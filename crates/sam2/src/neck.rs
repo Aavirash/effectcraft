@@ -110,6 +110,11 @@ pub struct NeckOutput {
 }
 
 impl Neck {
+    /// Position tables shared by the CPU and GPU paths, released with this neck.
+    pub(crate) fn position(&self, h: usize, w: usize) -> Result<Tensor> {
+        self.positions.get(self.pos_features, h, w)
+    }
+
     pub fn load(w: &Weights, channels: &[usize], fpn: usize, top_down: &[usize]) -> Result<Neck> {
         let convs = channels
             .iter()
@@ -144,7 +149,7 @@ impl Neck {
                 }
                 _ => lateral,
             };
-            positions.push(self.positions.get(self.pos_features, cur.dim(2)?, cur.dim(3)?)?);
+            positions.push(self.position(cur.dim(2)?, cur.dim(3)?)?);
             features.push(cur.clone());
             prev = Some(cur);
         }
@@ -199,16 +204,17 @@ mod tests {
 
     #[test]
     fn position_cache_bounds_retained_elements_and_preserves_the_encoding() {
-        let cache = PositionCache::new(64);
-        let first = cache.get(2, 2, 4).unwrap();
+        let neck = Neck { convs: vec![], top_down: vec![], pos_features: 2, positions: PositionCache::new(64) };
+        let cache = &neck.positions;
+        let first = neck.position(2, 4).unwrap();
         assert_eq!(first.dims(), &[1, 4, 2, 4]);
-        assert_eq!(first.flatten_all().unwrap().to_vec1::<f32>().unwrap(), cache.get(2, 2, 4).unwrap().flatten_all().unwrap().to_vec1::<f32>().unwrap());
-        cache.get(2, 3, 4).unwrap();
+        assert_eq!(first.flatten_all().unwrap().to_vec1::<f32>().unwrap(), neck.position(2, 4).unwrap().flatten_all().unwrap().to_vec1::<f32>().unwrap());
+        neck.position(3, 4).unwrap();
         let entries = cache.entries.lock().unwrap();
         assert_eq!(entries.len(), 1, "older tables are evicted to fit the budget");
         assert!(entries.values().map(Tensor::elem_count).sum::<usize>() <= 64);
         drop(entries);
-        let large = cache.get(2, 8, 8).unwrap();
+        let large = neck.position(8, 8).unwrap();
         assert_eq!(large.dims(), &[1, 4, 8, 8]);
         assert_eq!(cache.entries.lock().unwrap().len(), 1, "a table over budget is returned without retention");
     }

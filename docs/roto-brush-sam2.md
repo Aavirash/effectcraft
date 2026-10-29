@@ -4,9 +4,10 @@ Roto Brush can follow an object through a clip with Meta's **SAM 2.1 Tiny** (Hie
 Apache-2.0). It is optional: nothing changes until you install the model and choose it.
 
 ## Using it
-1. Settings ▸ Roto Brush ▸ SAM 2.1 Tiny ▸ **Install** (downloads `model.safetensors`, 155.9 MB, from the pinned
+1. Settings ▸ Roto Brush ▸ SAM 2.1 Tiny ▸ **Download** (downloads `model.safetensors`, 155.9 MB, from the pinned
    Hugging Face commit; the SHA-256 is checked and the licence notice is kept next to the file). Or install from a
-   file you downloaded. Agents: `roto.model.install {id: "sam2.1-hiera-tiny"}`.
+   file you downloaded. Agents: `roto.model.download {id: "sam2.1-hiera-tiny", wait: true}`, or
+   `roto.model.install {id: "sam2.1-hiera-tiny", path: "model.safetensors"}` for a file you already have.
 2. Choose it (`roto.model.select {id: "sam2.1-hiera-tiny"}`).
 3. Paint strokes on the base frame as usual, then **Propagate**. One tracking pass follows the object through the
    whole span in both directions, using SAM 2's streaming memory, so it keeps tracking through occlusion and when the

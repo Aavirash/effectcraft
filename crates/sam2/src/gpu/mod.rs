@@ -306,11 +306,20 @@ impl Gpu {
         if op.m == 0 || op.n == 0 || op.batch == 0 {
             return Ok(());
         }
+        if sc.col != 1 {
+            return Err(Error::Input(format!("matmul output needs a column stride of 1, got {}", sc.col)));
+        }
         // bounds: the last element each operand touches must lie inside its buffer
-        let last = |s: Strides, rows: usize, cols: usize| s.offset + (op.batch - 1) * s.batch + (rows - 1) * s.row + (cols.max(1) - 1) * s.col;
+        let last = |s: Strides, rows: usize, cols: usize| {
+            s.offset.checked_add((op.batch - 1).checked_mul(s.batch)?)?.checked_add((rows - 1).checked_mul(s.row)?)?.checked_add((cols - 1).checked_mul(s.col)?)
+        };
         for (name, buf, s, rows, cols) in [("A", a, sa, op.m, op.k), ("B", b, sb, op.k, op.n), ("C", c, sc, op.m, op.n)] {
-            if op.k > 0 && last(s, rows, cols) >= buf.len {
-                return Err(Error::Input(format!("matmul operand {name} reaches element {} of a {}-element buffer", last(s, rows, cols), buf.len)));
+            if name != "C" && op.k == 0 {
+                continue;
+            }
+            let last = last(s, rows, cols).ok_or_else(|| Error::Input(format!("matmul operand {name} layout overflows its element index")))?;
+            if last >= buf.len {
+                return Err(Error::Input(format!("matmul operand {name} reaches element {last} of a {}-element buffer", buf.len)));
             }
         }
         if op.bias.is_some_and(|bias| bias.len < op.n) || op.residual.is_some_and(|r| r.len < c.len) {

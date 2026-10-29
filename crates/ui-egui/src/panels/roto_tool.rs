@@ -32,6 +32,31 @@ pub fn object_color(o: u32, base: [f64; 3]) -> Color32 {
     Color32::from_rgb(r, g, b)
 }
 
+/// Sample the layer-grid matte at each input pixel centre, including cropping and preview scale.
+fn object_mask_in_input(seg: &fx::FrameSeg, inp: &effectcraft_engine::effects::Buf) -> Vec<bool> {
+    let width = inp.img.width as usize;
+    if width == 0 || !inp.scale.is_finite() || inp.scale <= 0.0 || inp.offset.iter().any(|v| !v.is_finite()) {
+        return vec![false; inp.img.data.len()];
+    }
+    inp.img
+        .data
+        .iter()
+        .enumerate()
+        .map(|(i, _)| {
+            let x = ((i % width) as f64 + 0.5 - inp.offset[0]) / inp.scale;
+            let y = ((i / width) as f64 + 0.5 - inp.offset[1]) / inp.scale;
+            if x < 0.0 || y < 0.0 || x >= seg.w as f64 || y >= seg.h as f64 {
+                return false;
+            }
+            (y.floor() as usize)
+                .checked_mul(seg.w)
+                .and_then(|row| row.checked_add(x.floor() as usize))
+                .and_then(|index| seg.matte.get(index))
+                .is_some_and(|m| *m != 0)
+        })
+        .collect()
+}
+
 /// A stroke being drawn.
 #[derive(Clone, Debug)]
 struct Drag {
@@ -113,10 +138,7 @@ pub fn draw_overlay(
                     let f = fx::frame_of(layer.layer_time(time).seconds(), comp.frame_rate.as_f64());
                     fx::object_mattes(&params, size, comp.frame_rate.as_f64(), f)
                         .into_iter()
-                        .map(|(obj, seg)| {
-                            let seg = fx::resample(&seg, w, h);
-                            (object_color(obj, o.boundary_color), seg.matte.iter().map(|m| *m != 0).collect())
-                        })
+                        .map(|(obj, seg)| (object_color(obj, o.boundary_color), object_mask_in_input(&seg, &inp)))
                         .collect()
                 }
                 _ => vec![],
@@ -148,8 +170,18 @@ pub fn draw_overlay(
                                 if edge { bc } else { Color32::TRANSPARENT }
                             } else {
                                 // the outline of every object whose own matte has an edge here
-                                let inside_of =
-                                    |m: &Vec<bool>, x: i64, y: i64| x >= 0 && y >= 0 && x < w as i64 && y < h as i64 && m[y as usize * w + x as usize];
+                                let inside_of = |m: &Vec<bool>, x: i64, y: i64| {
+                                    x >= 0
+                                        && y >= 0
+                                        && x < w as i64
+                                        && y < h as i64
+                                        && (y as usize)
+                                            .checked_mul(w)
+                                            .and_then(|row| row.checked_add(x as usize))
+                                            .and_then(|index| m.get(index))
+                                            .copied()
+                                            .unwrap_or(false)
+                                };
                                 per_object
                                     .iter()
                                     .rev()
@@ -467,6 +499,24 @@ pub fn bar_buttons(app: &mut EffectcraftApp, ui: &mut egui::Ui, p: &egui::Painte
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn per_object_outlines_follow_cropped_padded_and_scaled_input_coordinates() {
+        use effectcraft_engine::{effects::Buf, raster::Image};
+        let seg = fx::FrameSeg { w: 4, h: 2, matte: vec![0, 0, 255, 255, 0, 0, 255, 255], refine: vec![0; 8], ..Default::default() };
+        for (offset, scale, expected) in [
+            ([-2.0, 0.0], 1.0, vec![true, true]),
+            ([0.0, 0.0], 0.5, vec![false, true]),
+            ([-1.0, 0.0], 0.5, vec![true, false]),
+            ([2.0, 0.0], 1.0, vec![false, false]),
+        ] {
+            let inp = Buf { img: Image::new(2, 1), offset, scale };
+            assert_eq!(object_mask_in_input(&seg, &inp), expected, "offset={offset:?}, scale={scale}");
+        }
+        let inp = Buf { img: Image::new(6, 4), offset: [1.0, 1.0], scale: 1.0 };
+        let expected: Vec<bool> = (0..24).map(|i| matches!((i % 6, i / 6), (3 | 4, 1 | 2))).collect();
+        assert_eq!(object_mask_in_input(&seg, &inp), expected);
+    }
 
     #[test]
     fn confidence_colours_run_from_green_to_red_and_absent_is_slate() {

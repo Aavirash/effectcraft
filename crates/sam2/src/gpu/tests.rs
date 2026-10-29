@@ -87,6 +87,81 @@ fn matmul_matches_the_definition_for_awkward_sizes_and_strides() {
 }
 
 #[test]
+fn matmul_rejects_nonunit_output_columns() {
+    let Some(g) = gpu() else { return };
+    let value = g.upload(&[1.0]);
+    let c = g.zeros(8).unwrap();
+    for col in [0, 2] {
+        let broadcast = Strides { offset: 0, batch: 0, row: 0, col: 0 };
+        let out = Strides { offset: 0, batch: 0, row: 4, col };
+        let op = Matmul {
+            m: 2,
+            n: 2,
+            k: 1,
+            batch: 1,
+            a: (&value, broadcast),
+            b: (&value, broadcast),
+            c: (&c, out),
+            bias: None,
+            residual: None,
+            alpha: 1.0,
+            act: Act::None,
+        };
+        assert!(matches!(g.matmul(&op), Err(Error::Input(_))), "output column stride {col}");
+    }
+}
+
+#[test]
+fn matmul_zero_inner_dimension_checks_output_and_writes_bias() {
+    let Some(g) = gpu() else { return };
+    let empty = g.upload(&[]);
+    let tiny = g.zeros(1).unwrap();
+    let bias = g.upload(&[3.0, 5.0]);
+    let mut op = Matmul {
+        m: 2,
+        n: 2,
+        k: 0,
+        batch: 1,
+        a: (&empty, Strides::row_major(0)),
+        b: (&empty, Strides::row_major(2)),
+        c: (&tiny, Strides::row_major(2)),
+        bias: Some(&bias),
+        residual: None,
+        alpha: 1.0,
+        act: Act::None,
+    };
+    assert!(matches!(g.matmul(&op), Err(Error::Input(_))), "C is written even when K is zero");
+    let c = g.zeros(4).unwrap();
+    op.c = (&c, Strides::row_major(2));
+    g.matmul(&op).unwrap();
+    g.flush().unwrap();
+    assert_eq!(g.download(&c).unwrap(), [3.0, 5.0, 3.0, 5.0]);
+}
+
+#[test]
+fn matmul_rejects_overflowing_operand_offsets() {
+    let Some(g) = gpu() else { return };
+    let value = g.upload(&[1.0]);
+    let c = g.zeros(4).unwrap();
+    let broadcast = Strides { offset: 0, batch: 0, row: 0, col: 0 };
+    let out = Strides { offset: usize::MAX, batch: 0, row: 1, col: 1 };
+    let op = Matmul {
+        m: 2,
+        n: 1,
+        k: 1,
+        batch: 1,
+        a: (&value, broadcast),
+        b: (&value, broadcast),
+        c: (&c, out),
+        bias: None,
+        residual: None,
+        alpha: 1.0,
+        act: Act::None,
+    };
+    assert!(matches!(g.matmul(&op), Err(Error::Input(_))));
+}
+
+#[test]
 fn matmul_with_transposed_operands_bias_activation_and_residual() {
     let Some(g) = gpu() else { return };
     let (m, n, k) = (70, 90, 41);

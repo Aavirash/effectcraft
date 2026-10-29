@@ -203,7 +203,7 @@ impl VideoModel {
             match g.encoder.encode(pixels) {
                 Ok(f) => {
                     let none = || Tensor::zeros((1, 0, 0, 0), DType::F32, &candle_core::Device::Cpu);
-                    let pos = crate::neck::sine_position(128, GRID, GRID)?;
+                    let pos = self.image.vision.neck.position(GRID, GRID)?;
                     let features = ImageFeatures { features: vec![none()?, none()?, f.low], positions: vec![none()?, none()?, pos] };
                     return Ok(Encoded { features, high: f.high });
                 }
