@@ -752,34 +752,38 @@ mod tests {
         fn label(menu: &NativeMenu, id: &str) -> String {
             menu.items().into_iter().find(|i| i.command == id).map(|i| i.label.to_string()).unwrap_or_default()
         }
-        let mut app = app();
-        app.session.execute("layer.newNull", json!({})).unwrap();
-        app.session.execute("layer.newNull", json!({})).unwrap();
-        app.session.execute("edit.undo", json!({})).unwrap();
-        let ctx = egui::Context::default();
-        let history = label(&build_now(&app, &ctx), "edit.undo");
-        let redo_history = label(&build_now(&app, &ctx), "edit.redo");
-        assert!(history.starts_with("Undo") && history != "Undo", "{history}");
-        assert!(redo_history.starts_with("Redo") && redo_history != "Redo", "{redo_history}");
-        let mut text = String::new();
-        let mut id = None;
-        for _ in 0..2 {
-            let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
-                let r = ui.text_edit_singleline(&mut text);
-                r.request_focus();
-                id = Some(r.id);
-            });
-            out.textures_delta.clear();
+        for (language, undo, redo) in [("en", "Undo", "Redo"), ("ja", "取り消し", "やり直し")] {
+            let mut app = app();
+            app.session.execute("prefs.set", json!({"key": "general.language", "value": language})).unwrap();
+            app.session.execute("layer.newNull", json!({})).unwrap();
+            app.session.execute("layer.newNull", json!({})).unwrap();
+            app.session.execute("edit.undo", json!({})).unwrap();
+            let ctx = egui::Context::default();
+            let history = label(&build_now(&app, &ctx), "edit.undo");
+            let redo_history = label(&build_now(&app, &ctx), "edit.redo");
+            assert!(history.starts_with(undo) && history != undo, "{history}");
+            assert!(redo_history.starts_with(redo) && redo_history != redo, "{redo_history}");
+            let mut text = String::new();
+            let mut id = None;
+            for _ in 0..2 {
+                let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                    let r = ui.text_edit_singleline(&mut text);
+                    r.request_focus();
+                    id = Some(r.id);
+                });
+                out.textures_delta.clear();
+            }
+            assert!(text_field_window(&ctx).is_some());
+            let typing = build_now(&app, &ctx);
+            assert_eq!(label(&typing, "edit.undo"), undo);
+            assert_eq!(label(&typing, "edit.redo"), redo);
+            assert!(typing.items().into_iter().any(|i| i.command == "edit.undo" && i.enabled));
+            assert!(typing.items().into_iter().any(|i| i.command == "edit.redo" && i.enabled));
+            ctx.memory_mut(|m| m.surrender_focus(id.unwrap_or(egui::Id::NULL)));
+            assert!(text_field_window(&ctx).is_none());
+            let after = build_now(&app, &ctx);
+            assert_eq!(label(&after, "edit.undo"), history);
+            assert_eq!(label(&after, "edit.redo"), redo_history);
         }
-        assert!(text_field_window(&ctx).is_some());
-        let typing = build_now(&app, &ctx);
-        assert_eq!(label(&typing, "edit.undo"), "Undo");
-        assert_eq!(label(&typing, "edit.redo"), "Redo");
-        assert!(typing.items().into_iter().any(|i| i.command == "edit.undo" && i.enabled));
-        ctx.memory_mut(|m| m.surrender_focus(id.unwrap_or(egui::Id::NULL)));
-        assert!(text_field_window(&ctx).is_none());
-        let after = build_now(&app, &ctx);
-        assert_eq!(label(&after, "edit.undo"), history);
-        assert_eq!(label(&after, "edit.redo"), redo_history);
     }
 }
