@@ -981,6 +981,8 @@ Layer
   Auto-trace... | layer.autoTrace
   Pre-compose... | layer.precompose
   Scene Edit Detection... | layer.sceneEditDetection
+  Remove Silence... | layer.removeSilence
+  Generate Captions... | captions.import
 Effect
   Effect Controls | window.panel {"panel":"effectControls"} | F3, Cmd+Shift+T
   Last Effect | effect.applyLast

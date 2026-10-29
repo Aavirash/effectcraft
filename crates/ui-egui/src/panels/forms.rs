@@ -689,6 +689,46 @@ pub fn open_form(app: &mut EffectcraftApp, id: &str, p: &Value) -> bool {
                 Field::num("threshold", "Sensitivity threshold (0–1, lower finds more)", 0.25),
             ],
         ),
+        "layer.removeSilence" if !has(p, &["mode"]) => (
+            "Remove Silence".into(),
+            vec![
+                Field::choice(
+                    "mode",
+                    "Action",
+                    &[
+                        ("Tighten (cut and close the gaps)", json!("tighten")),
+                        ("Split only (leave the gaps)", json!("split")),
+                        ("Create markers", json!("markers")),
+                    ],
+                    0,
+                ),
+                Field::num("threshold", "Silence threshold (dBFS)", -35.0),
+                Field::num("minSilence", "Minimum silence (seconds)", 0.35),
+                Field::num("minSpeech", "Minimum speech (seconds)", 0.2),
+                Field::num("padding", "Keep before and after (seconds)", 0.1),
+                Field::choice("ripple", "Ripple", &[("Selected layers", json!("selected")), ("All unlocked layers", json!("all"))], 0),
+                Field::bool("keepSource", "Keep the original layer, disabled", true),
+                Field::bool("precompose", "Put the result in a precomposition", true),
+            ],
+        ),
+        "captions.import" if !has(p, &["path", "cues"]) => (
+            "Generate Captions".into(),
+            vec![
+                Field::note(
+                    "note",
+                    "Choose a transcript (SRT, VTT or JSON). No transcription engine is set up yet: export it from Parakeet or Whisper, or ask your agent to transcribe the clip.",
+                ),
+                Field::path("path", "Transcript", "", &["srt", "vtt", "json"]),
+                Field::choice(
+                    "style",
+                    "Style",
+                    &[("Bold White", json!("plain")), ("Boxed", json!("boxed")), ("Karaoke", json!("karaoke")), ("Pop", json!("pop"))],
+                    0,
+                ),
+                Field::choice("position", "Position", &[("Bottom", json!("bottom")), ("Top", json!("top")), ("Center", json!("center"))], 0),
+                Field::bool("precompose", "Put the captions in a precomposition", false),
+            ],
+        ),
         "layer.alignVideoToData" if !has(p, &["data", "videoStart"]) => {
             let data: Vec<(String, Value)> = s
                 .project

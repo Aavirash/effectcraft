@@ -5196,14 +5196,19 @@ pub(crate) struct LayerMenuCaps {
     pub text: bool,
     /// The layer has a source item to reveal in the Project panel.
     pub source: bool,
+    /// Footage with an audio track: Remove Silence and Generate Captions.
+    pub audio: bool,
 }
 
 impl LayerMenuCaps {
     pub(crate) fn of(project: &effectcraft_engine::project::Project, layer: &Layer) -> Self {
+        let audio = layer.switches.audio
+            && matches!(&layer.source, LayerSource::Footage { item } if project.item(*item).is_some_and(|i| matches!(&i.kind, ItemKind::Footage(f) if f.has_audio && !f.missing)));
         Self {
             vector: vector_footage_layer(project, layer),
             text: matches!(layer.source, LayerSource::Text),
             source: layer.source.item().is_some_and(|item| project.item(item).is_some()),
+            audio,
         }
     }
 }
@@ -5329,6 +5334,11 @@ pub(crate) fn layer_menu(
     item(ui, "Pre-compose…", "layer.precompose", json!({"layers": layers}));
     item(ui, "Duplicate", "edit.duplicate", json!({"layers": layers}));
     item(ui, "Split Layer", "edit.splitLayer", json!({"layers": layers}));
+    if caps.audio {
+        let one = layers.first().copied().unwrap_or(id);
+        item(ui, "Remove Silence…", "layer.removeSilence", json!({"layers": layers}));
+        item(ui, "Generate Captions…", "captions.import", json!({"layer": one}));
+    }
     item(ui, "Delete", "edit.clear", json!({"layers": layers}));
     actions.extend(switch_actions);
 }

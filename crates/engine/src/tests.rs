@@ -40,6 +40,7 @@ mod sequence;
 mod session;
 mod settings;
 mod shortcut_cmds;
+mod speech;
 pub(crate) mod stubs;
 mod styles;
 mod tail;

@@ -452,7 +452,7 @@ fn drawn_text(mut draw: impl FnMut(&mut egui::Ui)) -> Vec<String> {
 /// the categories the Effect menu does; the actions it records stay the same.
 #[test]
 fn the_layer_context_menu_draws_in_the_interface_language() {
-    let caps = LayerMenuCaps { vector: true, text: false, source: true };
+    let caps = LayerMenuCaps { vector: true, text: false, source: true, audio: false };
     let (mut auto, mut actions) = (crate::automation::Registry::default(), Vec::new());
     crate::i18n::set_current("zh-hans");
     let menu = drawn_text(|ui| layer_menu(ui, &[7], caps, (&mut auto, "t"), &mut actions));
