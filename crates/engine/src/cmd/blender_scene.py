@@ -1,5 +1,4 @@
 # EffectCraft camera tracker → Blender, original code under MIT OR Apache-2.0.
-# Blender scene export contributor: Krueels — https://github.com/Krueels
 # Run in Blender's Scripting workspace (Open, Run Script), or:
 # blender --background --python "Tracked Scene.py"
 # Creates a NEW scene; existing scenes and objects are preserved. Save the .blend yourself.
