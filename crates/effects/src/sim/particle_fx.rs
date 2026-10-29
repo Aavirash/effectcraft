@@ -1,4 +1,4 @@
-use super::engine::{PState, PW_EFFECT_CAMERA, Phys, accelerated, norm3, particle_look, sim_key, simulate, type_sprite};
+use super::engine::{PState, PW_EFFECT_CAMERA, Phys, accelerated, norm3, particle_look, pw_state, sim_key, simulate, type_sprite};
 use super::sprites::{Acc, Post, Sprite, SpritePlan, raster, splat};
 use super::{Buf, EffectCtx, Image, IntoParallelRefIterator, ParallelIterator, SimCache, Value, params_key, unpremul};
 
@@ -6,11 +6,14 @@ use super::{Buf, EffectCtx, Image, IntoParallelRefIterator, ParallelIterator, Si
 
 pub(super) static PW_CACHE: SimCache<PState> = SimCache::new(6);
 
+/// Particles per second per unit of CC Particle World's Birth Rate.
+pub(super) const PW_RATE: f64 = 120.0;
+
 /// CC Particle World's physics.
 pub(super) fn pw_phys(ctx: &EffectCtx) -> Phys {
     let pr = ctx.params;
     Phys {
-        rate: pr.f("birthRate").max(0.0) * 120.0,
+        rate: pr.f("birthRate").max(0.0) * PW_RATE,
         life: pr.f("longevity").max(0.0) as f32,
         producer: [pr.f("producer/producerX") as f32, pr.f("producer/producerY") as f32, pr.f("producer/producerZ") as f32],
         radius: [pr.f("producer/radiusX").max(0.0) as f32, pr.f("producer/radiusY").max(0.0) as f32, pr.f("producer/radiusZ").max(0.0) as f32],
@@ -152,8 +155,7 @@ pub(super) fn particle_world_plan(ctx: &EffectCtx, b: &Buf) -> Option<SpritePlan
     if phys.rate <= 0.0 && ctx.time <= 0.0 {
         return None;
     }
-    let key = sim_key(ctx, 1);
-    let st = accelerated(ctx, key, &phys).unwrap_or_else(|| simulate(&PW_CACHE, key, ctx.time, &phys));
+    let st = pw_state(ctx, &phys);
     let kind = pr.e("particle/particleType");
     let birth = pr.color("particle/birthColor");
     let death = pr.color("particle/deathColor");
@@ -227,7 +229,7 @@ pub(super) fn particle_systems2_plan(ctx: &EffectCtx, b: &Buf) -> SpritePlan {
     let unit = lh.max(1.0);
     let phys = ps2_phys(ctx);
     let key = sim_key(ctx, 2);
-    let st = accelerated(ctx, key, &phys).unwrap_or_else(|| simulate(&PS2_CACHE, key, ctx.time, &phys));
+    let st = accelerated(ctx, key, &phys, None).unwrap_or_else(|| simulate(&PS2_CACHE, key, ctx.time, &phys));
     let kind = pr.e("particle/particleType");
     let birth = pr.color("particle/birthColor");
     let death = pr.color("particle/deathColor");
