@@ -3,6 +3,7 @@
 mod gpu_test;
 mod native_menu_text_keys;
 mod render_queue_snapshot;
+mod roto_model_guard;
 mod shared_docking_ui;
 mod ui_3d;
 mod ui_accessibility;

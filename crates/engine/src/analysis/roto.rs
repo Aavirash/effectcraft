@@ -465,7 +465,7 @@ async fn run_work(w: Work, shared: &RotoShared) {
             s.fps = if s.elapsed > 0.0 { s.done as f64 / s.elapsed } else { 0.0 };
             crate::offload::report(s.done, s.total);
         };
-        let result = chain.track(&mut get, &cancel, &mut report);
+        let result = chain.track_frames(Some(&w.frames), &mut get, &cancel, &mut report);
         if cancel() {
             let mut s = lock(&shared.state);
             s.cancelled = true;

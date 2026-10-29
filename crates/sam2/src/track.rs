@@ -83,7 +83,6 @@ impl Sam2Mask {
         let mut tracker = VideoTracker::new(self.video_model().clone(), Box::new(source))?;
         let object_id = |oi: usize| ObjectId(oi as u32 + 1);
         // each object's first prompted frame: its pass starts there, forwards and backwards
-        let mut starts: std::collections::BTreeMap<usize, Vec<ObjectId>> = Default::default();
         let mut first_of: HashMap<usize, usize> = HashMap::new();
         for (oi, idx, p) in prompt_frames {
             if cancel() {
@@ -110,9 +109,8 @@ impl Sam2Mask {
             let e = first_of.entry(oi).or_insert(idx);
             *e = (*e).min(idx);
         }
-        for (oi, idx) in first_of {
-            starts.entry(idx).or_default().push(object_id(oi));
-        }
+        let mut starts: Vec<(ObjectId, usize)> = first_of.into_iter().map(|(oi, idx)| (object_id(oi), idx)).collect();
+        starts.sort_by_key(|(id, _)| id.0);
         let flag = Cancel::new();
         let mut failure: Option<Error> = None;
         let mut emit = |m: FrameMask| {
@@ -128,19 +126,22 @@ impl Sam2Mask {
                 }
             }
         };
-        for (start, ids) in starts {
-            tracker.propagate_objects(Some(&ids), start, Direction::Forward, None, &flag, &mut emit)?;
-            if start > 0 {
-                // the start frame was reported by the forward pass; the backward pass passes it again
-                tracker.propagate_objects(Some(&ids), start, Direction::Backward, None, &flag, &mut |m| {
-                    if m.frame != start {
-                        emit(m);
-                    }
-                })?;
+        // One pass each way over all the objects, frame by frame, so the host can finish a frame (and
+        // let go of its masks) as soon as every object has it, however far apart the prompts are.
+        let passes = (|| {
+            tracker.propagate_each(&starts, Direction::Forward, &flag, &mut emit)?;
+            if starts.iter().any(|(_, start)| *start > 0) {
+                tracker.propagate_each(&starts, Direction::Backward, &flag, &mut emit)?;
             }
-        }
+            Ok(())
+        })();
         self.peak.store(tracker.peak_state_bytes() as u64, std::sync::atomic::Ordering::Relaxed);
-        failure.map_or(Ok(()), Err)
+        // A frame that could not be converted cancelled the passes; that is the error to report, not
+        // the cancellation it caused.
+        match failure {
+            Some(e) => Err(e),
+            None => passes,
+        }
     }
 }
 

@@ -311,11 +311,15 @@ impl Session {
         }
     }
 
-    /// Load the chosen Roto Brush model again if it was unloaded for being idle (before a stroke uses it).
+    /// Start loading the chosen Roto Brush model again if it was unloaded for being idle (before a stroke uses it).
+    /// The load runs on the model worker, so the stroke is never blocked on it (the classic engine segments it
+    /// meanwhile and `poll_models` installs the model when it arrives), and a model that already failed to load is
+    /// not retried on every stroke: choosing it again clears the error.
     pub fn reload_roto_model(&mut self) {
         let chosen = self.chosen_model(Task::Mask).to_string();
-        if chosen != seg::CLASSICAL && self.models.status(Task::Mask).active.is_none() && self.models.status(Task::Mask).busy.is_none() {
-            self.apply_model(Task::Mask, true);
+        let st = self.models.status(Task::Mask);
+        if chosen != seg::CLASSICAL && st.active.is_none() && st.busy.is_none() && st.error.is_none() {
+            self.apply_model(Task::Mask, false);
         }
     }
 

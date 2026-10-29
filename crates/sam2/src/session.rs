@@ -615,15 +615,118 @@ impl<'a> VideoTracker<'a> {
                 if let Some(limit) = self.budget.max_seconds.filter(|l| started.elapsed().as_secs_f64() > *l) {
                     return Err(Error::Budget(format!("tracking took more than {limit} s")));
                 }
-                let cached = self.objects.get(id).is_some_and(|o| o.cond.contains_key(&frame));
-                let stored = self.objects.get(id).and_then(|o| o.cond.get(&frame)).and_then(|o| o.result.clone());
-                let mask = match stored {
-                    Some(m) if cached => m,
-                    _ => self.step(*id, frame, None, reverse, false)?,
-                };
+                let mask = self.mask_at(*id, frame, reverse)?;
                 out(mask);
             }
         }
         Ok(())
+    }
+
+    /// Object `id` on `frame`: the result stored with its prompt there, else the tracker's step.
+    fn mask_at(&mut self, id: ObjectId, frame: usize, reverse: bool) -> Result<FrameMask> {
+        let stored = self.objects.get(&id).and_then(|o| o.cond.get(&frame)).and_then(|o| o.result.clone());
+        match stored {
+            Some(m) => Ok(m),
+            None => self.step(id, frame, None, reverse, false),
+        }
+    }
+
+    /// Track every listed object from its own prompted frame (`starts`: object, frame) in one pass
+    /// in `direction`, frame by frame with all the objects that have started: a frame is finished
+    /// for all of them before the next begins, so a caller that assembles the objects of a frame
+    /// does not hold frames waiting for a pass that has not got there. A backward pass leaves out
+    /// each object's own start frame (the forward pass reported it).
+    pub fn propagate_each(&mut self, starts: &[(ObjectId, usize)], direction: Direction, cancel: &Cancel, out: &mut dyn FnMut(FrameMask)) -> Result<()> {
+        let n = self.frames.num_frames();
+        for (id, start) in starts {
+            self.check_frame(*start)?;
+            if self.objects.get(id).is_none_or(|o| o.cond.is_empty()) {
+                return Err(Error::Input("no object has been prompted".into()));
+            }
+        }
+        if starts.is_empty() {
+            return Err(Error::Input("no object has been prompted".into()));
+        }
+        let reverse = direction == Direction::Backward;
+        let started = std::time::Instant::now();
+        for (id, frame) in pass_order(starts, n, reverse) {
+            if cancel.is_cancelled() {
+                return Err(Error::Cancelled);
+            }
+            if let Some(limit) = self.budget.max_seconds.filter(|l| started.elapsed().as_secs_f64() > *l) {
+                return Err(Error::Budget(format!("tracking took more than {limit} s")));
+            }
+            let mask = self.mask_at(id, frame, reverse)?;
+            out(mask);
+        }
+        Ok(())
+    }
+}
+
+/// The (object, frame) steps of [`VideoTracker::propagate_each`], in order: frame by frame from the
+/// first start (the last, backwards), each frame for the objects whose pass has reached it.
+fn pass_order(starts: &[(ObjectId, usize)], frames: usize, reverse: bool) -> impl Iterator<Item = (ObjectId, usize)> + '_ {
+    let first = if reverse { starts.iter().map(|s| s.1).max() } else { starts.iter().map(|s| s.1).min() };
+    let span = match first {
+        Some(f) if reverse => f + 1,
+        Some(f) => frames.saturating_sub(f),
+        None => 0,
+    };
+    (0..span).flat_map(move |k| {
+        let frame = if reverse { first.unwrap_or(0).saturating_sub(k) } else { first.unwrap_or(0) + k };
+        starts.iter().filter_map(move |(id, start)| {
+            let reached = if reverse { *start > frame } else { *start <= frame };
+            reached.then_some((*id, frame))
+        })
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn order(starts: &[(u32, usize)], frames: usize, reverse: bool) -> Vec<(u32, usize)> {
+        let starts: Vec<(ObjectId, usize)> = starts.iter().map(|(o, s)| (ObjectId(*o), *s)).collect();
+        pass_order(&starts, frames, reverse).map(|(o, f)| (o.0, f)).collect()
+    }
+
+    /// Forward, every frame is finished for all the objects that have started before the next frame
+    /// begins; an object joins the pass at its own start frame.
+    #[test]
+    fn the_forward_pass_goes_frame_by_frame_over_the_objects_that_have_started() {
+        assert_eq!(order(&[(1, 0), (2, 3)], 6, false), [(1, 0), (1, 1), (1, 2), (1, 3), (2, 3), (1, 4), (2, 4), (1, 5), (2, 5)]);
+        // Prompts on the same frame go together; the pass starts at the earliest start.
+        assert_eq!(order(&[(1, 2), (2, 2)], 4, false), [(1, 2), (2, 2), (1, 3), (2, 3)]);
+        assert_eq!(order(&[(1, 2)], 4, false), [(1, 2), (1, 3)]);
+    }
+
+    /// Backward, from the last start down to frame 0, leaving out each object's own start frame.
+    #[test]
+    fn the_backward_pass_goes_frame_by_frame_and_skips_each_objects_own_start() {
+        assert_eq!(order(&[(1, 0), (2, 3)], 6, true), [(2, 2), (2, 1), (2, 0)]);
+        assert_eq!(order(&[(1, 2), (2, 3)], 6, true), [(2, 2), (1, 1), (2, 1), (1, 0), (2, 0)]);
+        assert!(order(&[(1, 0)], 6, true).is_empty(), "nothing before frame 0");
+    }
+
+    /// A frame is finished for every object before the next begins, however far apart the prompts
+    /// are: the number of frames waiting for an object never grows with the clip.
+    #[test]
+    fn no_frame_waits_for_an_object_that_has_not_reached_it() {
+        let steps = order(&[(1, 0), (2, 1000)], 2000, false);
+        let mut waiting = 0usize;
+        let mut worst = 0usize;
+        let mut seen = std::collections::BTreeMap::<usize, usize>::new();
+        for (_, f) in steps {
+            let n = seen.entry(f).or_default();
+            *n += 1;
+            // From frame 1000 on, both objects report each frame back to back.
+            if f >= 1000 && *n == 2 {
+                waiting -= 1;
+            } else if f >= 1000 {
+                waiting += 1;
+            }
+            worst = worst.max(waiting);
+        }
+        assert!(worst <= 1, "{worst} frames waiting");
     }
 }

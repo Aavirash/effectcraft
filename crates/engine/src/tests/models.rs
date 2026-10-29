@@ -161,6 +161,34 @@ fn an_idle_roto_model_is_unloaded() {
     let _ = std::fs::remove_dir_all(d);
 }
 
+/// A stroke reloading an unloaded model never waits for the load and never retries one that already failed.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn reloading_for_a_stroke_does_not_block_or_retry_a_failed_load() {
+    super::roto::hold_roto_cache_test_lock();
+    let (mut s, d) = session("reload-failed");
+    let info = effectcraft_segment::info("mobilesam").unwrap();
+    let dir = s.models_dir().unwrap();
+    std::fs::create_dir_all(&dir).unwrap();
+    // the right size, the wrong content: found as installed, then fails to load
+    std::fs::File::create(dir.join(info.file_name)).unwrap().set_len(info.size).unwrap();
+    s.execute_checked("roto.model.select", json!({"id": "mobilesam"})).unwrap();
+    let t0 = std::time::Instant::now();
+    while s.models.status(Task::Mask).busy.is_some() && t0.elapsed().as_secs() < 30 {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let failed = s.models.status(Task::Mask).error;
+    assert!(failed.is_some(), "the unreadable file fails to load");
+    s.reload_roto_model();
+    let st = s.models.status(Task::Mask);
+    assert!(st.busy.is_none(), "a failed model is not loaded again by every stroke");
+    assert_eq!(st.error, failed);
+    // an unloaded, not failed model loads on the worker: the call returns with the load still pending or done
+    s.execute_checked("roto.model.select", json!({"id": "classical"})).unwrap();
+    crate::effects::roto::set_model(None);
+    let _ = std::fs::remove_dir_all(d);
+}
+
 /// With `EFFECTCRAFT_DOWNLOAD_SIZE=sam2.1-hiera-small` (or another registry id): the in-app download (Settings ▸ Roto
 /// Brush ▸ Download) fetches the pinned file over the network, verifies it, installs it with its notice and loads it.
 /// Skipped without the variable: it needs the network and hundreds of megabytes.

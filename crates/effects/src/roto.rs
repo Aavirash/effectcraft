@@ -588,9 +588,12 @@ impl Chain {
         cur
     }
 
-    /// Whether frame `f` is computed (at full resolution or at `scale`).
+    /// Whether frame `f` is computed (at full resolution or at `scale`): in this session's caches,
+    /// or in the tracking saved with the project, which needs no work to be used even before it has
+    /// been decoded (and whichever model Settings choose now).
     pub fn is_cached(&self, f: i64, scale: f64) -> bool {
         self.keys.get(&f).is_some_and(|k| [*k, tracked_key(*k)].iter().any(|k| cached(*k, 1.0).is_some() || cached(*k, scale).is_some()))
+            || self.saved.as_ref().is_some_and(|t| t.cache.frames.contains_key(&f) && t.keys.contains_key(&f))
     }
 
     /// Whether the chosen model can follow an object through a clip (SAM 2).
@@ -618,11 +621,24 @@ impl Chain {
         cancel: &dyn Fn() -> bool,
         progress: &mut dyn FnMut(usize),
     ) -> Result<Option<TrackSummary>, String> {
-        self.track_with_pending_limit(frame, cancel, progress, pending::MAX_PENDING_BYTES)
+        self.track_frames(None, frame, cancel, progress)
+    }
+
+    /// [`Chain::track`] limited to `wanted` frames (a one-direction Propagate): the window, the work and the
+    /// progress count cover only those frames of the span.
+    pub fn track_frames(
+        &self,
+        wanted: Option<&[i64]>,
+        frame: &mut dyn FnMut(i64) -> Option<Arc<Image>>,
+        cancel: &dyn Fn() -> bool,
+        progress: &mut dyn FnMut(usize),
+    ) -> Result<Option<TrackSummary>, String> {
+        self.track_with_pending_limit(wanted, frame, cancel, progress, pending::MAX_PENDING_BYTES)
     }
 
     fn track_with_pending_limit(
         &self,
+        wanted: Option<&[i64]>,
         frame: &mut dyn FnMut(i64) -> Option<Arc<Image>>,
         cancel: &dyn Fn() -> bool,
         progress: &mut dyn FnMut(usize),
@@ -635,6 +651,7 @@ impl Chain {
         // frames from it on (both directions), so only those come back here.
         let (lo_span, hi_span) = (self.data.span[0], self.data.span[1]);
         let needed: Vec<i64> = (lo_span..=hi_span)
+            .filter(|f| wanted.is_none_or(|w| w.contains(f)))
             .filter(|f| self.keys.get(f).is_some_and(|k| self.saved_seg(*f, self.opts.scale).is_none() && cached(tracked_key(*k), self.opts.scale).is_none()))
             .collect();
         let (Some(&need_lo), Some(&need_hi)) = (needed.first(), needed.last()) else {
@@ -679,6 +696,9 @@ impl Chain {
         // A frame is finished when every object has reported it (the objects' mattes are united).
         let mut pending = pending::PendingMasks::new(objects.len(), max_pending_bytes);
         let finish = |g: i64, parts: Vec<Option<effectcraft_segment::TrackedFrame>>, summary: &mut TrackSummary, progress: &mut dyn FnMut(usize)| {
+            if !wanted.is_none_or(|w| w.contains(&g)) {
+                return;
+            }
             let (Some(key), Some(img)) = (self.keys.get(&g).copied(), (frame.borrow_mut())(g)) else { return };
             let mut segs: Vec<(u32, effectcraft_track::roto::FrameSeg)> = vec![];
             let (mut confidence, mut present) = (f32::INFINITY, false);
@@ -1375,11 +1395,27 @@ mod tests {
         let mut get = |f: i64| Some(Arc::new(frame(f as f64 / 25.0)));
         let mut completed = 0;
         // Each map takes 32,000 bytes; two incomplete frames exceed this small test budget.
-        let error = chain.track_with_pending_limit(&mut get, &|| false, &mut |n| completed = n, 64_000).unwrap_err();
+        let error = chain.track_with_pending_limit(None, &mut get, &|| false, &mut |n| completed = n, 64_000).unwrap_err();
         assert!(error.contains("pending object masks") && error.contains("memory budget"), "{error}");
         assert!(fake.cancelled.load(Relaxed), "the model must see cancellation before allocating the rest of the clip");
         assert_eq!(fake.emitted.load(Relaxed), 2);
         assert_eq!(completed, 0, "partial objects are not complete tracked frames");
+    }
+
+    #[test]
+    fn a_one_direction_pass_tracks_and_reports_only_its_frames() {
+        let mut d = RotoData::default();
+        d.add(Stroke { kind: StrokeKind::Fg, frame: 12, radius: 3.0, points: vec![[35.0, 40.0]], object: 0 }, 12, [0, 24]);
+        let params = params_with(&d);
+        let mut chain = Chain::new(&params, [100.0, 80.0], 25.0, 1.0);
+        chain.model = Some(Arc::new(TwoObjects(Default::default())));
+        let mut get = |f: i64| Some(Arc::new(frame(f as f64 / 25.0)));
+        let forward: Vec<i64> = (12..=24).collect();
+        let mut last = 0;
+        let summary = chain.track_frames(Some(&forward), &mut get, &|| false, &mut |n| last = n).unwrap().unwrap();
+        assert_eq!((summary.frames, last), (forward.len(), forward.len()), "progress never exceeds the frames asked for");
+        let _ = chain.ensure(5, &mut get, &|| false);
+        assert!(tracks_of(&chain).is_none_or(|t| t.frames.keys().all(|f| *f >= 12)), "earlier frames were not tracked");
     }
 
     #[test]

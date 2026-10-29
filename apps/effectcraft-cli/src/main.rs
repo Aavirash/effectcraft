@@ -1013,26 +1013,46 @@ fn bench_cmd(args: &Args) -> Result<(), Failure> {
     Ok(())
 }
 
+/// The model a bench option asks for: the file named on the command line, where failing to read or
+/// build it is an error saying why (not "not installed"); else the installed file, where a file that
+/// cannot be used just leaves the model out.
+fn bench_weights<T>(
+    flag: &str,
+    named: Option<&str>,
+    installed: Option<std::path::PathBuf>,
+    build: impl Fn(&[u8]) -> Result<T, String>,
+) -> Result<Option<T>, Failure> {
+    match named {
+        Some(path) => {
+            let bytes = std::fs::read(path).map_err(|e| Failure::Error(format!("{flag} {path}: {e}")))?;
+            build(&bytes).map(Some).map_err(|e| Failure::Error(format!("{flag} {path}: {e}")))
+        }
+        None => Ok(installed.and_then(|p| std::fs::read(p).ok()).and_then(|bytes| build(&bytes).ok())),
+    }
+}
+
 /// `bench --roto`: the Roto Brush's trackers on synthetic clips whose true mattes are known.
 fn bench_roto(args: &Args) -> Result<(), Failure> {
     use effectcraft_segment::{Loaded, MOBILE_SAM, MaskModel};
     use effectcraft_track::roto::bench;
     let frames = args.num("--frames")?.unwrap_or(24.0).clamp(12.0, 240.0) as usize;
     let session = effectcraft_host::session();
-    // `--mobilesam FILE` uses the weights at FILE; otherwise the installed ones.
-    let mobilesam_file = args.opt("--mobilesam").map(std::path::PathBuf::from).or_else(|| session.model_path(&MOBILE_SAM));
-    let mobilesam: Option<std::sync::Arc<dyn MaskModel>> =
-        mobilesam_file.and_then(|p| std::fs::read(p).ok()).and_then(|bytes| effectcraft_segment::load(MOBILE_SAM.id, &bytes).ok()).and_then(|m| match m {
-            Loaded::Mask(m) => Some(m),
-            _ => None,
-        });
+    // `--mobilesam FILE` uses the weights at FILE (a file that cannot be used is an error);
+    // otherwise the installed ones.
+    let mobilesam: Option<std::sync::Arc<dyn MaskModel>> = bench_weights("--mobilesam", args.opt("--mobilesam"), session.model_path(&MOBILE_SAM), |bytes| {
+        match effectcraft_segment::load(MOBILE_SAM.id, bytes)? {
+            Loaded::Mask(m) => Ok(m),
+            _ => Err("not a mask model".to_string()),
+        }
+    })?;
     if mobilesam.is_none() {
         note!("bench --roto: MobileSAM is not installed; comparing the classical engine only");
     }
-    // `--sam2 FILE` uses the weights at FILE; otherwise the installed ones.
-    let sam2_file = args.opt("--sam2").map(std::path::PathBuf::from).or_else(|| effectcraft_sam2::mask::SIZES.iter().find_map(|m| session.model_path(m)));
+    // `--sam2 FILE` uses the weights at FILE (a file that cannot be used is an error); otherwise
+    // the installed ones.
+    let installed_sam2 = effectcraft_sam2::mask::SIZES.iter().find_map(|m| session.model_path(m));
     let sam2: Option<std::sync::Arc<dyn MaskModel>> =
-        sam2_file.and_then(|p| std::fs::read(p).ok()).and_then(|bytes| effectcraft_sam2::mask::load(&bytes).ok()).map(|m| m as std::sync::Arc<dyn MaskModel>);
+        bench_weights("--sam2", args.opt("--sam2"), installed_sam2, |bytes| effectcraft_sam2::mask::load(bytes).map(|m| m as std::sync::Arc<dyn MaskModel>))?;
     if sam2.is_none() {
         note!("bench --roto: no SAM 2.1 size is installed; no SAM 2 column");
     }

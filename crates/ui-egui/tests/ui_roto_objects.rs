@@ -66,7 +66,7 @@ fn the_boundary_view_outlines_each_object_and_show_object_picks_one() {
     for (object, x) in [(0, 22.0), (1, 58.0)] {
         s.execute("roto.stroke", json!({"layer": id, "object": object, "points": [[x, 38.0], [x, 42.0]], "radius": 4})).unwrap();
     }
-    effectcraft_engine::effects::roto::set_model(Some(Arc::new(TwoRegions)));
+    let _model = crate::roto_model_guard::install(Arc::new(TwoRegions));
     s.execute("roto.propagate", json!({"layer": id, "direction": "both", "wait": true})).unwrap();
     let st = s.execute("roto.status", json!({"layer": id})).unwrap();
     assert_eq!(st["objects"], json!([{"id": 0, "strokes": 1}, {"id": 1, "strokes": 1}]), "{st}");
@@ -96,5 +96,4 @@ fn the_boundary_view_outlines_each_object_and_show_object_picks_one() {
     let one = h.render().expect("the panel renders");
     let (a, b) = (count(&one, pink), count(&one, cyan));
     assert!(a < 10 && b > 50, "only object 1 is shown: {a} pink, {b} cyan pixels");
-    effectcraft_engine::effects::roto::set_model(None);
 }

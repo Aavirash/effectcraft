@@ -156,17 +156,29 @@ pub fn recommended() -> &'static ModelInfo {
 
 /// A one-line note for the Settings list: what was measured for this size, and what the bigger ones cost without a GPU.
 pub fn hint(id: &str) -> Option<String> {
-    let gpu = crate::gpu::Gpu::shared().is_ok();
+    hint_for(id, crate::gpu::Gpu::probe())
+}
+
+/// [`hint`] given whether a GPU is known (`None`: not looked for yet). The list is built on the
+/// Settings path, so it never creates the GPU device itself: that happens when a model is loaded,
+/// and after that the notes say whether one was found.
+fn hint_for(id: &str, gpu: Option<bool>) -> Option<String> {
     Some(
         match id {
             "sam2.1-hiera-tiny" => "Recommended: the smallest download, and no larger size tracked better on the benchmark clips.",
             "sam2.1-hiera-small" => "As fast as Tiny on a GPU and no better on the benchmark clips; worth a try on difficult footage.",
-            "sam2.1-hiera-base-plus" if !gpu => "Slow without a GPU (several seconds a frame); none was found.",
-            "sam2.1-hiera-base-plus" => "About 15% slower than Tiny on a GPU and no better on the benchmark clips.",
-            "sam2.1-hiera-large" if !gpu => "Slow without a GPU (many seconds a frame); none was found.",
-            "sam2.1-hiera-large" => {
-                "About 1.7 times Tiny's time on a GPU; it lost the object after it re-entered in one benchmark clip. Try it on difficult footage."
-            }
+            "sam2.1-hiera-base-plus" => match gpu {
+                Some(false) => "Slow without a GPU (several seconds a frame); none was found.",
+                Some(true) => "About 15% slower than Tiny on a GPU and no better on the benchmark clips.",
+                None => "About 15% slower than Tiny on a GPU and no better on the benchmark clips; several seconds a frame without one.",
+            },
+            "sam2.1-hiera-large" => match gpu {
+                Some(false) => "Slow without a GPU (many seconds a frame); none was found.",
+                Some(true) => {
+                    "About 1.7 times Tiny's time on a GPU; it lost the object after it re-entered in one benchmark clip. Try it on difficult footage."
+                }
+                None => "About 1.7 times Tiny's time on a GPU, many seconds a frame without one; it lost the object after it re-entered in one benchmark clip.",
+            },
             _ => return None,
         }
         .to_string(),
@@ -189,6 +201,19 @@ mod tests {
         assert_eq!(t.dims(), [1, 3, INPUT_SIZE, INPUT_SIZE]);
         let v = t.flatten_all().unwrap().to_vec1::<f32>().unwrap();
         assert!(v.iter().all(|x| x.is_finite()));
+    }
+
+    /// The Settings list asks for hints without creating the GPU device: before anything has loaded a
+    /// model there is no answer yet, and the notes say so rather than guess.
+    #[test]
+    fn hints_do_not_need_the_gpu_to_have_been_created() {
+        for id in ["sam2.1-hiera-base-plus", "sam2.1-hiera-large"] {
+            let (unknown, none, found) = (hint_for(id, None), hint_for(id, Some(false)), hint_for(id, Some(true)));
+            assert!(unknown.is_some() && none.is_some() && found.is_some());
+            assert!(none.as_deref().is_some_and(|h| h.contains("none was found")), "{id}: {none:?}");
+            assert!(unknown.as_deref().is_some_and(|h| h.contains("without one") && !h.contains("none was found")), "{id}: {unknown:?}");
+        }
+        assert!(hint_for("mobilesam", None).is_none());
     }
 
     #[test]

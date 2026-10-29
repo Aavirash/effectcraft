@@ -705,6 +705,7 @@ fn sam2_tracks_the_clip_through_roto_propagate() {
     let st = s.execute("roto.status", json!({"layer": clip.0, "frame": 12})).unwrap();
     assert_eq!(st["source"], "tracker", "{st}");
     assert!(st["notice"].as_str().unwrap().contains("Propagate again"), "{st}");
+    assert_eq!(st["computed"].as_array().unwrap().len(), 21, "still computed under another model: {st}");
     // A classic Propagate: its own segmentation, no tracker data.
     s.execute_checked("roto.propagate", json!({"layer": clip.0, "direction": "both", "wait": true})).unwrap();
     let st = s.execute("roto.status", json!({"layer": clip.0, "frame": 12})).unwrap();
@@ -808,6 +809,8 @@ fn saved_tracking_is_kept_in_the_project_and_applies_when_it_reopens() {
     assert_eq!(st["source"], "tracker", "{st}");
     assert_eq!(st["tracker"]["saved"], sam2, "{st}");
     assert_eq!(st["tracker"]["frames"].as_object().unwrap().len(), 21, "{st}");
+    // The span bar's "computed" frames include the saved ones before anything has been decoded.
+    assert_eq!(st["computed"].as_array().unwrap().len(), 21, "{st}");
     let j = iou_at(&mut s2, clip, 12, center(12));
     assert!(j > 0.9, "IoU of a saved frame: {j}");
     // The render path (Chain::ensure) reads the same frame.

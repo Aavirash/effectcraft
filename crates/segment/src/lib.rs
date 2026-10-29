@@ -281,14 +281,34 @@ pub fn load(id: &str, bytes: &[u8]) -> Result<Loaded> {
     if got != info.sha256 {
         return Err(format!("{}: the file does not match (SHA-256 {got}, expected {})", info.name, info.sha256));
     }
-    match id {
-        "mobilesam" => {
+    match loader(id) {
+        Some(Loader::MobileSam) => {
             let w = pt::read(bytes)?;
             Ok(Loaded::Mask(Arc::new(Sam { net: mobilesam::MobileSam::from_weights(&w)? })))
         }
-        "mediapipe-face" => Ok(Loaded::Face(Arc::new(mediapipe::FaceLandmarker::from_task(bytes)?))),
-        "sam2.1-hiera-tiny" => Err(format!("{} is loaded by the desktop application (effectcraft-sam2)", info.name)),
-        _ => Err(format!("no loader for `{id}`")),
+        Some(Loader::MediaPipe) => Ok(Loaded::Face(Arc::new(mediapipe::FaceLandmarker::from_task(bytes)?))),
+        Some(Loader::Desktop) => Err(format!("{} is loaded by the desktop application (effectcraft-sam2)", info.name)),
+        None => Err(format!("no loader for `{id}`")),
+    }
+}
+
+/// What builds a registered model.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Loader {
+    MobileSam,
+    MediaPipe,
+    /// Built outside this crate, by the desktop application (every SAM 2.1 size).
+    Desktop,
+}
+
+/// The loader for model `id`: one answer for every size of a family, so a new size cannot fall
+/// through to "no loader" while its sibling gets the helpful error.
+fn loader(id: &str) -> Option<Loader> {
+    match id {
+        "mobilesam" => Some(Loader::MobileSam),
+        "mediapipe-face" => Some(Loader::MediaPipe),
+        id if id.starts_with("sam2.1-hiera-") => Some(Loader::Desktop),
+        _ => None,
     }
 }
 
@@ -411,5 +431,16 @@ mod tests {
         // A file that isn't the published one is refused before anything is parsed.
         assert!(load("mobilesam", b"not the weights").err().is_some_and(|e| e.contains("does not match")));
         assert!(load("nope", b"").is_err());
+    }
+
+    /// Every registered model has a loader, so none falls through to "no loader" after its checksum
+    /// matches; every SAM 2.1 size is loaded by the desktop application.
+    #[test]
+    fn every_registered_model_has_a_loader() {
+        for m in MODELS {
+            let l = loader(m.id);
+            assert!(l.is_some(), "{} has no loader", m.id);
+            assert_eq!(l == Some(Loader::Desktop), m.id.starts_with("sam2.1-"), "{}", m.id);
+        }
     }
 }

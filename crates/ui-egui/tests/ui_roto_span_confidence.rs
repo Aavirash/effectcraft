@@ -70,7 +70,7 @@ fn the_span_bar_shows_the_trackers_confidence() {
     let id = s.active_comp().unwrap().layers.iter().find(|l| l.name == "Box").unwrap().id.0;
     s.execute("roto.stroke", json!({"layer": id, "points": [[20.0, 40.0], [60.0, 40.0]], "radius": 6})).unwrap();
     s.execute("roto.stroke", json!({"layer": id, "kind": "bg", "points": [[5.0, 5.0], [75.0, 5.0]], "radius": 4})).unwrap();
-    effectcraft_engine::effects::roto::set_model(Some(Arc::new(Scripted)));
+    let _model = crate::roto_model_guard::install(Arc::new(Scripted));
     // the model stays loaded while the panel draws (its id is part of the cache keys)
     s.execute("roto.propagate", json!({"layer": id, "direction": "both", "wait": true})).unwrap();
 
@@ -115,5 +115,4 @@ fn the_span_bar_shows_the_trackers_confidence() {
         let got = sample(f);
         assert!(close(got, want), "frame {f} ({what}): drew {got:?}, wanted about {want:?}");
     }
-    effectcraft_engine::effects::roto::set_model(None);
 }

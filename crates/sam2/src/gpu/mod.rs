@@ -96,13 +96,22 @@ pub fn half_weights() -> bool {
     std::env::var("EFFECTCRAFT_SAM2_F16").is_ok_and(|v| matches!(v.trim(), "1" | "on" | "true"))
 }
 
+/// The process's one GPU device, once something has asked for it.
+static DEVICE: std::sync::OnceLock<std::result::Result<Arc<Gpu>, String>> = std::sync::OnceLock::new();
+
 impl Gpu {
     /// The process's one GPU device, created on first use. Several devices at once upset some Vulkan loaders
     /// (a crash when two threads create or drop them together), and one is all SAM 2 needs: models come and go,
     /// the device stays. An error (no GPU) is remembered too.
     pub fn shared() -> Result<Arc<Gpu>> {
-        static DEVICE: std::sync::OnceLock<std::result::Result<Arc<Gpu>, String>> = std::sync::OnceLock::new();
         DEVICE.get_or_init(|| Gpu::new().map(Arc::new).map_err(|e| e.to_string())).clone().map_err(Error::Compute)
+    }
+
+    /// Whether the shared device has been looked for yet, and found: `None` before anything has asked
+    /// for it (this never creates it, so a caller that only wants to describe the GPU does not stall
+    /// on the adapter and shader compilation), then `Some(true)` or `Some(false)` (no GPU).
+    pub fn probe() -> Option<bool> {
+        DEVICE.get().map(|d| d.is_ok())
     }
 
     /// A device on the best real GPU (a software adapter is refused: the CPU path is faster).
