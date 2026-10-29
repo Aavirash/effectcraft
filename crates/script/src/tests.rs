@@ -1740,6 +1740,29 @@ fn scripted_text_animator_property_is_the_one_asked_for() {
     assert_eq!(o.result, json!(["Tracking Amount", 20, "Tracking Amount", "ADBE Text Tracking Amount", 2]));
 }
 
+/// The companion properties added with Tracking and Skew are found by their After Effects names,
+/// but cannot be added on their own (#1063).
+#[test]
+fn text_animator_companion_properties_resolve_by_name() {
+    let mut s = session();
+    let o = ok(
+        &mut s,
+        r#"
+        var c = app.project.items.addComp("Track", 960, 300, 1, 3, 30);
+        var t = c.layers.addText("MOVARA");
+        var props = t.property("ADBE Text Properties").property("ADBE Text Animators").addProperty("ADBE Text Animator").property("ADBE Text Animator Properties");
+        props.addProperty("ADBE Text Tracking Amount");
+        props.addProperty("ADBE Text Skew");
+        var type = props.property("ADBE Text Track Type");
+        var axis = props.property("ADBE Text Skew Axis");
+        var added = "";
+        try { props.addProperty("ADBE Text Track Type"); added = "added"; } catch (e) { added = "refused"; }
+        [type ? type.matchName : null, axis ? axis.matchName : null, added]
+        "#,
+    );
+    assert_eq!(o.result, json!(["ADBE Text Track Type", "ADBE Text Skew Axis", "refused"]));
+}
+
 /// #1936: an array whose length doesn't match the property's dimension is an error in After
 /// Effects, not a value to truncate or broadcast. Two values for a 3-D property stay legal.
 #[test]

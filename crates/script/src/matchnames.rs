@@ -118,6 +118,16 @@ pub const TEXT_ANIMATOR_PROPERTIES: &[(&str, &str)] = &[
     ("blur", "ADBE Text Blur"),
 ];
 
+/// Companion properties that exist below an animator but are not kinds `addProperty` accepts:
+/// they come with Tracking (Track Type), Skew (Skew Axis) and per-character 3D Rotation
+/// (X and Y Rotation). Lookup and `.matchName` know them; `addProperty` does not.
+pub const TEXT_ANIMATOR_COMPANIONS: &[(&str, &str)] = &[
+    ("trackingType", "ADBE Text Track Type"),
+    ("skewAxis", "ADBE Text Skew Axis"),
+    ("rotationX", "ADBE Text Rotation X"),
+    ("rotationY", "ADBE Text Rotation Y"),
+];
+
 const TEXT_SELECTORS: &[(&str, &str)] =
     &[("rangeSelector", "ADBE Text Selector"), ("wigglySelector", "ADBE Text Wiggly Selector"), ("expressionSelector", "ADBE Text Expressible Selector")];
 
@@ -516,7 +526,7 @@ pub fn node(chain: &[&Node]) -> String {
         "text" if pid == "selectors" => find(TEXT_SELECTORS, id).map(str::to_string).unwrap_or_else(own),
         "text" if pid == "rangeSelector" => find(TEXT_RANGE_SELECTOR, id).map(str::to_string).unwrap_or_else(own),
         "text" if pid == "properties" && chain.len() == 5 && chain.get(1).is_some_and(|n| n.match_id() == "animators") => {
-            find(TEXT_ANIMATOR_PROPERTIES, id).map(str::to_string).unwrap_or_else(own)
+            find(TEXT_ANIMATOR_PROPERTIES, id).or_else(|| find(TEXT_ANIMATOR_COMPANIONS, id)).map(str::to_string).unwrap_or_else(own)
         }
         "text" if grand.map(|g| g.match_id()) == Some("animators") => find(TEXT_ANIMATOR, id).map(str::to_string).unwrap_or_else(own),
         "cameraOptions" => find(CAMERA, id).map(str::to_string).unwrap_or_else(own),
@@ -576,6 +586,19 @@ mod tests {
             let prop = n(id);
             assert_eq!(node(&[&text, &animators, &animator, &properties, &prop]), *name);
             assert_eq!(node(&[&properties, &prop]), *id, "an unrelated Properties group keeps its own ids");
+        }
+    }
+
+    /// #1063: the companions an animator property brings (Track Type, Skew Axis, X / Y Rotation)
+    /// have their After Effects names too, though `addProperty` does not accept them.
+    #[test]
+    fn text_animator_companions_have_after_effects_names() {
+        let n = |m: &str| Node::from(effectcraft_project::PropGroup::new(1, m, m));
+        let (text, animators, animator, properties) = (n("text"), n("animators"), n("animator"), n("properties"));
+        for (id, name) in TEXT_ANIMATOR_COMPANIONS {
+            let prop = n(id);
+            assert_eq!(node(&[&text, &animators, &animator, &properties, &prop]), *name);
+            assert!(!TEXT_ANIMATOR_PROPERTIES.iter().any(|(k, m)| k == id || m == name), "{id} is not an addProperty kind");
         }
     }
 
