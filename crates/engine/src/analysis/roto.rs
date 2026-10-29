@@ -477,6 +477,9 @@ async fn run_work(w: Work, shared: &RotoShared) {
             Ok(_) => fx::tracks_of(&chain).map(|t| t.to_json()).unwrap_or_default(),
             Err(_) => String::new(),
         });
+        if result.is_err() {
+            chain.forget_tracking();
+        }
         let mut s = lock(&shared.state);
         match result {
             Ok(summary) => s.tracked = summary,

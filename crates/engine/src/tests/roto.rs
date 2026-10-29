@@ -937,9 +937,9 @@ fn a_stroke_change_makes_the_saved_tracking_stale() {
     let _ = std::fs::remove_dir_all(std::path::Path::new(&path).parent().unwrap());
 }
 
-/// A model whose tracker always fails: Roto Brush must carry on with the classic engine and say so.
+/// A tracker that emits a completed frame before failing must leave only classic results behind.
 #[test]
-fn a_failing_tracker_falls_back_to_the_classic_engine() {
+fn a_partially_failing_tracker_falls_back_to_the_classic_engine() {
     use effectcraft_segment::{ClipFrame, MaskModel, ModelInfo, ObjectTracker, Prompt, TrackRequest, TrackedFrame};
     use std::sync::Arc;
     struct Broken;
@@ -957,29 +957,51 @@ fn a_failing_tracker_falls_back_to_the_classic_engine() {
     impl ObjectTracker for Broken {
         fn track(
             &self,
-            _: &TrackRequest,
-            _: &mut dyn FnMut(i64) -> Option<Arc<ClipFrame>>,
+            req: &TrackRequest,
+            frame: &mut dyn FnMut(i64) -> Option<Arc<ClipFrame>>,
             _: &dyn Fn() -> bool,
-            _: &mut dyn FnMut(usize, i64, TrackedFrame),
+            out: &mut dyn FnMut(usize, i64, TrackedFrame),
         ) -> effectcraft_segment::Result<()> {
-            Err("the tracker broke".into())
+            let img = frame(req.first).ok_or("missing test frame")?;
+            for object in 0..req.objects.len() {
+                out(object, req.first, TrackedFrame { prob: vec![1.0; img.w * img.h], w: img.w, h: img.h, confidence: 0.9, occluded: false });
+            }
+            Err("the tracker broke after emitting a frame".into())
         }
     }
     hold_roto_cache_test_lock();
-    let (mut s, clip, _) = painted(center, "disk-broken-tracker.mov");
+    let (mut s, clip, uid) = painted(center, "disk-partially-broken-tracker.mov");
+    s.execute_checked("roto.stroke", json!({"layer": clip.0, "object": 1, "points": [center(0)], "radius": 4})).unwrap();
     effectcraft_effects::roto::set_model(Some(Arc::new(Broken)));
     let r = s.execute_checked("roto.propagate", json!({"layer": clip.0, "direction": "both", "wait": true}));
+    let st = s.execute("roto.status", json!({"layer": clip.0, "frame": 0}));
+    let comp = s.active_comp().unwrap();
+    let layer = comp.layer(clip).unwrap();
+    let params = crate::roto::params_static(layer.props.find_group(uid).unwrap());
+    let size = crate::roto::layer_size(&s.project, comp, layer);
+    let mut chain = effectcraft_effects::roto::Chain::new(&params, size, comp.frame_rate.as_f64(), 1.0);
+    let index = layer.effects().unwrap().groups().position(|g| g.uid == uid).unwrap();
+    let mut source =
+        crate::roto::FrameSource::new(&s.project, s.footage.as_ref(), s.expr.as_deref(), &s.layer_cache, s.active_comp_id().unwrap(), comp, layer, index, size);
+    let mut get = |f: i64| source.get(f);
+    let actual: Option<Vec<_>> = (0..=20).map(|f| chain.ensure(f, &mut get, &|| false)).collect();
+    let retained_object = chain.object_seg(0, 0).is_some() || chain.object_seg(0, 1).is_some();
+    let retained_trust = chain.trust_at(0);
+    // Build the reference only after capturing the fallback, with no model or cached union.
+    effectcraft_effects::roto::forget(chain.keys.values().copied());
+    chain.model = None;
+    let expected: Option<Vec<_>> = (0..=20).map(|f| chain.ensure(f, &mut get, &|| false)).collect();
     effectcraft_effects::roto::set_model(None);
     let r = r.unwrap();
     assert_eq!(r["frames"], 21, "{r}");
-    let st = s.execute("roto.status", json!({"layer": clip.0, "frame": 10})).unwrap();
-    assert_eq!(st["source"], "classical", "{st}");
+    let st = st.unwrap();
+    assert_ne!(st["source"], "tracker", "{st}");
     assert_eq!(st["tracker"]["frames"].as_object().unwrap().len(), 0);
-    let mut worst: f64 = 1.0;
-    for f in 0..=20 {
-        worst = worst.min(iou_at(&mut s, clip, f, center(f)));
+    assert!(!retained_object, "partial per-object mattes must be discarded");
+    assert_eq!(retained_trust, None, "partial tracker confidence must be discarded");
+    for (frame, (actual, expected)) in actual.unwrap().into_iter().zip(expected.unwrap()).enumerate() {
+        assert!(actual == expected, "fallback frame {frame} differs from the classic engine");
     }
-    assert!(worst > 0.9, "the classic engine should have carried the clip: {worst}");
 }
 
 /// Without a tracking model the Roto Brush chain is exactly the classic engine: every frame

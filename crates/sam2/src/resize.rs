@@ -5,8 +5,9 @@
 
 use candle_core::{Device, Tensor};
 
+use crate::Result;
+use crate::mask::validate_frame_size;
 use crate::prompt::INPUT_SIZE;
-use crate::{Error, Result};
 
 /// For each output index: the first input index and the normalised triangle-filter weights.
 fn axis_weights(n_in: usize, n_out: usize) -> Vec<(usize, Vec<f32>)> {
@@ -35,13 +36,13 @@ fn axis_weights(n_in: usize, n_out: usize) -> Vec<(usize, Vec<f32>)> {
 
 /// Antialiased bilinear resize of a row-major `h x w` image to `oh x ow`.
 pub fn antialias_bilinear(src: &[f32], (h, w): (usize, usize), (oh, ow): (usize, usize)) -> Result<Vec<f32>> {
-    if h == 0 || w == 0 || oh == 0 || ow == 0 || src.len() != h * w {
-        return Err(Error::Input(format!("cannot resize {} values as {w}x{h} to {ow}x{oh}", src.len())));
-    }
+    validate_frame_size(w, h, src.len())?;
+    let out_len = validate_frame_size(ow, oh, oh.saturating_mul(ow))?;
+    let mid_len = validate_frame_size(ow, h, h.saturating_mul(ow))?;
     let xs = axis_weights(w, ow);
     let ys = axis_weights(h, oh);
     // horizontal pass: h x ow
-    let mut mid = vec![0f32; h * ow];
+    let mut mid = vec![0f32; mid_len];
     for y in 0..h {
         let row = src.get(y * w..(y + 1) * w).unwrap_or(&[]);
         for (x, (x0, wt)) in xs.iter().enumerate() {
@@ -52,7 +53,7 @@ pub fn antialias_bilinear(src: &[f32], (h, w): (usize, usize), (oh, ow): (usize,
         }
     }
     // vertical pass: oh x ow
-    let mut out = vec![0f32; oh * ow];
+    let mut out = vec![0f32; out_len];
     for (y, (y0, wt)) in ys.iter().enumerate() {
         for x in 0..ow {
             let acc: f32 = wt.iter().enumerate().map(|(k, a)| a * mid.get((y0 + k) * ow + x).copied().unwrap_or(0.0)).sum();
@@ -67,6 +68,7 @@ pub fn antialias_bilinear(src: &[f32], (h, w): (usize, usize), (oh, ow): (usize,
 /// A binary mask of any size as the model's mask prompt: `[1, 1, 1024, 1024]` of 0 and 1 (resized
 /// like the reference: antialiased bilinear, then thresholded at one half).
 pub fn mask_to_model(mask: &[u8], w: usize, h: usize) -> Result<Tensor> {
+    validate_frame_size(w, h, mask.len())?;
     let side = INPUT_SIZE;
     let f: Vec<f32> = mask.iter().map(|v| f32::from(*v != 0)).collect();
     let data = if (w, h) == (side, side) { f } else { antialias_bilinear(&f, (h, w), (side, side))?.into_iter().map(|v| f32::from(v >= 0.5)).collect() };
@@ -76,6 +78,15 @@ pub fn mask_to_model(mask: &[u8], w: usize, h: usize) -> Result<Tensor> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resize_rejects_overflowing_oversized_and_mismatched_grids() {
+        for (input, output) in [((usize::MAX, 2), (1, 1)), ((1, 1), (usize::MAX, 2)), ((1, 1), (16_385, 1)), ((0, 1), (1, 1))] {
+            assert!(antialias_bilinear(&[1.0], input, output).is_err(), "{input:?} to {output:?}");
+        }
+        assert!(mask_to_model(&[1], usize::MAX, 2).is_err());
+        assert!(mask_to_model(&[1], INPUT_SIZE, INPUT_SIZE).is_err());
+    }
 
     #[test]
     fn a_constant_stays_constant_and_weights_sum_to_one() {

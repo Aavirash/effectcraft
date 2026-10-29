@@ -624,6 +624,20 @@ impl Chain {
         }
     }
 
+    /// Discard a failed track completely before falling back to the classic engine.
+    pub fn forget_tracking(&mut self) {
+        let mut objects = self.data.objects();
+        if let Some(saved) = &self.saved {
+            objects.extend(saved.cache.objects.keys().copied());
+            objects.sort_unstable();
+            objects.dedup();
+        }
+        let keys = self.keys.values().chain(self.saved.iter().flat_map(|saved| saved.keys.values())).copied();
+        forget(keys.flat_map(|key| std::iter::once(key).chain(objects.iter().copied().map(move |object| object_key(key, object)))));
+        self.saved = None;
+        self.model = None;
+    }
+
     /// Follow the object through the span with the model's tracker, from the strokes on their
     /// frames (only the frames without a tracked result yet: after a correction stroke, the frames it
     /// changes, tracked on from the nearest prompted frame), and cache every frame's segmentation (under the tracker's keys, with its
@@ -1471,6 +1485,24 @@ mod tests {
         let seg = chain.object_seg(1, 1).expect("the saved object matte");
         assert_eq!(seg.matte.len(), 100 * 80);
         assert!(cached(object_key(other[&1], 1), 1.0).is_none(), "the other model's cache holds none of it");
+        for key in [keys[&1], other[&1]] {
+            for scale in [1.0, 0.5] {
+                store(tracked_key(key), scale, seg.clone());
+                store(object_key(key, 1), scale, seg.clone());
+            }
+            trust_cache().lock().unwrap().insert(tracked_key(key), FrameTrust { confidence: 0.9, occluded: false });
+        }
+        chain.forget_tracking();
+        assert!(chain.model.is_none());
+        assert!(!chain.saved_has(1));
+        for key in [keys[&1], other[&1]] {
+            for scale in [1.0, 0.5] {
+                assert!(cached(tracked_key(key), scale).is_none());
+                assert!(cached(object_key(key, 1), scale).is_none());
+            }
+            assert!(trust(key).is_none());
+        }
+        assert!(chain.ensure(1, &mut |_| None, &|| false).is_none(), "neither saved nor in-memory tracking survives fallback");
     }
 
     #[test]

@@ -13,23 +13,47 @@ use crate::weights::Weights;
 use crate::{Error, Result};
 
 /// Sine position encoding `[1, 2 * num_pos_features, h, w]`, normalised (`Sam2SinePositionEmbedding`).
-/// It depends only on the sizes, so each is built once (it was 150 ms of a 2.7 s frame).
+/// Only small tables are retained globally; the neck owns its larger feature-pyramid tables.
 pub fn sine_position(num_pos_features: usize, h: usize, w: usize) -> Result<Tensor> {
-    static CACHE: OnceLock<Mutex<HashMap<(usize, usize, usize), Tensor>>> = OnceLock::new();
-    let cache = CACHE.get_or_init(Default::default);
-    if let Some(t) = cache.lock().unwrap_or_else(PoisonError::into_inner).get(&(num_pos_features, h, w)) {
-        return Ok(t.clone());
+    static CACHE: OnceLock<PositionCache> = OnceLock::new();
+    CACHE.get_or_init(|| PositionCache::new(1024 * 1024 / size_of::<f32>())).get(num_pos_features, h, w)
+}
+
+const MAX_POSITION_ELEMENTS: usize = 128 * 1024 * 1024 / size_of::<f32>();
+
+struct PositionCache {
+    entries: Mutex<HashMap<(usize, usize, usize), Tensor>>,
+    max_elements: usize,
+}
+
+impl PositionCache {
+    fn new(max_elements: usize) -> Self {
+        Self { entries: Mutex::new(HashMap::new()), max_elements }
     }
-    let t = build_sine_position(num_pos_features, h, w)?;
-    let mut map = cache.lock().unwrap_or_else(PoisonError::into_inner);
-    if map.len() >= 16 {
-        map.clear();
+
+    fn get(&self, features: usize, h: usize, w: usize) -> Result<Tensor> {
+        let key = (features, h, w);
+        if let Some(t) = self.entries.lock().unwrap_or_else(PoisonError::into_inner).get(&key) {
+            return Ok(t.clone());
+        }
+        let t = build_sine_position(features, h, w)?;
+        let count = t.elem_count();
+        if count <= self.max_elements {
+            let mut map = self.entries.lock().unwrap_or_else(PoisonError::into_inner);
+            let retained = map.values().fold(0usize, |n, t| n.saturating_add(t.elem_count()));
+            if map.len() >= 16 || retained.saturating_add(count) > self.max_elements {
+                map.clear();
+            }
+            map.insert(key, t.clone());
+        }
+        Ok(t)
     }
-    map.insert((num_pos_features, h, w), t.clone());
-    Ok(t)
 }
 
 fn build_sine_position(num_pos_features: usize, h: usize, w: usize) -> Result<Tensor> {
+    let count = num_pos_features.checked_mul(2).and_then(|n| n.checked_mul(h)).and_then(|n| n.checked_mul(w));
+    let count =
+        count.filter(|n| *n > 0 && *n <= MAX_POSITION_ELEMENTS).ok_or_else(|| Error::Input("sine position dimensions are empty or exceed 128 MiB".into()))?;
     let eps = 1e-6f32;
     let scale = 2.0 * std::f32::consts::PI;
     let dim_t: Vec<f32> = (0..num_pos_features).map(|i| 10000f32.powf(2.0 * (i / 2) as f32 / num_pos_features as f32)).collect();
@@ -39,7 +63,7 @@ fn build_sine_position(num_pos_features: usize, h: usize, w: usize) -> Result<Te
         dim_t.iter().enumerate().map(|(i, d)| if i % 2 == 0 { (e / d).sin() } else { (e / d).cos() }).collect()
     };
     let (ys, xs): (Vec<_>, Vec<_>) = ((0..h).map(|k| axis(h, k)).collect(), (0..w).map(|k| axis(w, k)).collect());
-    let mut out = vec![0f32; 2 * num_pos_features * h * w];
+    let mut out = vec![0f32; count];
     for y in 0..h {
         for x in 0..w {
             for f in 0..num_pos_features {
@@ -75,6 +99,7 @@ pub struct Neck {
     convs: Vec<Conv1x1>,
     top_down: Vec<usize>,
     pos_features: usize,
+    positions: PositionCache,
 }
 
 /// What the neck produces, both in the neck's own order (lowest resolution first, all four
@@ -97,7 +122,7 @@ impl Neck {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        Ok(Neck { convs, top_down: top_down.to_vec(), pos_features: fpn / 2 })
+        Ok(Neck { convs, top_down: top_down.to_vec(), pos_features: fpn / 2, positions: PositionCache::new(MAX_POSITION_ELEMENTS) })
     }
 
     /// `stages`: Hiera stage outputs, NHWC, highest resolution first.
@@ -119,7 +144,7 @@ impl Neck {
                 }
                 _ => lateral,
             };
-            positions.push(sine_position(self.pos_features, cur.dim(2)?, cur.dim(3)?)?);
+            positions.push(self.positions.get(self.pos_features, cur.dim(2)?, cur.dim(3)?)?);
             features.push(cur.clone());
             prev = Some(cur);
         }
@@ -158,5 +183,33 @@ impl VisionEncoder {
             v.into_iter().skip(skip).rev().collect()
         };
         Ok(ImageFeatures { features: keep(out.features), positions: keep(out.positions) })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn position_tables_reject_empty_overflowing_and_oversized_dimensions() {
+        for (features, h, w) in [(0, 1, 1), (1, 0, 1), (1, 1, 0), (usize::MAX, 2, 2), (128, usize::MAX, 2), (128, 1024, 1024)] {
+            assert!(matches!(sine_position(features, h, w), Err(Error::Input(_))), "{features}, {h}, {w}");
+        }
+    }
+
+    #[test]
+    fn position_cache_bounds_retained_elements_and_preserves_the_encoding() {
+        let cache = PositionCache::new(64);
+        let first = cache.get(2, 2, 4).unwrap();
+        assert_eq!(first.dims(), &[1, 4, 2, 4]);
+        assert_eq!(first.flatten_all().unwrap().to_vec1::<f32>().unwrap(), cache.get(2, 2, 4).unwrap().flatten_all().unwrap().to_vec1::<f32>().unwrap());
+        cache.get(2, 3, 4).unwrap();
+        let entries = cache.entries.lock().unwrap();
+        assert_eq!(entries.len(), 1, "older tables are evicted to fit the budget");
+        assert!(entries.values().map(Tensor::elem_count).sum::<usize>() <= 64);
+        drop(entries);
+        let large = cache.get(2, 8, 8).unwrap();
+        assert_eq!(large.dims(), &[1, 4, 8, 8]);
+        assert_eq!(cache.entries.lock().unwrap().len(), 1, "a table over budget is returned without retention");
     }
 }

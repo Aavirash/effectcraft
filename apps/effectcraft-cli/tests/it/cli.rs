@@ -683,6 +683,7 @@ fn render_bitrate_applies_to_vp9_webm() {
 #[test]
 fn bench_roto_runs_on_a_users_clip() {
     let (frames, masks) = (tmp("clip-frames"), tmp("clip-masks"));
+    let config = frames.join("config");
     for d in [&frames, &masks] {
         let _ = std::fs::remove_dir_all(d);
         std::fs::create_dir_all(d).unwrap();
@@ -703,7 +704,7 @@ fn bench_roto_runs_on_a_users_clip() {
         mask.save(masks.join(format!("f{f:03}.png"))).unwrap();
     }
     let (f, m) = (frames.to_str().unwrap(), masks.to_str().unwrap());
-    let out = bin().args(["bench", "--roto", "--clip", f, "--truth", m, "--frames", "6"]).output().unwrap();
+    let out = bin().env("EFFECTCRAFT_CONFIG_DIR", &config).args(["bench", "--roto", "--clip", f, "--truth", m, "--frames", "6"]).output().unwrap();
     let text = String::from_utf8_lossy(&out.stdout).to_string();
     assert!(out.status.success(), "{text}\n{}", String::from_utf8_lossy(&out.stderr));
     let row = text.lines().find(|l| l.contains("classical")).unwrap_or_else(|| panic!("no classical row: {text}"));
@@ -711,11 +712,11 @@ fn bench_roto_runs_on_a_users_clip() {
     assert!(mean > 0.8, "classical mean IoU on the user's clip: {mean}\n{text}");
     // one mask short: refused
     std::fs::remove_file(masks.join("f005.png")).unwrap();
-    let out = bin().args(["bench", "--roto", "--clip", f, "--truth", m]).output().unwrap();
+    let out = bin().env("EFFECTCRAFT_CONFIG_DIR", &config).args(["bench", "--roto", "--clip", f, "--truth", m]).output().unwrap();
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("must match"), "{}", String::from_utf8_lossy(&out.stderr));
     // --clip without --truth
-    let out = bin().args(["bench", "--roto", "--clip", f]).output().unwrap();
+    let out = bin().env("EFFECTCRAFT_CONFIG_DIR", &config).args(["bench", "--roto", "--clip", f]).output().unwrap();
     assert!(!out.status.success());
 }
 
@@ -730,11 +731,11 @@ fn bench_roto_reports_why_a_named_model_file_failed() {
     std::fs::write(&bogus, b"not the weights").unwrap();
     for flag in ["--sam2", "--mobilesam"] {
         let missing = dir.join("missing.bin");
-        let out = bin().args(["bench", "--roto", flag, missing.to_str().unwrap()]).output().unwrap();
+        let out = bin().env("EFFECTCRAFT_CONFIG_DIR", dir.join("config")).args(["bench", "--roto", flag, missing.to_str().unwrap()]).output().unwrap();
         let err = String::from_utf8_lossy(&out.stderr).to_string();
         assert!(!out.status.success(), "{flag}: {err}");
         assert!(err.contains(flag) && err.contains("missing.bin"), "{flag} names the file that could not be read: {err}");
-        let out = bin().args(["bench", "--roto", flag, bogus.to_str().unwrap()]).output().unwrap();
+        let out = bin().env("EFFECTCRAFT_CONFIG_DIR", dir.join("config")).args(["bench", "--roto", flag, bogus.to_str().unwrap()]).output().unwrap();
         let err = String::from_utf8_lossy(&out.stderr).to_string();
         assert!(!out.status.success(), "{flag}: {err}");
         assert!(err.contains("does not match"), "{flag} says the file is not the published weights: {err}");

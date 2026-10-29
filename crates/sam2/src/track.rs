@@ -11,7 +11,7 @@ use std::sync::Arc;
 use candle_core::Tensor;
 use effectcraft_segment::{ClipFrame, ObjectTracker, TrackRequest, TrackedFrame};
 
-use crate::mask::{Sam2Mask, preprocess};
+use crate::mask::{Sam2Mask, preprocess, validate_frame_size};
 use crate::prompt::{INPUT_SIZE, Prompt};
 use crate::resize::mask_to_model;
 use crate::session::{Cancel, Direction, FrameMask, FrameSource, ObjectId, VideoTracker};
@@ -36,8 +36,12 @@ impl FrameSource for Source<'_> {
     }
 
     fn frame(&self, index: usize) -> Result<Tensor> {
-        let f = (self.fetch.borrow_mut())(self.first + index as i64)
-            .ok_or_else(|| Error::Input(format!("frame {} is not available", self.first + index as i64)))?;
+        let number = i64::try_from(index)
+            .ok()
+            .filter(|_| index < self.count)
+            .and_then(|offset| self.first.checked_add(offset))
+            .ok_or_else(|| Error::Input(format!("frame index {index} is outside the clip")))?;
+        let f = (self.fetch.borrow_mut())(number).ok_or_else(|| Error::Input(format!("frame {number} is not available")))?;
         self.sizes.borrow_mut().insert(index, (f.w, f.h));
         preprocess(&f.rgb, f.w, f.h)
     }
@@ -59,6 +63,7 @@ impl Sam2Mask {
         if req.count == 0 || req.count > MAX_CLIP {
             return Err(Error::Input(format!("a tracking request needs 1 to {MAX_CLIP} frames, got {}", req.count)));
         }
+        req.first.checked_add((req.count - 1) as i64).ok_or_else(|| Error::Input("the clip's last frame overflows its frame number".into()))?;
         if req.objects.is_empty() || req.objects.len() > MAX_OBJECTS || req.objects.iter().any(|o| o.is_empty()) {
             return Err(Error::Input(format!("tracking needs 1 to {MAX_OBJECTS} objects, each with a prompt on at least one frame")));
         }
@@ -69,12 +74,14 @@ impl Sam2Mask {
         let mut prompt_frames = vec![];
         for (oi, prompts) in req.objects.iter().enumerate() {
             for (frame, p) in prompts {
-                let idx = usize::try_from(frame - req.first)
-                    .ok()
+                let idx = frame
+                    .checked_sub(req.first)
+                    .and_then(|offset| usize::try_from(offset).ok())
                     .filter(|i| *i < req.count)
                     .ok_or_else(|| Error::Input(format!("prompt frame {frame} is outside the clip")))?;
                 if !sizes.borrow().contains_key(&idx) {
                     let f = (source.fetch.borrow_mut())(*frame).ok_or_else(|| Error::Input(format!("frame {frame} is not available")))?;
+                    validate_frame_size(f.w, f.h, f.rgb.len())?;
                     sizes.borrow_mut().insert(idx, (f.w, f.h));
                 }
                 prompt_frames.push((oi, idx, p));
@@ -157,5 +164,18 @@ impl ObjectTracker for Sam2Mask {
         let r = self.run_track(req, frames, cancel, out).map_err(|e| e.to_string());
         self.touch();
         r
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn source_rejects_overflowing_and_out_of_range_indices_before_fetching() {
+        let mut fetch = |_| panic!("invalid indices must not fetch a frame");
+        let source = Source { first: i64::MAX, count: 2, fetch: RefCell::new(&mut fetch), sizes: Default::default() };
+        assert!(matches!(source.frame(1), Err(Error::Input(_))));
+        assert!(matches!(source.frame(usize::MAX), Err(Error::Input(_))));
     }
 }

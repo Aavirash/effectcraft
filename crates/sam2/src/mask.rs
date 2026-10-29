@@ -19,10 +19,7 @@ const MAX_PIXELS: usize = 100_000_000;
 
 /// Resize `w x h` RGB (0..1) to the model input and normalise it: `[1, 3, 1024, 1024]`.
 pub fn preprocess(rgb: &[[f32; 3]], w: usize, h: usize) -> Result<Tensor> {
-    let pixels = w.checked_mul(h).filter(|n| *n > 0 && *n == rgb.len() && w <= MAX_SIDE && h <= MAX_SIDE && *n <= MAX_PIXELS);
-    let Some(pixels) = pixels else {
-        return Err(Error::Input(format!("a {w} x {h} frame needs {} pixels (at most {MAX_PIXELS}), got {}", w.saturating_mul(h), rgb.len())));
-    };
+    let pixels = validate_frame_size(w, h, rgb.len())?;
     const MEAN: [f32; 3] = [0.485, 0.456, 0.406];
     const STD: [f32; 3] = [0.229, 0.224, 0.225];
     let mut planar = vec![0f32; 3 * pixels];
@@ -38,6 +35,12 @@ pub fn preprocess(rgb: &[[f32; 3]], w: usize, h: usize) -> Result<Tensor> {
     let mean = Tensor::from_slice(&MEAN, (1, 3, 1, 1), &Device::Cpu)?;
     let std = Tensor::from_slice(&STD, (1, 3, 1, 1), &Device::Cpu)?;
     Ok(x.broadcast_sub(&mean)?.broadcast_div(&std)?)
+}
+
+pub(crate) fn validate_frame_size(w: usize, h: usize, len: usize) -> Result<usize> {
+    w.checked_mul(h)
+        .filter(|n| *n > 0 && *n == len && w <= MAX_SIDE && h <= MAX_SIDE && *n <= MAX_PIXELS)
+        .ok_or_else(|| Error::Input(format!("a {w} x {h} frame needs {} pixels (at most {MAX_PIXELS}), got {len}", w.saturating_mul(h))))
 }
 
 fn fingerprint(rgb: &[[f32; 3]], w: usize, h: usize) -> u64 {
