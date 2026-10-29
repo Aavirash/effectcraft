@@ -67,6 +67,7 @@ impl Models {
 
     /// Activate a model that finished loading for the choice counted as `generation`; `false` (and the model is
     /// dropped) when the choice changed meanwhile.
+    #[cfg(test)]
     pub(crate) fn set_active_if_current(&self, task: Task, model: Loaded, generation: u64) -> bool {
         activate_if_current(self.lane(task), &self.face_model, task, model, generation)
     }
