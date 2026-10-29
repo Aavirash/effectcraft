@@ -186,6 +186,8 @@ fn popup_eyedropper(app: &mut EffectcraftApp, ui: &mut egui::Ui, painter: &egui:
         return;
     }
     let _ = ui.interact(map.area, egui::Id::unique("viewer-popup-eyedropper"), Sense::click());
+    // The sampling surface, apart from the picker's button that arms it (`colorPicker.eyedropper`).
+    app.auto.add("viewer.colorPickerEyedropper", map.area, "Sample color");
     ctx.set_cursor_icon(egui::CursorIcon::Crosshair);
     app.viewer_pixels();
     let chip = Rect::from_min_size(map.area.min + vec2(10.0, 10.0), vec2(220.0, 22.0));
