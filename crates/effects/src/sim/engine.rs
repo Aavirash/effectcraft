@@ -1,5 +1,5 @@
 use super::common::{h, hs};
-use super::particle_fx::{PS2_CACHE, PW_CACHE, PW_RATE, ps2_phys, pw_phys};
+use super::particle_fx::{MERCURY_CACHE, MERCURY_RATE, PS2_CACHE, PS2_RATE, PW_CACHE, PW_RATE, ps2_phys, pw_phys};
 use super::sprites::{Shape, Sprite};
 use super::{Buf, EffectCtx, Image, IntoParallelRefMutIterator, ParallelIterator, SimCache, params_key_except, value_noise};
 
@@ -114,6 +114,8 @@ impl Phys {
         Particle { p, v, age: 0.0, life, rnd: h(id, 11, seed), id }
     }
 
+    /// One step at the constant [`Phys::rate`] (the tests' reference).
+    #[cfg(test)]
     pub(crate) fn step(&self, st: &mut PState, step: u64) {
         self.step_at_rate(st, step, self.rate);
     }
@@ -274,12 +276,39 @@ pub(super) fn simulate_rates(cache: &SimCache<PState>, key: u64, phys: &Phys, ra
     cache.run_where(key, rates.len() as u64, PState::default, |st, i| phys.step_at_rate(st, i, rate(i)), |s, st| prefix.get(s as usize) == Some(&st.hist))
 }
 
+/// A stepped particle system's particles at `ctx.time`, born at the Birth Rate of their own
+/// time (`birthRate` × `k` particles per second, see [`rate_history`]). The cache key is every
+/// parameter but Birth Rate (its history is checked through `PState::hist`) and those under
+/// `skip`, with `salt`. `gpu`: the host's particle backend may simulate it.
+pub(super) struct Stepped<'a> {
+    pub(super) cache: &'a SimCache<PState>,
+    pub(super) salt: u64,
+    pub(super) skip: &'a [&'a str],
+    pub(super) k: f64,
+    pub(super) gpu: bool,
+}
+
+impl Stepped<'_> {
+    pub(super) fn state(&self, ctx: &EffectCtx, phys: &Phys) -> std::sync::Arc<PState> {
+        let rates = rate_history(ctx, "birthRate", self.k);
+        let mut skip = self.skip.to_vec();
+        skip.push("birthRate");
+        let key = params_key_except(ctx, &Buf { img: Image::new(0, 0), offset: [0.0; 2], scale: 1.0 }, self.salt, &skip);
+        let gpu = if self.gpu { accelerated(ctx, key, phys, Some(&rates)) } else { None };
+        gpu.unwrap_or_else(|| simulate_rates(self.cache, key, phys, &rates))
+    }
+}
+
+/// CC Particle World.
+const PW: Stepped = Stepped { cache: &PW_CACHE, salt: 1, skip: &[PW_EFFECT_CAMERA], k: PW_RATE, gpu: true };
+/// CC Particle Systems II.
+pub(super) const PS2: Stepped = Stepped { cache: &PS2_CACHE, salt: 2, skip: &[], k: PS2_RATE, gpu: true };
+/// CC Mr. Mercury (its blobs are simulated on the CPU).
+pub(super) const MERCURY: Stepped = Stepped { cache: &MERCURY_CACHE, salt: 3, skip: &[], k: MERCURY_RATE, gpu: false };
+
 /// CC Particle World's particles at `ctx.time`, born at the Birth Rate of their own time.
 pub(super) fn pw_state(ctx: &EffectCtx, phys: &Phys) -> std::sync::Arc<PState> {
-    let rates = rate_history(ctx, "birthRate", PW_RATE);
-    // Every parameter but Birth Rate (its history is checked through `PState::hist`).
-    let key = params_key_except(ctx, &Buf { img: Image::new(0, 0), offset: [0.0; 2], scale: 1.0 }, 1, &[PW_EFFECT_CAMERA, "birthRate"]);
-    accelerated(ctx, key, phys, Some(&rates)).unwrap_or_else(|| simulate_rates(&PW_CACHE, key, phys, &rates))
+    PW.state(ctx, phys)
 }
 
 /// The live particles of a stepped particle effect (`ec.sim.ccparticleworld`,
@@ -288,23 +317,22 @@ pub(super) fn pw_state(ctx: &EffectCtx, phys: &Phys) -> std::sync::Arc<PState> {
 pub fn particle_state(id: &str, ctx: &EffectCtx) -> Option<Vec<crate::psim::SimParticle>> {
     let st = match id {
         "ec.sim.ccparticleworld" => pw_state(ctx, &pw_phys(ctx)),
-        "ec.sim.ccparticlesystems2" => {
-            let (phys, key) = (ps2_phys(ctx), sim_key(ctx, 2));
-            accelerated(ctx, key, &phys, None).unwrap_or_else(|| simulate(&PS2_CACHE, key, ctx.time, &phys))
-        }
+        "ec.sim.ccparticlesystems2" => PS2.state(ctx, &ps2_phys(ctx)),
         _ => return None,
     };
     Some(st.parts.iter().map(|q| crate::psim::SimParticle { p: q.p, v: q.v, age: q.age, life: q.life, rnd: q.rnd, id: q.id }).collect())
 }
 
-/// The simulation cache key of a stepped particle effect: every parameter but CC Particle World's
-/// Effect Camera, which only changes how the particles are seen (animating it doesn't restart
-/// the simulation).
+/// The simulation cache key of a stepped particle effect at a constant Birth Rate (the tests'
+/// reference): every parameter but CC Particle World's Effect Camera.
+#[cfg(test)]
 pub(super) fn sim_key(ctx: &EffectCtx, salt: u64) -> u64 {
     params_key_except(ctx, &Buf { img: Image::new(0, 0), offset: [0.0; 2], scale: 1.0 }, salt, &[PW_EFFECT_CAMERA])
 }
 
-/// Run a particle system to layer time `t` through `cache`.
+/// Run a particle system at its constant [`Phys::rate`] to layer time `t` through `cache` (the
+/// tests' reference).
+#[cfg(test)]
 pub(crate) fn simulate(cache: &SimCache<PState>, key: u64, t: f64, phys: &Phys) -> std::sync::Arc<PState> {
     cache.run(key, steps_at(t), PState::default, |st, i| phys.step(st, i))
 }

@@ -491,6 +491,64 @@ fn particle_world_with_a_birth_rate_expression_is_not_served_from_the_layer_cach
     assert!(light(&b) > 1.0 && light(&b) < light(&a), "fewer births: {} vs {}", light(&b), light(&a));
 }
 
+/// A grey solid (CC Mr. Mercury shades its blobs from it) with effect `id` (CC Particle Systems
+/// II, CC Mr. Mercury): Birth Rate `rate`,
+/// or keyed 3 until 0.5 s and 0 a frame later (`None`); Longevity 1 s.
+fn system_scene(id: &str, rate: Option<f64>) -> (Project, ItemId) {
+    let (mut p, cid, comp) = setup();
+    let mut l = solid(&mut p, &comp, [0.5, 0.5, 0.5], 200, 100);
+    let vals = [("birthRate", Value::Scalar(rate.unwrap_or(3.0))), ("longevity", Value::Scalar(1.0))];
+    add_effect(&mut p, &mut l, id, [200.0, 100.0], &vals);
+    if rate.is_none() {
+        let fx = l.props.sub_mut("effects").unwrap().children.iter_mut().find_map(|c| match c {
+            effectcraft_project::Node::Group(g) => Some(g),
+            _ => None,
+        });
+        let key = |t: f64, v: f64| Keyframe::new(Tick::from_seconds_f64(t), Value::Scalar(v));
+        fx.unwrap().prop_mut("birthRate").unwrap().keys = vec![key(0.0, 3.0), key(0.5, 3.0), key(0.5 + 1.0 / 30.0, 0.0)];
+    }
+    p.comp_mut(cid).unwrap().layers = vec![l];
+    (p, cid)
+}
+
+/// #1373 for CC Particle Systems II and CC Mr. Mercury through the renderer: a keyed burst
+/// draws as the constant rate during it, still draws after the rate drops to 0 (unlike a rate
+/// of 0 throughout), and draws as nothing born once Longevity has run out.
+#[test]
+fn particle_systems_ii_and_mr_mercury_keep_a_burst_after_birth_rate_drops_to_zero() {
+    let at = Tick::from_seconds_f64;
+    for id in ["ec.sim.ccparticlesystems2", "ec.sim.ccmrmercury"] {
+        let (keyed, cid) = system_scene(id, None);
+        let (constant, _) = system_scene(id, Some(3.0));
+        let (none, _) = system_scene(id, Some(0.0));
+        assert_same(&render_cached(&keyed, cid, at(0.4), None), &render_cached(&constant, cid, at(0.4), None), &format!("{id}: during the burst"));
+        let (k, z) = (render_cached(&keyed, cid, at(0.9), None), render_cached(&none, cid, at(0.9), None));
+        assert!((light(&k) - light(&z)).abs() > 1.0, "{id}: the burst is still drawn: {} vs {}", light(&k), light(&z));
+        assert_same(&render_cached(&keyed, cid, at(1.9), None), &render_cached(&none, cid, at(1.9), None), &format!("{id}: gone after Longevity"));
+    }
+}
+
+/// A Birth Rate expression on any of the stepped particle systems keeps the layer out of the
+/// layer cache (its key can't see what the expression returned at earlier times); without one
+/// the layer is cached.
+#[test]
+fn stepped_particle_layers_with_a_birth_rate_expression_are_not_layer_cached() {
+    for id in ["ec.sim.ccparticleworld", "ec.sim.ccparticlesystems2", "ec.sim.ccmrmercury"] {
+        let (mut p, cid) = system_scene(id, Some(2.0));
+        let key = |p: &Project| {
+            let c = p.comp(cid).unwrap();
+            crate::cache::layer_key(&crate::eval::EvalCtx::new(p, cid, c, Tick::from_seconds_f64(0.9)), &c.layers[0], 1.0, false, false)
+        };
+        assert!(key(&p).is_some(), "{id}: cached without an expression");
+        let fx = p.comp_mut(cid).unwrap().layers[0].props.sub_mut("effects").unwrap().children.iter_mut().find_map(|c| match c {
+            effectcraft_project::Node::Group(g) => Some(g),
+            _ => None,
+        });
+        fx.unwrap().prop_mut("birthRate").unwrap().expr = Some(effectcraft_project::Expression { text: "time < 0.5 ? 3 : 0".into(), enabled: true });
+        assert!(key(&p).is_none(), "{id}: not cached with a Birth Rate expression");
+    }
+}
+
 // ------------------------------------------------------------------------------ layer cache
 
 fn render_cached(p: &Project, cid: ItemId, t: Tick, cache: Option<&crate::LayerCache>) -> crate::Image {

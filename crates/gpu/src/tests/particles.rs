@@ -113,11 +113,36 @@ impl EffectHost for Keyed {
     }
 }
 
-/// CC Particle World's live particles at layer time `t` through `host`.
-fn keyed_state(p: &Params, t: f64, host: &Keyed) -> Vec<SimParticle> {
+/// Effect `id`'s live particles at layer time `t` through `host`.
+fn keyed_state(id: &str, p: &Params, t: f64, host: &Keyed) -> Vec<SimParticle> {
     let env = EffectEnv { host: Some(host), ..Default::default() };
     let ctx = EffectCtx { params: p, time: t, layer_size: [320.0, 240.0], seed: 5, adjustment: false, env };
-    effectcraft_effects::particle_state("ec.sim.ccparticleworld", &ctx).unwrap()
+    effectcraft_effects::particle_state(id, &ctx).unwrap()
+}
+
+/// 3 a second from 0 to 0.5 s.
+fn early(t: f64) -> f64 {
+    if t < 0.5 { 3.0 } else { 0.0 }
+}
+
+/// 3 a second from 0.25 to 0.75 s: as many births by 0.9 s as [`early`], at other steps.
+fn late(t: f64) -> f64 {
+    if (0.25..0.75).contains(&t) { 3.0 } else { 0.0 }
+}
+
+/// Effect `id` (parameters `p`) under the [`early`] then the [`late`] Birth Rate history: the
+/// GPU's particles match the CPU's, and each really came from the GPU.
+fn keyed_agree(id: &str, p: &Params, g: &'static Gpu) {
+    for (rate, times) in [(early as fn(f64) -> f64, [0.4, 0.9, 1.2]), (late, [0.9, 1.2, 0.6])] {
+        let (cpu_host, gpu_host) = (Keyed { gpu: None, rate }, Keyed { gpu: Some(g), rate });
+        for t in times {
+            let cpu = keyed_state(id, p, t, &cpu_host);
+            let before = crate::particles::DISPATCHES.load(std::sync::atomic::Ordering::Relaxed);
+            let gpu = keyed_state(id, p, t, &gpu_host);
+            assert!(crate::particles::DISPATCHES.load(std::sync::atomic::Ordering::Relaxed) > before, "{id} t {t}: simulated on the GPU");
+            agree(&format!("{id} keyed birth rate t {t}"), &cpu, &gpu, 1e-4, cpu.len() / 100 + 1);
+        }
+    }
 }
 
 /// #1373: with a keyed Birth Rate the GPU is given the births of each moment, as the CPU
@@ -127,23 +152,16 @@ fn keyed_state(p: &Params, t: f64, host: &Keyed) -> Vec<SimParticle> {
 #[test]
 fn particle_world_with_a_keyed_birth_rate_matches_the_cpu() {
     let Some(g) = gpu() else { return };
-    fn early(t: f64) -> f64 {
-        if t < 0.5 { 3.0 } else { 0.0 }
-    }
-    fn late(t: f64) -> f64 {
-        if (0.25..0.75).contains(&t) { 3.0 } else { 0.0 }
-    }
     let p = params("ec.sim.ccparticleworld", &[("birthRate", n(0.0)), ("longevity", n(1.2)), ("extras/randomSeed", n(21.0))]);
-    for (rate, times) in [(early as fn(f64) -> f64, [0.4, 0.9, 1.2]), (late, [0.9, 1.2, 0.6])] {
-        let (cpu_host, gpu_host) = (Keyed { gpu: None, rate }, Keyed { gpu: Some(g), rate });
-        for t in times {
-            let cpu = keyed_state(&p, t, &cpu_host);
-            let before = crate::particles::DISPATCHES.load(std::sync::atomic::Ordering::Relaxed);
-            let gpu = keyed_state(&p, t, &gpu_host);
-            assert!(crate::particles::DISPATCHES.load(std::sync::atomic::Ordering::Relaxed) > before, "t {t}: simulated on the GPU");
-            agree(&format!("keyed birth rate t {t}"), &cpu, &gpu, 1e-4, cpu.len() / 100 + 1);
-        }
-    }
+    keyed_agree("ec.sim.ccparticleworld", &p, g);
+}
+
+/// The same for CC Particle Systems II (90 births by 0.9 s in both histories).
+#[test]
+fn particle_systems_ii_with_a_keyed_birth_rate_matches_the_cpu() {
+    let Some(g) = gpu() else { return };
+    let p = params("ec.sim.ccparticlesystems2", &[("birthRate", n(0.0)), ("longevity", n(1.2)), ("randomSeed", n(22.0))]);
+    keyed_agree("ec.sim.ccparticlesystems2", &p, g);
 }
 
 #[test]
