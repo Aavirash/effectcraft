@@ -3818,7 +3818,9 @@ fn prop_key_navigator(app: &mut EffectcraftApp, ui: &mut egui::Ui, g: &mut Rw, r
             ui_actions.push(UiAct::SetTime(layer.comp_time(k.time)));
         }
         if ui.interact(mid, egui::Id::unique(("kmid", uid)), Sense::click()).clicked() {
-            actions.push(("prop.toggleKey".into(), json!({"layer": layer.id.0, "prop": uid})));
+            // `selected`: the same property's keyframe button on every selected layer, as in
+            // After Effects (#355, #491); the engine ignores it when this layer isn't selected.
+            actions.push(("prop.toggleKey".into(), json!({"layer": layer.id.0, "prop": uid, "selected": true})));
         }
         app.auto.add(&format!("timeline.prop.{uid}.addKey"), mid, "Add or remove keyframe");
     }
@@ -3864,10 +3866,13 @@ fn prop_stopwatch(app: &mut EffectcraftApp, ui: &mut egui::Ui, g: &mut Rw, rc: &
                 }
             }
         } else if let Some((value, merge)) = switch_gesture(ui, &resp, r, "stopwatch", prop.is_animated()) {
-            actions.push(("prop.toggleAnimation".into(), json!({"layer": layer.id.0, "prop": uid, "value": value, "merge": merge})));
+            // `selected`: the same property's stopwatch on every selected layer, in one undo
+            // step, as in After Effects (#355, #491). The explicit `value` keeps a drag over
+            // several stopwatches (#284) setting the same state rather than toggling it twice.
+            actions.push(("prop.toggleAnimation".into(), json!({"layer": layer.id.0, "prop": uid, "value": value, "merge": merge, "selected": true})));
         } else if resp.clicked() && !resp.clicked_by(egui::PointerButton::Primary) {
             // Keyboard or accessibility activation.
-            actions.push(("prop.toggleAnimation".into(), json!({"layer": layer.id.0, "prop": uid})));
+            actions.push(("prop.toggleAnimation".into(), json!({"layer": layer.id.0, "prop": uid, "selected": true})));
         }
     }
 }

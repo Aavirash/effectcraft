@@ -598,3 +598,54 @@ fn speed_graph_fit_selection_frames_the_curve_between_the_keys() {
     click_with(&mut h, pos2(fit[0] + fit[2] / 2.0, fit[1] + fit[3] / 2.0), Default::default());
     frames_peak(&h, "lone key");
 }
+
+/// #355, #491: in the Timeline, S reveals Scale on every selected layer and clicking one
+/// stopwatch animates Scale on all of them in one undo step; the keyframe navigator then adds a
+/// key on each of them. The Timeline was the only panel that did not ask the engine to apply the
+/// change to the selection, so only the clicked layer was keyed.
+#[test]
+fn timeline_stopwatch_and_keyframe_button_act_on_every_selected_layer() {
+    let mut s = Session::default();
+    s.execute("comp.new", json!({"name": "Linked", "width": 320, "height": 180, "frameRate": 30, "duration": 4})).unwrap();
+    let mut ids = vec![];
+    for (i, c) in ["#e04020", "#20e040", "#2040e0"].iter().enumerate() {
+        let l = s.execute("layer.newSolid", json!({"color": c, "width": 40, "height": 40})).unwrap()["layer"].as_u64().unwrap();
+        s.execute("prop.set", json!({"layer": l, "path": "transform/position", "value": [60.0 + 80.0 * i as f64, 90.0]})).unwrap();
+        ids.push(l);
+    }
+    // A fourth layer that stays unselected: nothing may key it.
+    let spare = s.execute("layer.newSolid", json!({"color": "#ffffff", "width": 20, "height": 20})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("layer.select", json!({"layers": ids})).unwrap();
+    let scale_uid = |s: &Session, l: u64| s.active_comp().unwrap().layer(LayerId(l)).unwrap().props.prop("transform/scale").unwrap().uid;
+    let uids: Vec<u64> = ids.iter().map(|l| scale_uid(&s, *l)).collect();
+    let mut h = Harness::builder().with_size(egui::vec2(1600.0, 1000.0)).build_eframe(|_| EffectcraftApp::new(s));
+    let ctx = h.ctx.clone();
+    effectcraft_ui_egui::menus::invoke(h.state_mut(), &ctx, "timeline.reveal.scale", json!({})).unwrap();
+    h.run_steps(4);
+    let scale = |h: &Harness<'_, EffectcraftApp>, l: u64| {
+        h.state().session.active_comp().unwrap().layer(LayerId(l)).unwrap().props.prop("transform/scale").unwrap().clone()
+    };
+    let at = |h: &Harness<'_, EffectcraftApp>, id: &str| {
+        let e = h.state().auto.find(id).unwrap_or_else(|| panic!("no {id} in the Timeline"));
+        pos2(e.rect[0] + e.rect[2] / 2.0, e.rect[1] + e.rect[3] / 2.0)
+    };
+    // S revealed Scale on every selected layer, so each of them has a stopwatch row.
+    for u in &uids {
+        assert!(h.state().auto.find(&format!("timeline.prop.{u}.stopwatch")).is_some(), "Scale is revealed on every selected layer");
+    }
+    let undo = h.state().session.history.undo.len();
+    click_with(&mut h, at(&h, &format!("timeline.prop.{}.stopwatch", uids[0])), Default::default());
+    assert!(ids.iter().all(|l| scale(&h, *l).is_animated()), "one stopwatch animates Scale on every selected layer");
+    assert!(!scale(&h, spare).is_animated(), "an unselected layer is left alone");
+    assert_eq!(h.state().session.history.undo.len(), undo + 1, "one undo step");
+    // At 1 s the keyframe navigator adds a key on each selected layer.
+    h.state_mut().session.execute("time.set", json!({"time": 1.0})).unwrap();
+    h.run_steps(2);
+    click_with(&mut h, at(&h, &format!("timeline.prop.{}.addKey", uids[0])), Default::default());
+    let counts: Vec<usize> = ids.iter().map(|l| scale(&h, *l).keys.len()).collect();
+    assert_eq!(counts, vec![2; ids.len()], "the keyframe button keys every selected layer");
+    assert_eq!(scale(&h, spare).keys.len(), 0, "and no unselected one");
+    // Clicking the stopwatch again turns it off on all of them, still in one step.
+    click_with(&mut h, at(&h, &format!("timeline.prop.{}.stopwatch", uids[0])), Default::default());
+    assert!(ids.iter().all(|l| !scale(&h, *l).is_animated()), "the stopwatch turns animation off on every selected layer");
+}
