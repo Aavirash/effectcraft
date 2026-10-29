@@ -1,4 +1,4 @@
-use super::*;
+use super::{EffectcraftApp, PanelKind, Resolution, Value, json};
 
 /// Run an engine command and perform the frontend events it emitted right away.
 /// Commands that fill the internal clipboard.
@@ -548,7 +548,7 @@ pub(super) fn file_dialog(app: &mut EffectcraftApp, id: &str, params: &Value) ->
         "file.importProject" => ("path", Ask::Open(&["ecproj", "ecprojx"])),
         "file.importTimeline" => ("path", Ask::Open(&["xml", "fcpxml", "otio", "edl", "aaf", "omf"])),
         "render.saveCurrentPreview" => ("path", Ask::Save("Preview.mp4")),
-        "file.runScript" if params.get("name").is_none() => ("path", Ask::Open(&["jsx", "js", "jsonl", "json", "txt"])),
+        "file.runScript" if params.get("name").is_none() && params.get("recent").is_none() => ("path", Ask::Open(&["jsx", "js", "jsonl", "json", "txt"])),
         "file.installScript" | "file.installScriptUIPanel" => ("path", Ask::Open(&["jsx", "js"])),
         "effect.plugins.load" if params.get("folder").is_none() => ("path", Ask::Open(&["wasm", "wat"])),
         "file.replaceFootage" => ("path", Ask::Import),
