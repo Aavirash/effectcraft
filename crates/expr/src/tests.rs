@@ -1407,6 +1407,10 @@ fn a_kept_layer_reads_the_project_again() {
     assert_close!(f.num("thisLayer.index * 10 + thisLayer.name.length", 0.0), 21.0);
     let _ = f.ev(f.a, ROT, "var L = thisLayer; delete L.__c; delete L.__l; delete L.__i; delete L.__s; 0", 0.0);
     assert_close!(f.num("thisLayer.index * 10 + thisLayer.name.length", 0.0), 21.0);
+    let _ = f.ev(f.a, ROT, "Object.freeze(thisLayer); 0", 0.0);
+    f.layer_mut(f.a).name = "Ay".into();
+    f.p.comp_mut(f.cid).unwrap().layers.swap(0, 1);
+    assert_close!(f.num("thisLayer.index * 10 + thisLayer.name.length", 0.0), 12.0);
 }
 
 /// The kept layers are bounded: past the bound a layer isn't kept, an evaluation that makes more
