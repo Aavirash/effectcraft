@@ -109,8 +109,17 @@ fn encode(content: &[Ch], adts: bool) -> (Vec<u8>, Vec<Vec<u8>>) {
 }
 
 fn mp4(asc: Vec<u8>, channels: u32, units: &[Vec<u8>]) -> Vec<u8> {
+    mp4_after(None, asc, channels, units)
+}
+
+/// As [`mp4`], after an audio track with the configuration and channel count `empty` and no
+/// samples, if any.
+fn mp4_after(empty: Option<(Vec<u8>, u32)>, asc: Vec<u8>, channels: u32, units: &[Vec<u8>]) -> Vec<u8> {
     use filmcraft_isobmff::{Brand, Mp4Writer, SampleEntry, TrackConfig, WriteSample, WriterOptions};
     let mut w = Mp4Writer::new(Cursor::new(Vec::new()), WriterOptions::new(Brand::Mp4)).expect("writer");
+    if let Some((asc, channels)) = empty {
+        w.add_track(TrackConfig::new(SampleEntry::aac(asc, channels, RATE), RATE)).expect("empty track");
+    }
     let t = w.add_track(TrackConfig::new(SampleEntry::aac(asc, channels, RATE), RATE)).expect("track");
     for u in units {
         w.write_sample(t, WriteSample { data: u, duration: 1024, composition_offset: 0, is_sync: true }).expect("sample");
@@ -119,14 +128,25 @@ fn mp4(asc: Vec<u8>, channels: u32, units: &[Vec<u8>]) -> Vec<u8> {
 }
 
 fn mkv(asc: Vec<u8>, channels: u32, units: &[Vec<u8>]) -> Vec<u8> {
+    mkv_after(None, asc, channels, units)
+}
+
+/// As [`mkv`], after an audio track with the configuration and channel count `empty` and no
+/// frames, if any.
+fn mkv_after(empty: Option<(Vec<u8>, u32)>, asc: Vec<u8>, channels: u32, units: &[Vec<u8>]) -> Vec<u8> {
     use filmcraft_matroska::{MkvWriter, MuxOptions, TrackKind, TrackSpec};
-    let mut t = TrackSpec::new(TrackKind::Audio, "A_AAC");
-    t.codec_private = asc;
-    t.audio = Some((f64::from(RATE), u64::from(channels), None));
-    let mut w = MkvWriter::new(Cursor::new(Vec::new()), vec![t], MuxOptions::default()).expect("writer");
+    let track = |asc: Vec<u8>, channels: u32| {
+        let mut t = TrackSpec::new(TrackKind::Audio, "A_AAC");
+        t.codec_private = asc;
+        t.audio = Some((f64::from(RATE), u64::from(channels), None));
+        t
+    };
+    let tracks: Vec<TrackSpec> = empty.into_iter().map(|(asc, n)| track(asc, n)).chain([track(asc, channels)]).collect();
+    let played = tracks.len() - 1;
+    let mut w = MkvWriter::new(Cursor::new(Vec::new()), tracks, MuxOptions::default()).expect("writer");
     let frame_ns = 1_000_000_000 * 1024 / i64::from(RATE);
     for (i, u) in units.iter().enumerate() {
-        w.write_frame(0, i as i64 * frame_ns, true, u, Some(frame_ns as u64)).expect("frame");
+        w.write_frame(played, i as i64 * frame_ns, true, u, Some(frame_ns as u64)).expect("frame");
     }
     w.finish().expect("finish").into_inner()
 }
@@ -220,5 +240,23 @@ fn adts_aac_layouts_mix_by_speaker() {
         let (_, units) = encode(case.content, true);
         let p = write(&format!("{}.aac", case.name), &units.concat());
         check(case.name, case.content, &mix(&MediaPool::new(), &probe(&p).expect("probe")));
+    }
+}
+
+/// Audio plays from the first track FilmCraft can play, so an audio track with no samples before
+/// it lends it no configuration. Each case decodes in another order than the empty track's
+/// configuration would (FilmCraft reorders 12 to WAVE / SMPTE but not 7, and 11 but not a PCE).
+#[test]
+fn an_empty_audio_track_lends_its_configuration_to_no_other() {
+    for (name, empty) in [("config12", 7), ("pce61-centre-first", 11)] {
+        let case = cases().into_iter().find(|c| c.name == name).expect("case");
+        let n = case.content.len() as u32;
+        let empty = Some((AudioSpecificConfig::lc(3, empty).to_bytes(), n));
+        let (asc, units) = encode(case.content, false);
+        let asc = case.asc.as_ref().map_or(asc, AudioSpecificConfig::to_bytes);
+        let p = write(&format!("{name}-after-empty.mp4"), &mp4_after(empty.clone(), asc.clone(), n, &units));
+        check(&format!("{name} MP4"), case.content, &mix(&MediaPool::new(), &probe(&p).expect("probe")));
+        let p = write(&format!("{name}-after-empty.mkv"), &mkv_after(empty, asc, n, &units));
+        check(&format!("{name} Matroska"), case.content, &mix(&MediaPool::new(), &probe(&p).expect("probe")));
     }
 }

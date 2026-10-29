@@ -1,4 +1,4 @@
-//! The AudioSpecificConfig a movie's first AAC track decodes with, from the containers that carry
+//! The AudioSpecificConfig of the AAC track FilmCraft plays from a movie, from the containers that carry
 //! it outside the audio frames: MP4 / MOV (`esds`), Matroska (`CodecPrivate`) and LATM in MPEG
 //! TS / PS (its StreamMuxConfig). FilmCraft's other AAC is ADTS (in MPEG TS / PS or a raw `.aac`),
 //! whose channel configurations FilmCraft decodes (1 to 7) its channel count tells apart
@@ -13,10 +13,11 @@ use filmcraft_media::ByteReader;
 /// as far as this, not through the whole file.
 const MPEG_HEAD: u64 = 8 << 20;
 
-/// The configuration of the first audio track, if it is AAC: from an MP4 / MOV `header` (its
-/// ftyp and moov, or the whole file), or else from `file`, read as Matroska or MPEG TS / PS.
+/// The configuration of the audio track FilmCraft plays, if it is AAC: from an MP4 / MOV `header`
+/// (its ftyp and moov, or the whole file) and `file`, or else from `file`, read as Matroska or
+/// MPEG TS / PS.
 pub(crate) fn config(header: Option<&[u8]>, file: Option<&dyn ByteReader>) -> Option<AudioSpecificConfig> {
-    let asc = match header.and_then(mp4) {
+    let asc = match header.and_then(|h| mp4(h, file)) {
         Some(asc) => asc,
         None => {
             let file = file?;
@@ -28,19 +29,29 @@ pub(crate) fn config(header: Option<&[u8]>, file: Option<&dyn ByteReader>) -> Op
     AudioSpecificConfig::parse(&asc).ok()
 }
 
-fn mp4(bytes: &[u8]) -> Option<Vec<u8>> {
-    let file = filmcraft_isobmff::open(bytes).ok()?;
-    let track = file.tracks.iter().find(|t| t.kind == filmcraft_isobmff::TrackKind::Audio)?;
+/// The track FilmCraft's MP4 source plays: the first audio track with samples, a sample
+/// description and a timescale, read from the whole file as it is (a fragmented movie's samples
+/// are in its fragments, not the `moov`).
+fn mp4(header: &[u8], file: Option<&dyn ByteReader>) -> Option<Vec<u8>> {
+    let mp4 = match file {
+        Some(f) => filmcraft_isobmff::open(Head(f, f.len())),
+        None => filmcraft_isobmff::open(header),
+    };
+    let mp4 = mp4.ok()?;
+    let playable =
+        |t: &&filmcraft_isobmff::Track| t.kind == filmcraft_isobmff::TrackKind::Audio && !t.samples.is_empty() && !t.entries.is_empty() && t.timescale > 0;
+    let track = mp4.tracks.iter().find(playable)?;
     match &track.entries.first()?.codec {
         filmcraft_isobmff::CodecConfig::Aac(a) => Some(a.asc.clone()),
         _ => None,
     }
 }
 
+/// The track FilmCraft's Matroska source plays: the first audio track with frames, found by
+/// indexing the clusters as that source does.
 fn matroska(file: &dyn ByteReader) -> Option<Vec<u8>> {
-    let opts = filmcraft_matroska::OpenOptions { index: false, ..Default::default() };
-    let mkv = filmcraft_matroska::open_with(Head(file, file.len()), &opts).ok()?;
-    match &mkv.tracks.iter().find(|t| t.kind == filmcraft_matroska::TrackKind::Audio)?.codec {
+    let mkv = filmcraft_matroska::open(Head(file, file.len())).ok()?;
+    match &mkv.tracks.iter().find(|t| t.kind == filmcraft_matroska::TrackKind::Audio && !t.samples.is_empty())?.codec {
         filmcraft_matroska::Codec::Aac { asc } => Some(asc.clone()),
         _ => None,
     }
@@ -63,6 +74,15 @@ impl Head<'_> {
             Some(end) if end <= self.1 => self.0.read_at(offset, buf),
             _ => Err(io::Error::new(io::ErrorKind::UnexpectedEof, "read past the end")),
         }
+    }
+}
+
+impl filmcraft_isobmff::ByteSource for Head<'_> {
+    fn len(&self) -> u64 {
+        self.1
+    }
+    fn read_at(&self, offset: u64, buf: &mut [u8]) -> io::Result<()> {
+        self.read(offset, buf)
     }
 }
 
