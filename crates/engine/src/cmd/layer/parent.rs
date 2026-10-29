@@ -1,4 +1,4 @@
-use super::*;
+use super::{Comp, EngineError, ItemId, KV, Layer, LayerId, PropGroup, Result, Session, Tick, Value, b_p, bad, layers_p, resolve_layer, unlocked};
 
 /// Re-express a layer in its new parent space without moving its anchor.
 pub(crate) struct ParentFix {
@@ -309,6 +309,8 @@ fn check_parent_chain(comp: &Comp, ids: &[LayerId], parent: Option<LayerId>, max
 
 pub(super) fn set_parent(s: &mut Session, p: &Value) -> Result<Value> {
     let (cid, ids) = layers_p(s, p)?;
+    // Locked layers keep their parent (several at once: the others are parented).
+    let ids = unlocked(s, cid, ids, "layer.setParent")?;
     let comp = s.project.comp(cid).ok_or(EngineError::NoComp)?;
     let parent = match p.get("parent") {
         None | Some(Value::Null) => None,
@@ -336,6 +338,7 @@ pub(super) fn set_parent(s: &mut Session, p: &Value) -> Result<Value> {
 
 #[cfg(test)]
 mod parent_chain_tests {
+    use super::super::json;
     use super::*;
     use std::sync::Arc;
 
