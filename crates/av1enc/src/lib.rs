@@ -192,8 +192,17 @@ impl RateState {
     }
 }
 
-/// A key frame after the first is coded again when its size is more than this many octaves off
-/// the target (19 %).
+/// Most passes on the first frame, and how far from the target (octaves, 3 %) its size may be
+/// before it is accepted.
+const RC_FIRST_PASSES: usize = 4;
+const RC_FIRST_TOLERANCE: f64 = 0.04;
+/// Quantizer index steps per halving of the size, for the first correction of the first frame
+/// (the starting quantizer comes from the bits per sample; the first pass shows how far off it
+/// is, and from there on the passes are placed by `next_probe_q`).
+const RC_FIRST_SLOPE: f64 = 30.0;
+/// The same for a key frame after the first: coded again when its size is more than 0.25 octaves
+/// (19 %) off the target.
+const RC_KEY_PASSES: usize = 3;
 const RC_KEY_TOLERANCE: f64 = 0.25;
 /// Octaves of frame size per octave of quantizer step assumed for the first correction of a frame.
 const RC_PROBE_SLOPE: f64 = 1.0;
@@ -576,20 +585,21 @@ impl Encoder {
         let target = (budget - rc.debt / RC_PAYBACK).clamp(budget * 0.35, budget * 2.0);
         let mut q = q_start;
         let mut best: Option<(Vec<u8>, RefFrame, f64, f64)> = None;
-        // The first frame is coded four times to find its quantizer. A later key frame is coded
-        // again (up to twice) if its size is far off, since a key frame is a large part of the
-        // budget of its group.
+        // The first frame is coded up to four times to find its quantizer (it fixes the
+        // quantizers of everything after it), a later key frame up to three times (it is a large
+        // part of the budget of its group). A frame is coded again only while its size is far from
+        // the target and an untried quantizer is left to try; other frames are coded once.
         let (max_passes, tolerance) = if first {
-            (4, 0.0)
+            (RC_FIRST_PASSES, RC_FIRST_TOLERANCE)
         } else if key {
-            (3, RC_KEY_TOLERANCE)
+            (RC_KEY_PASSES, RC_KEY_TOLERANCE)
         } else {
             (1, 0.0)
         };
         let mut tried: Vec<(u8, f64)> = Vec::new();
-        for pass in 0..max_passes {
+        for _ in 0..max_passes {
             let qi = q.round().clamp(1.0, 255.0) as u8;
-            if !first && tried.iter().any(|t| t.0 == qi) {
+            if tried.iter().any(|t| t.0 == qi) {
                 break;
             }
             let (obu, rf) = self.encode_frame(src, key, qi);
@@ -602,15 +612,14 @@ impl Encoder {
             if err.abs() <= tolerance {
                 break;
             }
-            if first {
-                if pass + 1 < max_passes {
-                    q = (q + 30.0 * err).clamp(1.0, 255.0);
-                }
+            let next = if first && tried.len() == 1 {
+                Some((q + RC_FIRST_SLOPE * err).clamp(1.0, 255.0))
             } else {
-                match next_probe_q(self.cfg.bit_depth, &tried) {
-                    Some(next) => q = next as f64,
-                    None => break,
-                }
+                next_probe_q(self.cfg.bit_depth, &tried).map(f64::from)
+            };
+            match next {
+                Some(next) => q = next,
+                None => break,
             }
         }
         // At least one pass ran, so `best` is set.
