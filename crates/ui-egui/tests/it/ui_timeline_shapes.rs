@@ -237,6 +237,33 @@ fn contents_names(h: &Harness<'_, EffectcraftApp>, l: u64) -> Vec<String> {
     h.state().session.active_comp().unwrap().layer(LayerId(l)).unwrap().props.sub("contents").unwrap().groups().map(|g| g.name.clone()).collect()
 }
 
+/// #959: every item in a shape layer's Contents has an eye switch, as in After Effects; it turns
+/// the item off (the renderer skips it), undoably. The group's Transform has none.
+#[test]
+fn shape_contents_items_have_eye_switches() {
+    let (mut h, a, _, rect) = two_shape_layers();
+    let enabled = |h: &Harness<'_, EffectcraftApp>| {
+        h.state().session.active_comp().unwrap().layer(LayerId(a)).unwrap().props.sub("contents").unwrap().find_group(rect).unwrap().enabled
+    };
+    let eye = format!("timeline.group.{rect}.eye");
+    assert!(enabled(&h));
+    click(&mut h, &eye);
+    assert!(!enabled(&h), "the eye turns Rectangle 1 off");
+    click(&mut h, &eye);
+    assert!(enabled(&h), "and on again");
+    click(&mut h, &eye);
+    h.state_mut().session.execute("edit.undo", json!({})).unwrap();
+    assert!(enabled(&h), "one undo step");
+    // Inside the group: its path and fill have eyes, its Transform doesn't.
+    h.state_mut().ui.timeline.open_groups.insert(rect);
+    h.run_steps(3);
+    let group = h.state().session.active_comp().unwrap().layer(LayerId(a)).unwrap().props.find_group(rect).unwrap().clone();
+    let transform = group.sub("transform").expect("a shape group has a Transform").uid;
+    assert!(h.state().auto.find(&format!("timeline.group.{transform}.eye")).is_none(), "no eye on Transform");
+    let items = group.sub("contents").expect("the group's items").groups().map(|g| g.uid).collect::<Vec<_>>();
+    assert!(!items.is_empty() && items.iter().all(|u| h.state().auto.find(&format!("timeline.group.{u}.eye")).is_some()), "every item has an eye");
+}
+
 #[test]
 fn ctrl_c_and_ctrl_v_copy_a_shape_group_into_another_shape_layer() {
     let (mut h, a, b, rect) = two_shape_layers();
