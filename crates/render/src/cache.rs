@@ -22,7 +22,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex};
 
 use effectcraft_effects::Buf;
-use effectcraft_project::{ItemKind, Layer, LayerSource, Node, PropGroup};
+use effectcraft_project::{FootageKind, ItemKind, Layer, LayerSource, Node, PropGroup};
 
 use crate::eval::EvalCtx;
 
@@ -168,15 +168,23 @@ impl LayerCache {
                 // Disk cache: a hit comes back into memory.
                 let (dc, dk) = self.disk_key(key)?;
                 let buf = dc.get_layer(dk)?;
-                self.insert_mem(key, buf.clone());
-                Some(buf)
+                Some(self.insert_mem(key, buf))
             }
         }
     }
 
-    pub fn insert(&self, key: u64, buf: Arc<Buf>) {
+    /// Keep `buf` under `key`, and return the buffer the cache holds for it: the one kept first
+    /// when another render of the same layer got there before (#1812: preview workers starting
+    /// together each rendered every layer; sharing the first buffer, the GPU compositor uploads
+    /// and packs it once instead of once per worker, which ran it out of memory). Renders don't
+    /// wait for each other: on the frame workers' shared thread pool a wait can end up under
+    /// the very work it waits for.
+    pub fn insert(&self, key: u64, buf: Arc<Buf>) -> Arc<Buf> {
         if self.gated() {
-            return;
+            return buf;
+        }
+        if let Some(kept) = self.inner.lock().ok().and_then(|g| g.map.get(&key).map(|e| e.buf.clone())) {
+            return kept;
         }
         let started = self.inner.lock().ok().and_then(|mut g| g.missed_at.remove(&key));
         if let Some((dc, dk)) = self.disk_key(key) {
@@ -185,20 +193,24 @@ impl LayerCache {
                 dc.put_layer(dk, &buf);
             }
         }
-        self.insert_mem(key, buf);
+        self.insert_mem(key, buf)
     }
 
-    fn insert_mem(&self, key: u64, buf: Arc<Buf>) {
+    /// See [`LayerCache::insert`]: the buffer kept under `key` (`buf`, unless one was kept first
+    /// or `buf` is too large to keep).
+    fn insert_mem(&self, key: u64, buf: Arc<Buf>) -> Arc<Buf> {
         let bytes = buf.img.data.len() * std::mem::size_of::<effectcraft_raster::Px>();
-        let Ok(mut g) = self.inner.lock() else { return };
+        let Ok(mut g) = self.inner.lock() else { return buf };
         if bytes > g.budget / 4 {
-            return;
+            return buf;
         }
         g.clock += 1;
         let now = g.clock;
-        if let Some(old) = g.map.insert(key, Entry { buf, bytes, last_use: now }) {
-            g.bytes -= old.bytes;
+        if let Some(e) = g.map.get_mut(&key) {
+            e.last_use = now;
+            return e.buf.clone();
         }
+        g.map.insert(key, Entry { buf: buf.clone(), bytes, last_use: now });
         g.bytes += bytes;
         if g.bytes > g.budget {
             // Evict least-recently used entries down to 3/4 of the budget.
@@ -214,6 +226,7 @@ impl LayerCache {
                 }
             }
         }
+        buf
     }
 
     /// The memory budget in bytes.
@@ -481,13 +494,14 @@ fn hash_values(h: &mut KeyHasher, ctx: &EvalCtx, layer: &Layer, g: &PropGroup) {
 }
 
 /// Cache key for the processed (source → masks → effects) buffer of `layer` at the context
-/// time, or `None` when the layer must not be cached (footage, precomps, cameras, adjustment
+/// time, or `None` when the layer must not be cached (movie footage, precomps, cameras, adjustment
 /// layers…).
 pub fn layer_key(ctx: &EvalCtx, layer: &Layer, scale: f64, draft: bool, blur: bool) -> Option<u64> {
-    // Time effects see property values at other times. Keyframes are part of the hashed
-    // structure (and the layer time is folded in), but expressions may read other layers at
-    // those times, which the key cannot see: such layers are not cached.
-    if reads_other_times(layer) && layer.props.children.iter().any(|c| matches!(c, Node::Group(g) if g.match_id != "transform" && has_expression(g))) {
+    // Time effects (and CC Particle World's Birth Rate history) see property values at other
+    // times. Keyframes are part of the hashed structure (and the layer time is folded in), but
+    // expressions may read other layers at those times, which the key cannot see: such layers
+    // are not cached.
+    if history_unkeyable(layer, None) {
         return None;
     }
     key_with(ctx, layer, scale, draft, blur, false)
@@ -497,7 +511,7 @@ pub fn layer_key(ctx: &EvalCtx, layer: &Layer, scale: f64, draft: bool, blur: bo
 /// effects (see `Renderer::layer_input`). Unlike [`layer_key`], footage layers are cached here
 /// (keyed by item and source time), since Time effects read many neighbouring frames.
 pub fn input_key(ctx: &EvalCtx, layer: &Layer, scale: f64, draft: bool, blur: bool, effects: usize) -> Option<u64> {
-    if layer.switches.adjustment {
+    if layer.switches.adjustment || history_unkeyable(layer, Some(effects)) {
         return None;
     }
     let base = key_any(ctx, layer, scale, draft, blur, true, Some(effects))?;
@@ -506,11 +520,51 @@ pub fn input_key(ctx: &EvalCtx, layer: &Layer, scale: f64, draft: bool, blur: bo
     Some(h.finish())
 }
 
-/// Does the layer run an effect that reads the layer at other times (Echo, Timewarp…)?
-fn reads_other_times(layer: &Layer) -> bool {
+/// Does the layer run (among its first `effects` effects, all when `None`) an effect that reads
+/// the layer at other times (Echo, Timewarp…) or its own parameters' history (CC Particle
+/// World's Birth Rate, #1373)?
+fn reads_other_times(layer: &Layer, effects: Option<usize>) -> bool {
     layer.switches.effects
         && layer.effects().is_some_and(|fx| {
-            fx.groups().any(|g| g.enabled && matches!(&g.kind, effectcraft_project::GroupKind::Effect { effect } if effect.starts_with("ec.time.")))
+            fx.groups().take(effects.unwrap_or(usize::MAX)).any(|g| {
+                g.enabled
+                    && matches!(&g.kind, effectcraft_project::GroupKind::Effect { effect }
+                        if effect.starts_with("ec.time.") || effectcraft_effects::reads_param_history(effect))
+            })
+        })
+}
+
+/// The layer reads values at other times (see [`reads_other_times`]) and has expressions
+/// (outside Transform), whose results at those times the key can't see.
+fn history_unkeyable(layer: &Layer, effects: Option<usize>) -> bool {
+    reads_other_times(layer, effects) && layer.props.children.iter().any(|c| matches!(c, Node::Group(g) if g.match_id != "transform" && has_expression(g)))
+}
+
+/// A still image (no proxy): its layer is cached like a text or shape layer, so the GPU
+/// compositor uploads it once, not every frame (#1812: four 21120 px plates re-uploaded by every
+/// preview worker ran the GPU out of memory). Movies and sequences stay in the media pool only.
+fn still_footage(ctx: &EvalCtx, item: effectcraft_project::ItemId) -> bool {
+    ctx.project.item(item).is_some_and(|it| it.proxy.is_none() && matches!(&it.kind, ItemKind::Footage(f) if f.kind == FootageKind::Still))
+}
+
+/// Does the layer have an animated mask that motion blur may draw at other times (Layer ▸ Mask ▸
+/// Motion Blur On, or Same As Layer with the layer blurred)?
+fn mask_motion_blur(ctx: &EvalCtx, layer: &Layer, blur: bool) -> bool {
+    use effectcraft_project::{GroupKind, MaskMotionBlur};
+    fn animated(g: &PropGroup) -> bool {
+        g.children.iter().any(|c| match c {
+            Node::Prop(p) => !p.keys.is_empty() || p.has_expression(),
+            Node::Group(sub) => animated(sub),
+        })
+    }
+    ctx.comp.enable_motion_blur
+        && layer.masks().is_some_and(|m| {
+            m.groups().any(|g| match g.kind {
+                GroupKind::Mask { motion_blur, .. } => {
+                    (motion_blur == MaskMotionBlur::On || (motion_blur == MaskMotionBlur::SameAsLayer && blur)) && animated(g)
+                }
+                _ => false,
+            })
         })
 }
 
@@ -539,7 +593,6 @@ fn key_with(ctx: &EvalCtx, layer: &Layer, scale: f64, draft: bool, blur: bool, f
 
 /// `blur`: the layer is motion blurred in this render (`Renderer::mb_on`). `effects`: key only
 /// the first that many effects (a layer's input, see [`input_key`]).
-#[allow(clippy::too_many_arguments)]
 fn key_any(ctx: &EvalCtx, layer: &Layer, scale: f64, draft: bool, blur: bool, footage: bool, effects: Option<usize>) -> Option<u64> {
     let mut h = KeyHasher(0xcbf2_9ce4_8422_2325);
     ctx.comp.frame_rate.as_f64().to_bits().hash(&mut h);
@@ -552,14 +605,17 @@ fn key_any(ctx: &EvalCtx, layer: &Layer, scale: f64, draft: bool, blur: bool, fo
             hash_debug(&mut h, s);
         }
         LayerSource::Text | LayerSource::Shape => {}
-        LayerSource::Footage { item } if footage => {
+        LayerSource::Footage { item } if footage || still_footage(ctx, *item) => {
             let it = ctx.project.item(*item)?;
             let ItemKind::Footage(f) = &it.kind else { return None };
             hash_debug(&mut h, f);
             // A proxy (and its Use Proxy switch) changes the pixels.
             hash_debug(&mut h, &it.proxy);
             item.hash(&mut h);
-            ctx.source_time(layer).0.hash(&mut h);
+            // A still is the same at every time (unless a proxy, which may be a movie, stands in).
+            if f.kind != FootageKind::Still || it.proxy.is_some() {
+                ctx.source_time(layer).0.hash(&mut h);
+            }
             // Frame blending mixes neighbouring source frames.
             ctx.comp.enable_frame_blending.hash(&mut h);
         }
@@ -625,6 +681,11 @@ fn key_any(ctx: &EvalCtx, layer: &Layer, scale: f64, draft: bool, blur: bool, fo
             effectcraft_effects::paint::cache_key(g, lt).0.hash(&mut h);
         }
     }
+    // Mask motion blur draws animated masks at the shutter's other times too: their values at
+    // this time don't tell two frames apart (a hold before a move).
+    if mask_motion_blur(ctx, layer, blur) {
+        layer.layer_time(ctx.time).0.hash(&mut h);
+    }
     if time_dependent(layer, effects != Some(0)) {
         layer.layer_time(ctx.time).0.hash(&mut h);
         // Effects also see the layer's time mapping.
@@ -667,4 +728,24 @@ pub fn derive(key: u64, i: u64) -> u64 {
     let mut h = KeyHasher(key);
     i.hash(&mut h);
     h.finish()
+}
+
+#[cfg(test)]
+mod shared_insert_tests {
+    use std::sync::Arc;
+
+    use super::LayerCache;
+    use effectcraft_effects::Buf;
+    use effectcraft_raster::Image;
+
+    /// Two renders of one layer kept under one key: both use the buffer kept first.
+    #[test]
+    fn the_buffer_kept_first_is_shared() {
+        let cache = LayerCache::default();
+        let buf = || Arc::new(Buf { img: Image::new(4, 4), offset: [0.0; 2], scale: 1.0 });
+        let (a, b) = (buf(), buf());
+        assert!(Arc::ptr_eq(&cache.insert(3, a.clone()), &a));
+        assert!(Arc::ptr_eq(&cache.insert(3, b), &a), "the later render gets the first buffer");
+        assert!(Arc::ptr_eq(&cache.get(3).unwrap(), &a));
+    }
 }

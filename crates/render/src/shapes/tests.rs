@@ -76,6 +76,24 @@ fn merge_add_feeds_fill_below_and_drops_paint_above() {
     assert!((coverage(&img) - 80.0 * 40.0).abs() < 20.0, "{}", coverage(&img));
 }
 
+/// #1174: Adding Merge Paths to a shape layer's Contents, after the group that holds the
+/// shape and its paint, erased the render. The merge drops paints above it *in its group* —
+/// not paint that belongs to a group above it.
+#[test]
+fn merge_paths_below_a_group_keeps_the_group_paint() {
+    for mode in [0u32, 1] {
+        let (p, cid) = shape_comp(|ids| {
+            let rect = build::shape_rect(ids, [40.0, 40.0], [0.0, 0.0], 0.0);
+            let fill = build::shape_fill(ids, RED);
+            vec![build::shape_group(ids, "Group 1", vec![rect, fill]), op(ids, "merge", &[("mode", Value::Enum(mode))])]
+        });
+        let img = frame(&p, cid);
+        let c = img.get(100, 50);
+        assert!(c[0] > 0.99 && c[1] < 0.01 && c[3] > 0.99, "mode {mode}: group rectangle must still render, got {c:?}");
+        assert!((coverage(&img) - 40.0 * 40.0).abs() < 20.0, "mode {mode}: {}", coverage(&img));
+    }
+}
+
 #[test]
 fn merge_subtract_and_intersect() {
     let sub = |mode: u32| {
@@ -130,6 +148,28 @@ fn operators_below_repeater_act_on_copies() {
         assert!(alpha(&img, cx + 11, 50) > 0.99, "offset applied to copy at {cx}");
     }
     assert!((coverage(&img) - 3.0 * 24.0 * 24.0).abs() < 30.0, "{}", coverage(&img));
+}
+
+/// After Effects 2026 (case 709): a 400 × 200 rectangle with Fill, then a Repeater of 3 copies
+/// (Position 150, 60, Rotation 10, Scale 90 / 80, End Opacity 40) gives the copies 100 %, 80 %
+/// and 60 % opacity (EffectCraft gave 70 % and 40 %). The points are comp pixels where AE shows
+/// only the last copy, only the middle one, and both.
+#[test]
+fn repeater_copy_opacity_matches_after_effects() {
+    let (p, cid) = shape_comp_sized(1920, 1080, |ids| {
+        let mut rep = build::shape_repeater(ids, 3.0, [150.0, 60.0]);
+        set(&mut rep, "transform/rotation", Value::Scalar(10.0));
+        set(&mut rep, "transform/scale", Value::Vec2([90.0, 80.0]));
+        set(&mut rep, "transform/endOpacity", Value::Scalar(40.0));
+        let items = vec![build::shape_rect(ids, [400.0, 200.0], [0.0, 0.0], 0.0), build::shape_fill(ids, [0.0, 1.0, 0.0, 1.0]), rep];
+        vec![build::shape_group(ids, "Group 1", items)]
+    });
+    let img = frame(&p, cid);
+    // AE's green over its red layer, 153, 153, 204, 235 and 255 of 255.
+    for (x, y, want) in [(1360, 700, 0.6), (1300, 620, 0.6), (1220, 560, 0.8), (1180, 630, 0.92), (1100, 600, 1.0)] {
+        let a = alpha(&img, x, y);
+        assert!((a - want).abs() < 2.0 / 255.0, "({x}, {y}): {a} vs AE {want}");
+    }
 }
 
 #[test]
@@ -238,6 +278,24 @@ fn round_corners_clip_corner_pixels() {
     assert!(alpha(&img, 81, 31) < 0.01, "corner rounded off");
     assert!(alpha(&img, 100, 50) > 0.99);
     assert!((coverage(&img) - std::f32::consts::PI * 400.0).abs() < 15.0, "{}", coverage(&img));
+}
+
+/// Wiggle Paths' Spatial Phase changes the drawn shape; a whole turn draws it as at 0°.
+#[test]
+fn wiggle_paths_spatial_phase_renders() {
+    let render = |phase: f64| {
+        let (p, cid) = shape_comp(|ids| {
+            vec![
+                build::shape_ellipse(ids, [60.0, 60.0], [0.0, 0.0]),
+                op(ids, "wiggle", &[("size", Value::Scalar(8.0)), ("correlation", Value::Scalar(0.0)), ("spatialPhase", Value::Scalar(phase))]),
+                build::shape_fill(ids, RED),
+            ]
+        });
+        render_frame(&p, cid, Tick::from_seconds_f64(0.5), 1.0).data
+    };
+    let zero = render(0.0);
+    assert!(render(90.0) != zero, "Spatial Phase 90° draws the shape of 0°");
+    assert!(render(360.0) == zero, "Spatial Phase 360° draws another shape than 0°");
 }
 
 #[test]
@@ -423,4 +481,41 @@ fn radial_gradient_highlight_moves_the_focal_point() {
     assert!(b.get(100, 100)[0] < 0.8, "{:?}", b.get(100, 100));
     // The outer circle is unchanged: points just outside it are black in both.
     assert!(a.get(100, 182)[0] < 0.03 && b.get(100, 182)[0] < 0.03 && b.get(100, 17)[0] < 0.03);
+}
+
+/// The layer-space buffer `super::render` draws the comp's only shape layer into.
+fn shape_buf(p: &Project, cid: ItemId) -> effectcraft_effects::Buf {
+    let comp = p.comp(cid).unwrap();
+    let ctx = crate::eval::EvalCtx::new(p, cid, comp, Tick::ZERO);
+    let layer = &comp.layers[0];
+    super::render(&ctx, layer, layer.props.sub("contents").unwrap(), 1.0)
+}
+
+#[test]
+fn straight_stroke_buffer_is_not_padded_by_the_miter_limit() {
+    // A 1080 px wide vertical wipe (a track matte): no joins, so the buffer is the line plus half
+    // the width, not 4× (Miter Limit 4) the width on every side (4326×6366, ~440 MB per frame).
+    let (p, cid) = shape_comp_sized(1080, 1920, |ids| vec![line_path(ids, [0.0, 1020.0], [0.0, -1020.0]), build::shape_stroke(ids, RED, 1080.0)]);
+    let b = shape_buf(&p, cid);
+    assert!(b.img.width <= 1090 && b.img.height <= 3130, "{}×{}", b.img.width, b.img.height);
+}
+
+#[test]
+fn miter_corner_still_fits_its_buffer() {
+    // A sharp V with a 20 px miter-joined stroke: the miter tip reaches well past half the width.
+    let (p, cid) = shape_comp(|ids| {
+        let sp = effectcraft_keyframe::ShapePath {
+            vertices: vec![[-40.0, -30.0], [0.0, 20.0], [40.0, -30.0]],
+            in_tangents: vec![[0.0; 2]; 3],
+            out_tangents: vec![[0.0; 2]; 3],
+            closed: false,
+            feather: Vec::new(),
+        };
+        vec![build::shape_path(ids, sp), build::shape_stroke(ids, RED, 20.0)]
+    });
+    // The miter tip of the V points down from (100, 70): its pixels are drawn, not clipped.
+    let img = frame(&p, cid);
+    assert!(alpha(&img, 100, 80) > 0.9, "{}", alpha(&img, 100, 80));
+    let b = shape_buf(&p, cid);
+    assert!(b.img.height as f64 >= 50.0 + 20.0 * 4.0 * 0.5, "{}", b.img.height);
 }

@@ -848,7 +848,9 @@ impl T2<'_> {
                 }
                 11 => return,
                 14 => {
-                    self.take_width(false);
+                    // A width precedes the operands when the count is odd (5 with seac, 1 alone);
+                    // the no-width counts (0 and 4) are even, like the stems' and rmoveto's.
+                    self.take_width(true);
                     if self.stack.len() >= 4 {
                         let n = self.stack.len();
                         let s = &self.stack[n - 4..];
@@ -1144,5 +1146,47 @@ mod tests {
         out.extend(cs);
         let cff = Cff::parse(&out).expect("the damaged Private DICT is skipped, the font parses");
         assert_eq!(cff.glyph_count(), 1);
+    }
+
+    /// A four-operand `endchar` (`adx ady bchar achar`, no width) is a seac like the Type 1
+    /// interpreter's: `endchar` must not eat `adx` as a width, and a five-operand one reads its
+    /// width first.
+    #[test]
+    fn endchar_reads_its_width_by_operand_count() {
+        let enc = |v: i32| -> Vec<u8> {
+            if (-107..=107).contains(&v) {
+                vec![(v + 139) as u8]
+            } else {
+                let mut o = vec![28];
+                o.extend_from_slice(&(v as i16).to_be_bytes());
+                o
+            }
+        };
+        // The base glyph: a square drawn without a width (`500 500 -500 hlineto endchar`).
+        let mut square = vec![];
+        for v in [500, 500, -500] {
+            square.extend(enc(v));
+        }
+        square.extend([6, 14]);
+        // Four operands: `adx ady bchar achar endchar`, no width to take.
+        let mut seac = vec![];
+        for v in [10, 20, 65, 65] {
+            seac.extend(enc(v));
+        }
+        seac.push(14);
+        let font = write_test_cff(&[(".notdef", vec![14]), ("A", square.clone()), ("Aacute", seac)]);
+        let cff = Cff::parse(&font).unwrap();
+        let (p, _) = cff.outline(cff.gid_by_name("Aacute").unwrap()).unwrap();
+        assert!(!p.elements().is_empty(), "the base glyph of the seac is part of the outline");
+        // Five operands: the first is the width, the last four the seac.
+        let mut wide = vec![];
+        for v in [600, 0, 0, 65, 65] {
+            wide.extend(enc(v));
+        }
+        wide.push(14);
+        let font = write_test_cff(&[(".notdef", vec![14]), ("A", square), ("Awide", wide)]);
+        let cff = Cff::parse(&font).unwrap();
+        let (_, w) = cff.outline(cff.gid_by_name("Awide").unwrap()).unwrap();
+        assert_eq!(w, 600.0);
     }
 }

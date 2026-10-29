@@ -18,7 +18,7 @@ var selectorValue = [100, 100, 100];
 
 // Request ops (must match runtime.rs).
 var __COMP = 0, __COMPNAME = 1, __LAYER = 2, __LINFO = 3, __CHILD = 4, __PINFO = 5, __VALUE = 6, __XFORM = 7, __RECT = 8, __MARKERS = 9, __DOC = 10;
-var __FOOT = 11, __FDATA = 12, __SAMPLE = 13, __PROJ = 14, __SOURCE = 15;
+var __FOOT = 11, __FDATA = 12, __SAMPLE = 13, __PROJ = 14, __SOURCE = 15, __ANCESTOR = 16;
 
 function __begin(t, v, c, l, path, uid, idx, fd, ti, tt, sv) {
   time = t;
@@ -261,7 +261,10 @@ function noise(x) {
 function timeToFrames(t, fps, isDuration) {
   if (t === undefined) t = time + thisComp.displayStartTime;
   if (fps === undefined) fps = 1 / __S.fd;
-  return Math.floor(t * fps + 1e-6);
+  var frames = t * fps;
+  // The 1e-6 keeps a whole number of frames that floating point overshoots (31/24 - 5/24) whole.
+  if (isDuration && frames !== 0) return frames < 0 ? Math.floor(frames + 1e-6) : Math.ceil(frames - 1e-6);
+  return Math.floor(frames + 1e-6);
 }
 
 function framesToTime(frames, fps) {
@@ -424,6 +427,18 @@ function __child(c, l, group, key) {
   return info[1] ? __mkGroup(c, l, info) : __mkProp(c, l, info[0]);
 }
 
+// `propertyGroup(countUp)` of the property or group at `path`: the group `countUp` levels above
+// it (default 1), the layer at the top (#1619).
+function __ancestor(c, l, path, countUp) {
+  var n = countUp === undefined ? 1 : __v(countUp);
+  if (typeof n !== 'number' || !(n >= 1) || !isFinite(n)) __err('propertyGroup(' + countUp + '): the count must be a number of 1 or more');
+  n = Math.floor(n);
+  var info = __h(__ANCESTOR, c, l, path, n);
+  if (info === 'layer') return new Layer(c, l);
+  if (info === null) __err('propertyGroup(' + n + ') goes above the layer');
+  return __mkGroup(c, l, info);
+}
+
 // Comp ------------------------------------------------------------------------------------------
 
 function Comp(c) { this.__c = c; this.__i = null; }
@@ -446,7 +461,7 @@ Comp.prototype = {
       var l = this.layer(i);
       if (l.__info[10] === 'Camera' && l.active) return l;
     }
-    __err('Composition "' + this.name + '" has no active camera');
+    return __err('Composition "' + this.name + '" has no active camera');
   },
   layer: function (a, rel) {
     if (a !== null && typeof a === 'object' && a.__isLayer) return this.layer(a.index + (rel || 0));
@@ -642,6 +657,8 @@ var __GroupProto = {
   get name() { return this.__info[2]; },
   get matchName() { return this.__info[3]; },
   get numProperties() { return this.__info[4]; },
+  get propertyIndex() { return this.__info[5]; },
+  propertyGroup: function (n) { return __ancestor(this.__c, this.__l, this.__p, n); },
   get active() { return true; },
   toString: function () { return '[object PropertyGroup]'; },
 };
@@ -653,14 +670,17 @@ var __groupHandler = {
   },
 };
 
-function __mkGroup(c, l, info) {
-  var f = function (k) { return f.__get(k); };
-  delete f.name;
-  delete f.length;
-  Object.setPrototypeOf(f, __GroupProto);
-  f.__c = c; f.__l = l; f.__p = info[0]; f.__info = info;
-  return new Proxy(f, __groupHandler);
-}
+// `Proxy` is private to the object model (see "Stack safety" at the end).
+var __mkGroup = (function (P) {
+  return function (c, l, info) {
+    var f = function (k) { return f.__get(k); };
+    delete f.name;
+    delete f.length;
+    Object.setPrototypeOf(f, __GroupProto);
+    f.__c = c; f.__l = l; f.__p = info[0]; f.__info = info;
+    return new P(f, __groupHandler);
+  };
+})(Proxy);
 
 // Properties ------------------------------------------------------------------------------------
 
@@ -727,6 +747,7 @@ Prop.prototype = {
   get numKeys() { return this.__info[4].length; },
   get propertyIndex() { return this.__info[7]; },
   get matchName() { return this.__info[8]; },
+  propertyGroup: function (n) { return __ancestor(this.__c, this.__l, this.__p, n); },
   __wrap: function (v) {
     var kind = this.__info[2];
     if (kind === 'layer') return v === null ? null : new Layer(this.__c, v);
@@ -822,21 +843,23 @@ var __propHandler = {
     // A layer-valued property (a Layer Control's Layer) is named as its layer (#809).
     if (k === 'name' && t.__info[2] === 'layer') {
       var lv = t.value;
-      if (lv !== null && lv !== undefined && lv.__isLayer) return lv.name;
+      if (lv?.__isLayer) return lv.name;
     }
     if (k in t) return t[k];
     var v = t.value;
     if (v === null || v === undefined) return undefined;
     var x = v[k];
     // Property groups are callable proxies: hand them over as they are, not bound like methods (#809).
-    if (x !== null && x !== undefined && x.__isGroup) return x;
+    if (x?.__isGroup) return x;
     return typeof x === 'function' ? x.bind(v) : x;
   },
 };
 
-function __mkProp(c, l, path) {
-  return new Proxy(new Prop(c, l, path), __propHandler);
-}
+var __mkProp = (function (P) {
+  return function (c, l, path) {
+    return new P(new Prop(c, l, path), __propHandler);
+  };
+})(Proxy);
 
 // Text styles (the Source Text style API) ------------------------------------------------------
 // A TextStyle is the source document (as JSON from the host), the character index it reads its
@@ -886,8 +909,8 @@ __TextStyle.prototype = {
   },
   get text() {
     var t = this.__d.text;
-    for (var k = 0; k < this.__ops.length; k++) {
-      var o = this.__ops[k];
+    for (const elem of this.__ops) {
+      var o = elem;
       if (o[0] !== 'text') continue;
       if (o[2] < 0) t = String(o[1]);
       else t = t.slice(0, o[2]) + String(o[1]) + (o[3] < 0 ? '' : t.slice(o[2] + o[3]));
@@ -1051,3 +1074,101 @@ function velocityAtTime(t) { return thisProperty.velocityAtTime(t); }
 function speedAtTime(t) { return thisProperty.speedAtTime(t); }
 function key(n) { return thisProperty.key(n); }
 function nearestKey(t) { return thisProperty.nearestKey(t); }
+
+// ---------------------------------------------------------------------------------------------
+// Stack safety (#2124, #2125). A stack overflow aborts the whole app, so nothing a script does
+// may nest native code without bound. The expression text is checked for nesting before it is
+// compiled; source handed to `eval` and the function constructors at run time is checked by
+// `__nest`. The natives that walk nested values recursively (`join`, which `toString` and string
+// conversion use, `toLocaleString`, `JSON.stringify`, `flat`) call `__stack` once per level,
+// which throws once the run has used its share of the stack. `Proxy` (chains of proxies nest
+// without any script frame) and `Reflect` are not available to expressions.
+(function () {
+  var nest = __nest, stack = __stack, apply = Reflect.apply, construct = Reflect.construct;
+  var define = Object.defineProperty, describe = Object.getOwnPropertyDescriptor, proto = Object.getPrototypeOf;
+  // Replace `obj[name]` keeping its attributes.
+  function replace(obj, name, f) {
+    var d = describe(obj, name);
+    define(obj, name, { value: f, writable: d.writable, enumerable: d.enumerable, configurable: true });
+  }
+  function guard(obj, name) {
+    var f = obj[name];
+    replace(obj, name, function () { stack(); return apply(f, this, arguments); });
+  }
+
+  // Indirect on purpose: a wrapper can't make a direct eval, so `eval` sees globals and `var`s
+  // but not `let`/`const` locals of the expression. Keeping direct eval would mean leaving it
+  // unchecked; expressions practically never need their locals inside eval.
+  var evalJs = eval;
+  eval = function (x) {
+    if (typeof x === 'string') {
+      stack();
+      nest(x);
+    }
+    return evalJs(x);
+  };
+  // `Function` and the generator / async variants (reachable as `(function* () {}).constructor`).
+  function dynamic(F) {
+    var w = function () {
+      var args = [];
+      for (var i = 0; i < arguments.length; i++) args.push(String(arguments[i]));
+      stack();
+      nest(args.slice(0, -1).join(','));
+      nest(args.length ? args[args.length - 1] : '');
+      return construct(F, args);
+    };
+    define(w, 'name', { value: F.name, configurable: true });
+    w.prototype = F.prototype;
+    replace(F.prototype, 'constructor', w);
+    return w;
+  }
+  Function = dynamic(Function);
+  dynamic(proto(function* () {}).constructor);
+  dynamic(proto(async function () {}).constructor);
+  dynamic(proto(async function* () {}).constructor);
+
+  guard(Array.prototype, 'join');
+  guard(Array.prototype, 'toLocaleString');
+  var flat = Array.prototype.flat;
+  replace(Array.prototype, 'flat', function (depth) {
+    stack();
+    var d = depth === undefined ? 1 : Number(depth);
+    return apply(flat, this, [d > 64 ? 64 : d]);
+  });
+
+  // A replacer function sees every value before it is serialized: the per-level check. An array
+  // replacer (a list of keys) becomes one that copies each object's listed keys, in list order.
+  // Each source object gets one copy per call, so a cycle in the source is a cycle of copies and
+  // the native check reports it (TypeError); an object shared without a cycle is still fine.
+  var stringify = JSON.stringify, MapJs = Map;
+  replace(JSON, 'stringify', function (value, replacer, space) {
+    var fn = typeof replacer === 'function' ? replacer : null;
+    var keys = null, copies = new MapJs();
+    if (Array.isArray(replacer)) {
+      keys = [];
+      for (var i = 0; i < replacer.length; i++) {
+        var k = replacer[i];
+        if (typeof k === 'number' || k instanceof Number || k instanceof String) k = String(k);
+        if (typeof k === 'string' && keys.indexOf(k) < 0) keys.push(k);
+      }
+    }
+    return apply(stringify, JSON, [value, function (key, v) {
+      stack();
+      if (fn !== null) v = apply(fn, this, [key, v]);
+      if (keys !== null && v !== null && typeof v === 'object' && !Array.isArray(v) &&
+          !(v instanceof Number || v instanceof String || v instanceof Boolean)) {
+        var o = copies.get(v);
+        if (o === undefined) {
+          o = {};
+          for (var j = 0; j < keys.length; j++) if (keys[j] in v) o[keys[j]] = v[keys[j]];
+          copies.set(v, o);
+        }
+        v = o;
+      }
+      return v;
+    }, space]);
+  });
+
+  delete globalThis.Proxy;
+  delete globalThis.Reflect;
+})();

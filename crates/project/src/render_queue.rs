@@ -518,6 +518,9 @@ pub enum OutputFormat {
     TiffSequence,
     /// OpenEXR sequence (32-bit float, linear light).
     ExrSequence,
+    /// Targa sequence: uncompressed 24-bit RGB or 32-bit RGB + Alpha (8 alpha bits), top-left
+    /// origin.
+    TargaSequence,
     /// Animated GIF.
     Gif,
     /// WebM: VP9 video (alpha with RGB + Alpha) + Opus audio.
@@ -537,7 +540,7 @@ pub enum OutputFormat {
 }
 
 impl OutputFormat {
-    pub const ALL: [OutputFormat; 13] = [
+    pub const ALL: [OutputFormat; 14] = [
         OutputFormat::H264,
         OutputFormat::Hevc,
         OutputFormat::Av1,
@@ -548,6 +551,7 @@ impl OutputFormat {
         OutputFormat::JpegSequence,
         OutputFormat::TiffSequence,
         OutputFormat::ExrSequence,
+        OutputFormat::TargaSequence,
         OutputFormat::Gif,
         OutputFormat::Wav,
         OutputFormat::Aiff,
@@ -561,6 +565,7 @@ impl OutputFormat {
             OutputFormat::JpegSequence => "JPEG Sequence",
             OutputFormat::TiffSequence => "TIFF Sequence",
             OutputFormat::ExrSequence => "OpenEXR Sequence",
+            OutputFormat::TargaSequence => "Targa Sequence",
             OutputFormat::Gif => "Animated GIF",
             OutputFormat::WebM => "WebM (VP9 + Opus)",
             OutputFormat::Wav => "WAV",
@@ -578,6 +583,7 @@ impl OutputFormat {
             OutputFormat::JpegSequence => "jpg",
             OutputFormat::TiffSequence => "tif",
             OutputFormat::ExrSequence => "exr",
+            OutputFormat::TargaSequence => "tga",
             OutputFormat::Gif => "gif",
             OutputFormat::WebM => "webm",
             OutputFormat::Wav => "wav",
@@ -586,7 +592,10 @@ impl OutputFormat {
         }
     }
     pub fn is_sequence(self) -> bool {
-        matches!(self, OutputFormat::PngSequence | OutputFormat::JpegSequence | OutputFormat::TiffSequence | OutputFormat::ExrSequence)
+        matches!(
+            self,
+            OutputFormat::PngSequence | OutputFormat::JpegSequence | OutputFormat::TiffSequence | OutputFormat::ExrSequence | OutputFormat::TargaSequence
+        )
     }
     pub fn is_movie(self) -> bool {
         matches!(self, OutputFormat::H264 | OutputFormat::ProRes | OutputFormat::Uncompressed | OutputFormat::WebM | OutputFormat::Hevc | OutputFormat::Av1)
@@ -612,7 +621,7 @@ impl OutputFormat {
         if matches!(self, OutputFormat::H264 | OutputFormat::Hevc) { (even(w), even(h)) } else { (w, h) }
     }
     /// Parse a format name: `h264`, `mp4`, `prores`, `mov`, `uncompressed`, `png`, `jpeg`/`jpg`,
-    /// `tiff`/`tif`, `exr`, `gif`, or a label.
+    /// `tiff`/`tif`, `exr`, `tga`/`targa`, `gif`, or a label.
     pub fn from_name(s: &str) -> Option<OutputFormat> {
         let n = s.trim().to_ascii_lowercase().replace([' ', '.', '-', '_'], "");
         Some(match n.as_str() {
@@ -625,6 +634,7 @@ impl OutputFormat {
             "jpg" | "jpeg" | "jpegsequence" => OutputFormat::JpegSequence,
             "tif" | "tiff" | "tiffsequence" => OutputFormat::TiffSequence,
             "exr" | "openexr" | "openexrsequence" => OutputFormat::ExrSequence,
+            "tga" | "targa" | "targasequence" => OutputFormat::TargaSequence,
             "gif" | "animatedgif" => OutputFormat::Gif,
             "webm" | "vp9" | "webmvp9opus" => OutputFormat::WebM,
             "wav" | "wave" => OutputFormat::Wav,
@@ -1709,6 +1719,28 @@ mod tests {
         m.channels = Channels::Rgba;
         m.set_format(f);
         assert_eq!((m.output.as_str(), m.channels), ("/out/Comp 1.mov", Channels::Rgba));
+        let json = serde_json::to_string(&m).unwrap();
+        assert_eq!(serde_json::from_str::<OutputModule>(&json).unwrap().format, f);
+    }
+
+    #[test]
+    fn targa_sequence_format() {
+        let f = OutputFormat::from_name("tga").unwrap();
+        assert_eq!(f, OutputFormat::TargaSequence);
+        assert_eq!(OutputFormat::from_name(&format!("{f:?}")), Some(f));
+        assert_eq!(OutputFormat::from_name("Targa"), Some(f));
+        assert_eq!(OutputFormat::from_name("Targa Sequence"), Some(f));
+        assert_eq!(OutputFormat::from_path("/out/shot_00001.TGA"), Some(f));
+        assert!(OutputFormat::ALL.contains(&f));
+        assert!(f.is_sequence() && f.supports_alpha() && !f.supports_audio() && !f.is_movie());
+        assert_eq!((f.label(), f.extension()), ("Targa Sequence", "tga"));
+        assert_eq!(f.coded_size(3, 5), (3, 5));
+        // A movie name becomes a numbered sequence; RGB + Alpha survives the switch.
+        let mut m = OutputModule::for_format(OutputFormat::ProRes);
+        m.output = "/out/Comp 1.mov".into();
+        m.channels = Channels::Rgba;
+        m.set_format(f);
+        assert_eq!((m.output.as_str(), m.channels), ("/out/Comp 1_[#####].tga", Channels::Rgba));
         let json = serde_json::to_string(&m).unwrap();
         assert_eq!(serde_json::from_str::<OutputModule>(&json).unwrap().format, f);
     }
