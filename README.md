@@ -84,9 +84,10 @@ a few places where it matters to us:
   without a plugin.
 - **A project file you can read.** Projects are versioned JSON (`.ecproj`), so they diff cleanly
   in version control.
-- **Everything is scriptable.** Every menu item, timeline drag and property edit goes through one
-  command registry, so the same actions are reachable from a command line, a JSON control
-  channel and an MCP server for agents.
+- **Everything is scriptable.** Menu actions, timeline edits and property changes are exposed as
+  commands. Engine commands are available through the CLI, JSON control channel and MCP;
+  UI-only commands use the frontend dispatcher and can be invoked through the control channel
+  or an attached MCP bridge.
 - **No FFmpeg.** Video and audio decoding and encoding are pure Rust: FilmCraft's codecs and
   EffectCraft's own VP9, AV1, HEVC and Opus encoders.
 
