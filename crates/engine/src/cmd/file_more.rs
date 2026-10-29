@@ -884,12 +884,28 @@ fn replace_footage(s: &mut Session, p: &Value) -> Result<Value> {
         Some(ItemKind::Footage(f)) if f.kind == FootageKind::Sequence => (true, true, f.alphabetical),
         _ => (false, false, false),
     };
+    // Only `sequence` decides whether the item keeps its kind; `alphabetical` is a sequence
+    // modifier, not a request to make one.
+    let inherited = b_p(p, "sequence").is_none();
     let mut opts = SequenceOptions::from_params(p);
-    if b_p(p, "sequence").is_none() && b_p(p, "alphabetical").is_none() {
-        (opts.sequence, opts.folders, opts.alphabetical) = previous;
+    if inherited {
+        (opts.sequence, opts.folders) = (previous.0, previous.1);
+        if previous.0 && b_p(p, "alphabetical").is_none() {
+            opts.alphabetical = previous.2;
+        }
     }
     let src = crate::sequence::source_of(s.services.as_ref(), &path, opts);
-    let f = crate::sequence::probe(importer.as_ref(), &src, s.sequence_rate()).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
+    let mut f = crate::sequence::probe(importer.as_ref(), &src, s.sequence_rate()).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
+    // A single-file source comes back as a still; an inherited sequence kind keeps it a
+    // one-frame sequence, so a later default replacement still brings numbered runs (#2073).
+    if inherited && previous.0 && matches!(src, crate::sequence::Source::File(_)) && f.kind == FootageKind::Still {
+        f.kind = FootageKind::Sequence;
+        f.sequence = vec![f.path.clone()];
+        f.alphabetical = opts.alphabetical;
+        f.frame_rate = s.sequence_rate();
+        f.native_rate = None;
+        f.sync_sequence_duration();
+    }
     let name = src.name();
     // Replacing a missing file relinks the other missing files that moved with it (as After Effects
     // does when you locate one).

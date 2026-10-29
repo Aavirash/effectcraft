@@ -194,10 +194,34 @@ fn replace_footage_keeps_a_still_a_still() {
     s.execute("file.replaceFootage", json!({"path": at(&dir, "shot_0004.png"), "sequence": null})).unwrap();
     let (name, f) = footage(&s, &item);
     assert_eq!((name.as_str(), f.kind), ("shot_0004.png", FootageKind::Still));
+    // Alphabetical is a sequence modifier, not a request to make one.
+    s.execute("file.replaceFootage", json!({"path": at(&dir, "shot_0004.png"), "alphabetical": true})).unwrap();
+    let (name, f) = footage(&s, &item);
+    assert_eq!((name.as_str(), f.kind), ("shot_0004.png", FootageKind::Still));
     // Asking for the run still brings it.
     s.execute("file.replaceFootage", json!({"path": at(&dir, "shot_0004.png"), "sequence": true})).unwrap();
     let (name, f) = footage(&s, &item);
     assert_eq!((name.as_str(), f.kind, f.sequence.len()), ("shot_[0001-0005].png", FootageKind::Sequence, 4));
+}
+
+#[test]
+fn replace_footage_keeps_a_one_frame_run_a_sequence() {
+    let dir = folder(&["shot_0001.png", "shot_0002.png", "solo_0007.png", "cover.png"]);
+    let mut s = session();
+    let item = s.execute("file.import", json!({"paths": [at(&dir, "shot_0001.png")], "sequence": true})).unwrap()["items"][0].clone();
+    s.state.project_selection = vec![ItemId(item.as_u64().unwrap())];
+    // A numbered file with no other frame in its run is still the replacement for a sequence.
+    s.execute("file.replaceFootage", json!({"path": at(&dir, "solo_0007.png")})).unwrap();
+    let (name, f) = footage(&s, &item);
+    assert_eq!((name.as_str(), f.kind, f.sequence.len()), ("solo_0007.png", FootageKind::Sequence, 1));
+    // A single-file source keeps the sequence kind too.
+    s.execute("file.replaceFootage", json!({"path": at(&dir, "cover.png")})).unwrap();
+    let (name, f) = footage(&s, &item);
+    assert_eq!((name.as_str(), f.kind, f.sequence.len()), ("cover.png", FootageKind::Sequence, 1));
+    // An explicit `sequence: false` still asks for one frame.
+    s.execute("file.replaceFootage", json!({"path": at(&dir, "cover.png"), "sequence": false})).unwrap();
+    let (_, f) = footage(&s, &item);
+    assert_eq!((f.kind, f.sequence.len()), (FootageKind::Still, 0));
 }
 
 #[test]
