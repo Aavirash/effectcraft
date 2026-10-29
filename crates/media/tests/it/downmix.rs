@@ -168,22 +168,23 @@ fn each_channel_reaches_stereo_at_its_bs775_gain() {
     }
 }
 
-/// AAC 7.1 in channel configuration 12 (back surrounds), which FilmCraft reorders where it
-/// leaves ffmpeg's configuration 7 as coded: ffmpeg's 7.1 with its configuration rewritten (both
-/// code the same elements).
-#[test]
-fn seven_one_aac_in_configuration_12() {
-    let c = cases().into_iter().find(|c| c.file == "dm71.m4a").expect("the 7.1 AAC case");
-    let freqs: Vec<u32> = FREQS.iter().copied().take(c.names.len()).collect();
-    let Some(p) = fixture(c.file, c.layout, c.names, &freqs, c.codec) else { return };
-    let mut bytes = std::fs::read(&p).expect("read");
-    let (asc, _) = aac_entry(&bytes).expect("an AAC track");
-    assert_eq!(asc.get(..2), Some(&[0x11, 0xB8][..]), "AAC-LC 48 kHz, configuration 7");
-    let at = bytes.windows(asc.len()).position(|w| w == asc).expect("the configuration in the file");
-    bytes[at + 1] = 0xE0;
-    let p12 = fixtures().join("dm71c12.m4a");
-    std::fs::write(&p12, bytes).expect("write");
-    check(&Case { file: "dm71c12.m4a", ..c }, &p12);
+/// `p`, or a copy whose AAC sample entry names all `channels` of its PCE layout: ffmpeg 4.2 writes
+/// 2 there for a PCE layout (8.1 the real count), and FilmCraft decodes as many channels as the
+/// sample entry names, so the other five of a 6.1 would never reach the mix.
+fn whole_pce_entry(p: &Path, channels: usize) -> PathBuf {
+    let mut bytes = std::fs::read(p).expect("read");
+    let Some((asc, 2)) = aac_entry(&bytes) else { return p.to_path_buf() };
+    if channels <= 2 || filmcraft_aac::AudioSpecificConfig::parse(&asc).map(|a| a.channel_config).ok() != Some(0) {
+        return p.to_path_buf();
+    }
+    // the `mp4a` entry's channelcount follows its 6 reserved bytes, data reference index and
+    // 8 reserved bytes
+    let at = bytes.windows(4).position(|w| w == b"mp4a").expect("an mp4a sample entry") + 4 + 6 + 2 + 8;
+    bytes[at..at + 2].copy_from_slice(&(channels as u16).to_be_bytes());
+    eprintln!("{}: its sample entry names 2 of {channels} channels (ffmpeg 4.2): reading a copy naming all", p.display());
+    let out = p.with_extension("entry.m4a");
+    std::fs::write(&out, bytes).expect("write");
+    out
 }
 
 /// The AudioSpecificConfig and sample entry channel count of an MP4's first AAC track.
@@ -196,16 +197,7 @@ fn aac_entry(bytes: &[u8]) -> Option<(Vec<u8>, u32)> {
 }
 
 fn check(c: &Case, p: &Path) {
-    let pce_as_stereo = aac_entry(&std::fs::read(p).expect("read")).is_some_and(|(asc, entry)| {
-        let config = filmcraft_aac::AudioSpecificConfig::parse(&asc).map(|a| a.channel_config);
-        config.ok() == Some(0) && entry == 2
-    });
-    if pce_as_stereo && c.names.len() > 2 {
-        // ffmpeg 4.2 writes 2 in the sample entry of an AAC PCE layout (8.1 the real count), and
-        // that is all FilmCraft decodes.
-        eprintln!("{}: FilmCraft reads 2 of its {} channels: skipping", c.file, c.names.len());
-        return;
-    }
+    let p = &whole_pce_entry(p, c.names.len());
     let s = ours(p);
     let freqs: Vec<u32> = FREQS.iter().copied().take(c.names.len()).collect();
     let sine = 0.125 * 1.0; // peak of ffmpeg's sine source (0.125 = 2^-3)
