@@ -989,7 +989,7 @@ pub fn specs() -> Vec<CommandSpec> {
             ["Edit"],
             Some("Cmd+D"),
             "{layers?} (without layers: during a text edit the edited layer, else the selected effects, shape items or text animators, else the selected layers)",
-            has_layers,
+            layers_or_text_edit,
             duplicate
         ),
         cmd!("edit.splitLayer", "Split Layer", ["Edit"], Some("Cmd+Shift+D"), "{layers?}", has_layers, split),
@@ -1059,6 +1059,11 @@ fn history_goto(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn layers_or_keys(s: &Session) -> std::result::Result<(), String> {
     if !s.state.selected_keys.is_empty() || !s.state.selected_vertices.is_empty() { super::has_comp(s) } else { has_layers(s) }
+}
+
+/// Duplicate's unnamed target: the edited layer during a text edit, else the selection.
+fn layers_or_text_edit(s: &Session) -> std::result::Result<(), String> {
+    if s.state.text_edit.is_some() { super::has_comp(s) } else { has_layers(s) }
 }
 
 fn always_ok(_: &Session) -> std::result::Result<(), String> {

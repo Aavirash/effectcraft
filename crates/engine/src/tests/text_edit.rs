@@ -1342,6 +1342,25 @@ fn duplicate_during_an_edit_copies_the_edited_layer_after_another_is_selected() 
 }
 
 #[test]
+fn duplicate_during_an_edit_with_nothing_selected_copies_the_edited_layer() {
+    use effectcraft_project::LayerId;
+    // An engine route can also clear the selection while the edit stays open. Duplicate stays
+    // available, since its unnamed target is the edited layer, not the selection.
+    let (mut s, _) = editing("Hello", 5);
+    s.execute("layer.select", json!({"layers": []})).unwrap();
+    assert!(s.state.selected_layers.is_empty() && s.state.text_edit.is_some(), "the edit is open with nothing selected");
+    let copy = s.execute("edit.duplicate", json!({})).unwrap()[0].as_u64().unwrap();
+    assert!(s.state.text_edit.is_none(), "Duplicate ends the open edit");
+    assert_eq!(doc(&s, copy).text, "Hello", "and copies the edited layer");
+    assert_eq!(s.state.selected_layers, vec![LayerId(copy)], "which is selected");
+    // With no edit open, nothing selected still means nothing to duplicate.
+    s.execute("layer.select", json!({"layers": []})).unwrap();
+    let before = layer_count(&s);
+    assert!(s.execute("edit.duplicate", json!({})).is_err(), "outside an edit Duplicate needs a selection");
+    assert_eq!(layer_count(&s), before, "and copies nothing");
+}
+
+#[test]
 fn duplicate_ends_the_open_edit_and_selects_the_copy() {
     let (mut s, t) = editing("Hello", 5);
     s.execute("text.insert", json!({"text": "!"})).unwrap();
