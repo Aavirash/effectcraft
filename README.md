@@ -84,9 +84,10 @@ a few places where it matters to us:
   without a plugin.
 - **A project file you can read.** Projects are versioned JSON (`.ecproj`), so they diff cleanly
   in version control.
-- **Everything is scriptable.** Every menu item, timeline drag and property edit goes through one
-  command registry, so the same actions are reachable from a command line, a JSON control
-  channel and an MCP server for agents.
+- **Everything is scriptable.** Menu actions, timeline edits and property changes are exposed as
+  commands. Engine commands are available through the CLI, JSON control channel and MCP;
+  UI-only commands use the frontend dispatcher and can be invoked through the control channel
+  or an attached MCP bridge.
 - **No FFmpeg.** Video and audio decoding and encoding are pure Rust: FilmCraft's codecs and
   EffectCraft's own VP9, AV1, HEVC and Opus encoders.
 
@@ -173,8 +174,10 @@ cannot express; File ▸ Import ▸ Lottie… opens one as a new composition.
 
 ## Built for agents
 
-Everything you can do from a menu is a command with an id, and agents can reach every one of
-them:
+Engine commands are available through the CLI, JSON control channel and MCP. UI-only commands
+need the running app's frontend dispatcher: complete menu access requires the app's control
+channel or an attached MCP bridge. Headless MCP sessions expose supported engine commands,
+but not UI-only commands or bridge-only `ui_*` tools.
 
 - **MCP server:** `effectcraft-cli mcp` speaks the Model Context Protocol over stdio, headless
   or bridged to the running app (`--bridge 9877`). Tools cover commands, the project and property
