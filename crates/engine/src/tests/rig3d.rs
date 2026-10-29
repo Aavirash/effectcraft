@@ -244,7 +244,7 @@ fn parented_camera_keeps_its_frame_under_an_offset_null() {
 fn frame_at(s: &Session, id: u64, t: Tick) -> (Vec3, Vec3, Vec3) {
     let c = cid(s);
     let comp = s.project.comp(c).unwrap();
-    let ctx = EvalCtx { project: &s.project, comp_id: c, comp, time: t, expr: None, footage: None };
+    let ctx = EvalCtx { project: &s.project, comp_id: c, comp, time: t, expr: None, footage: None, property_overrides: &[], media_overrides: &[] };
     layer_frame(&ctx, comp.layer(LayerId(id)).unwrap())
 }
 
