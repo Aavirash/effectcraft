@@ -9,8 +9,8 @@
 //!
 //! `--control <port>` (or `EFFECTCRAFT_CONTROL_PORT`) starts a localhost JSON-lines control server;
 //! see `effectcraft_ui_egui::control` for the methods.
-#![cfg_attr(all(target_os = "windows", not(debug_assertions)), windows_subsystem = "windows")]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+#![cfg_attr(all(target_os = "windows", not(debug_assertions)), windows_subsystem = "windows")]
 
 // Built everywhere so its tests run on every platform; only Linux AppImages use it.
 mod appearance;
@@ -365,14 +365,11 @@ fn main() -> eframe::Result {
             }))
         }),
     );
-    match &result {
-        Ok(()) => log::info!("the window closed"),
-        Err(e) => {
-            if on_gl {
-                launch_guard::opengl_failed(effectcraft_host::config_dir().as_deref());
-            }
-            startup_failed(e, !on_gl && cfg!(not(target_os = "macos")));
+    if let Err(e) = &result {
+        if on_gl {
+            launch_guard::opengl_failed(effectcraft_host::config_dir().as_deref());
         }
+        startup_failed(e, !on_gl && cfg!(not(target_os = "macos")));
     }
     result
 }
@@ -455,7 +452,8 @@ struct Desktop {
 }
 
 impl eframe::App for Desktop {
-    /// The desktop host's logic tick: update the macOS menu bar, run the shared app tick and close the IME pass.
+    /// The desktop host's logic tick: update the macOS menu bar, run the shared app tick, close the IME pass, show the
+    /// file dialogs asked for and, last, hand a close to the platform quit.
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         #[cfg(target_os = "macos")]
         self.menu.update(&mut self.app, ctx);
@@ -464,6 +462,7 @@ impl eframe::App for Desktop {
         if let Some(asked) = &self.file_dialogs {
             sheet_dialogs::show_asked(asked, frame, ctx);
         }
+        effectcraft_ui_egui::panels::unsaved::quit_on_close(ctx);
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
@@ -484,6 +483,9 @@ impl eframe::App for Desktop {
     }
 
     fn on_exit(&mut self) {
+        // On macOS the app quits through `-[NSApplication terminate:]`, and the process ends
+        // before `eframe::run_native` returns (#341).
+        log::info!("the window is closing");
         self.launch.exited();
         self.window.save(self.app.session.config.as_deref());
         self.app.on_exit();

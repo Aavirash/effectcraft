@@ -1,7 +1,7 @@
 use super::entries::{entry_checked, entry_enabled, entry_label, entry_shortcut, menu_choice};
 use super::invoke::invoke;
 use super::shortcuts::shortcut_text;
-use super::*;
+use super::{EffectcraftApp, MenuEntry, MenuNode, Value, json};
 
 /// The id under which [`menu_bar`] remembers which of its menus was open at the end of the last
 /// frame (its title's open look, and the hover that switches between the titles).
@@ -160,6 +160,7 @@ fn menu_nodes(
                         "recentProjects" => app.session.prefs.recent_projects.get(i).cloned(),
                         "recentFootage" => app.session.prefs.recent_footage.get(i).cloned(),
                         "recentPresets" => app.session.prefs.recent_presets.get(i).cloned(),
+                        "recentScripts" => app.session.prefs.recent_scripts.get(i).map(|r| r.text().to_string()),
                         _ => None,
                     };
                     let r = ui.add_enabled(entry_enabled(app, e), egui::Button::new((gutter(entry_checked(app, e) == Some(true)), e.label.as_str())));
