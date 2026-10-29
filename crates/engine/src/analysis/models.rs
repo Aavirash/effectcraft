@@ -36,6 +36,8 @@ pub struct Status {
     /// A finished job's message and whether it failed, for a toast (taken by
     /// [`Session::poll_models`]).
     pub done: Option<(String, bool)>,
+    /// Counts selection changes: a load started under an older count is stale and its model is discarded.
+    pub generation: u64,
 }
 
 /// The session's trained models: per task, the worker's status; and the face model in use.
@@ -61,6 +63,12 @@ impl Models {
     /// The face model face tracking uses (`None`: the classic tracker).
     pub fn face(&self) -> Option<Arc<dyn FaceModel>> {
         self.face_model.lock().ok().and_then(|m| m.clone())
+    }
+
+    /// Activate a model that finished loading for the choice counted as `generation`; `false` (and the model is
+    /// dropped) when the choice changed meanwhile.
+    pub(crate) fn set_active_if_current(&self, task: Task, model: Loaded, generation: u64) -> bool {
+        activate_if_current(self.lane(task), &self.face_model, task, model, generation)
     }
 
     pub(crate) fn set_active(&self, task: Task, model: Option<Loaded>) {
@@ -90,6 +98,30 @@ fn activate(lane: &Arc<Mutex<Status>>, face: &FaceSlot, task: Task, model: Optio
         }
     }
     set(lane, |s| s.active = id);
+}
+
+/// [`activate`] a freshly loaded model unless the choice changed since the load started (`generation`); whether it
+/// was activated. The check and the activation happen under the lane's lock, so a selection can't slip between them.
+fn activate_if_current(lane: &Arc<Mutex<Status>>, face: &FaceSlot, task: Task, model: Loaded, generation: u64) -> bool {
+    let Ok(mut s) = lane.lock() else { return false };
+    if s.generation != generation {
+        return false;
+    }
+    let id = match &model {
+        Loaded::Mask(m) => m.info().id.to_string(),
+        Loaded::Face(m) => m.info().id.to_string(),
+    };
+    match (task, model) {
+        (Task::Mask, Loaded::Mask(m)) => crate::effects::roto::set_model(Some(m)),
+        (Task::Face, Loaded::Face(f)) => {
+            if let Ok(mut slot) = face.lock() {
+                *slot = Some(f);
+            }
+        }
+        _ => return false,
+    }
+    s.active = Some(id);
+    true
 }
 
 fn set(status: &Arc<Mutex<Status>>, f: impl FnOnce(&mut Status)) {
@@ -160,7 +192,11 @@ impl Session {
             Task::Mask => &mut self.prefs.roto.model,
             Task::Face => &mut self.prefs.face.model,
         };
-        *slot = id.to_string();
+        if slot != id {
+            *slot = id.to_string();
+            // a load still running for the previous choice must not activate when it finishes
+            set(self.models.lane(task), |s| s.generation = s.generation.wrapping_add(1));
+        }
     }
 
     /// Load (or drop) the models Settings chooses; called whenever settings change.
@@ -190,9 +226,13 @@ impl Session {
             return;
         };
         let (face_slot, label) = (self.models.face_model.clone(), kind(task).label);
+        let generation = st.generation;
         spawn(&lane, label, format!("Loading {}…", info.name), wait, move |status| {
             let m = load_file(&path, info.id)?;
-            activate(status, &face_slot, task, Some(m));
+            // the choice changed while this loaded: drop the model, `poll_models` loads the new choice
+            if !activate_if_current(status, &face_slot, task, m, generation) {
+                return Ok(String::new());
+            }
             Ok(format!("{label}: {} loaded", info.name))
         });
     }
@@ -329,7 +369,10 @@ impl Session {
         for task in [Task::Mask, Task::Face] {
             let done = self.models.lane(task).lock().ok().and_then(|mut s| s.done.take());
             if let Some((message, error)) = done {
-                self.events.push(crate::Event::Toast { message, error });
+                // a discarded (stale) load has no message
+                if !message.is_empty() {
+                    self.events.push(crate::Event::Toast { message, error });
+                }
                 self.apply_model(task, false);
             }
         }

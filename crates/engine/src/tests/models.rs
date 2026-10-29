@@ -161,6 +161,36 @@ fn an_idle_roto_model_is_unloaded() {
     let _ = std::fs::remove_dir_all(d);
 }
 
+/// A model that finishes loading after the choice changed is dropped, not activated.
+#[test]
+fn a_load_for_an_old_choice_does_not_activate() {
+    use effectcraft_segment::{Loaded, MaskModel, ModelInfo, Prompt};
+    struct Fake;
+    impl MaskModel for Fake {
+        fn info(&self) -> &'static ModelInfo {
+            &effectcraft_segment::SAM2_TINY
+        }
+        fn segment(&self, _: &[[f32; 3]], _: usize, _: usize, _: &Prompt) -> effectcraft_segment::Result<Vec<f32>> {
+            Err("no weights".into())
+        }
+    }
+    super::roto::hold_roto_cache_test_lock();
+    let (mut s, d) = session("stale-load");
+    let started = s.models.status(Task::Mask).generation;
+    // the user picks another engine while the load runs
+    s.execute_checked("roto.model.select", json!({"id": "classical"})).unwrap();
+    s.execute_checked("roto.model.select", json!({"id": "sam2.1-hiera-tiny"})).unwrap();
+    assert_ne!(s.models.status(Task::Mask).generation, started, "a changed choice is counted");
+    let m: Arc<dyn MaskModel> = Arc::new(Fake);
+    assert!(!s.models.set_active_if_current(Task::Mask, Loaded::Mask(m.clone()), started), "the stale load is dropped");
+    assert!(s.models.status(Task::Mask).active.is_none() && crate::effects::roto::installed_model().is_none());
+    let now = s.models.status(Task::Mask).generation;
+    assert!(s.models.set_active_if_current(Task::Mask, Loaded::Mask(m), now), "a load for the current choice activates");
+    assert_eq!(s.models.status(Task::Mask).active.as_deref(), Some("sam2.1-hiera-tiny"));
+    crate::effects::roto::set_model(None);
+    let _ = std::fs::remove_dir_all(d);
+}
+
 /// A stroke reloading an unloaded model never waits for the load and never retries one that already failed.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
