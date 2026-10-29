@@ -12,8 +12,9 @@ fn names(s: &mut Session, layer: u64) -> Vec<String> {
     list.as_array().unwrap().iter().map(|m| m["comment"].as_str().unwrap().to_string()).collect()
 }
 
-/// A one-second mono 8 kHz WAV with two named cue points (a `cue ` chunk and a `LIST` `adtl`).
-fn marker_wav() -> Vec<u8> {
+/// A one-second mono 8 kHz WAV with the named cue points `(id, sample, name)` (a `cue ` chunk and a
+/// `LIST` `adtl`).
+fn marker_wav(points: &[(u32, u32, &str)]) -> Vec<u8> {
     fn chunk(id: &[u8; 4], body: &[u8]) -> Vec<u8> {
         let mut v = id.to_vec();
         v.extend((body.len() as u32).to_le_bytes());
@@ -30,10 +31,9 @@ fn marker_wav() -> Vec<u8> {
     fmt.extend(16000u32.to_le_bytes());
     fmt.extend(2u16.to_le_bytes());
     fmt.extend(16u16.to_le_bytes());
-    let points = [(1u32, 0u32, "Intro"), (2, 4000, "Middle")];
     let mut cue = (points.len() as u32).to_le_bytes().to_vec();
     let mut adtl = b"adtl".to_vec();
-    for (id, at, name) in points {
+    for &(id, at, name) in points {
         for v in [id, 0] {
             cue.extend(v.to_le_bytes());
         }
@@ -66,7 +66,7 @@ fn a_wav_layer_starts_with_the_markers_in_its_file() {
     let dir = std::env::temp_dir().join(format!("effectcraft-host-wav-markers-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("cues.wav");
-    std::fs::write(&path, marker_wav()).unwrap();
+    std::fs::write(&path, marker_wav(&[(1, 0, "Intro"), (2, 4000, "Middle")])).unwrap();
     let r = s.execute_checked("file.import", json!({"paths": [path.to_string_lossy()], "addToComp": true})).unwrap();
     assert_eq!(r["errors"], json!([]), "{r}");
     let layer = s.active_comp().unwrap().layers.iter().find(|l| matches!(l.source, LayerSource::Footage { .. })).unwrap().id.0;
@@ -88,5 +88,39 @@ fn a_wav_layer_starts_with_the_markers_in_its_file() {
     assert_eq!(names(&mut s, layer), ["Intro", "Middle"]);
     // The selection route (no parameter) finds nothing more to add.
     assert_eq!(s.execute_checked("layer.updateMarkersFromSource", json!({})).unwrap()["added"], 0);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Reload Footage re-reads the markers the file carries: a cue point added to the file after the
+/// import is available to Update Markers From Source (and a layer already made keeps its own).
+#[test]
+fn reloading_a_wav_picks_up_cue_points_added_to_the_file() {
+    let mut s = effectcraft_host::session();
+    s.execute_checked("comp.new", json!({"name": "C", "width": 64, "height": 48, "frameRate": 30, "duration": 2})).unwrap();
+    let dir = std::env::temp_dir().join(format!("effectcraft-host-wav-reload-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("cues.wav");
+    std::fs::write(&path, marker_wav(&[(1, 0, "Intro")])).unwrap();
+    let r = s.execute_checked("file.import", json!({"paths": [path.to_string_lossy()], "addToComp": true})).unwrap();
+    assert_eq!(r["errors"], json!([]), "{r}");
+    let (layer, item) = s
+        .active_comp()
+        .unwrap()
+        .layers
+        .iter()
+        .find_map(|l| match l.source {
+            LayerSource::Footage { item } => Some((l.id.0, item.0)),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(names(&mut s, layer), ["Intro"]);
+    // The file gains a cue point; the layer does not change until asked.
+    std::fs::write(&path, marker_wav(&[(1, 0, "Intro"), (2, 4000, "Added later")])).unwrap();
+    let r = s.execute_checked("file.reloadFootage", json!({"items": [item]})).unwrap();
+    assert_eq!(r["reloaded"], 1, "{r}");
+    assert_eq!(names(&mut s, layer), ["Intro"]);
+    let r = s.execute_checked("layer.updateMarkersFromSource", json!({"layers": [layer]})).unwrap();
+    assert_eq!(r["added"], 1);
+    assert_eq!(names(&mut s, layer), ["Intro", "Added later"]);
     let _ = std::fs::remove_dir_all(&dir);
 }

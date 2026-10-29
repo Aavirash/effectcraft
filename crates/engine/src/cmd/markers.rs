@@ -328,8 +328,11 @@ fn update_from_source(s: &mut Session, p: &Value) -> Result<Value> {
             if l.markers_locked {
                 continue;
             }
+            // One set of the times already on the layer: a file with thousands of markers must not
+            // scan the layer's list for each of them.
+            let mut times: std::collections::HashSet<_> = l.markers.iter().map(|x| x.time).collect();
             for m in ms {
-                if !l.markers.iter().any(|x| x.time == m.time) {
+                if times.insert(m.time) {
                     l.markers.push(m.clone());
                     n += 1;
                 }
