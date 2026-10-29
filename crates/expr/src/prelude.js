@@ -207,6 +207,60 @@ function ease() { return __interp(__ease, arguments); }
 function easeIn() { return __interp(__easeIn, arguments); }
 function easeOut() { return __interp(__easeOut, arguments); }
 
+// Cubic-Bezier easing (the CSS cubic-bezier() shape): [x1, y1, x2, y2], with x1 / x2 in 0..1
+// and y1 / y2 free (overshoot included). Solves x(u) = x by Newton–Raphson, then by bisection
+// when Newton leaves 0..1 or the derivative vanishes, and returns y(u). A curve that is not four
+// finite numbers is linear, never an error.
+function __cubicBezier(curve) {
+  var x1, y1, x2, y2;
+  if (Array.isArray(curve) && curve.length === 4) {
+    x1 = curve[0]; y1 = curve[1]; x2 = curve[2]; y2 = curve[3];
+  }
+  if (typeof x1 !== 'number' || typeof y1 !== 'number' || typeof x2 !== 'number' || typeof y2 !== 'number' ||
+      !isFinite(x1) || !isFinite(y1) || !isFinite(x2) || !isFinite(y2)) {
+    return __lin;
+  }
+  x1 = Math.max(0, Math.min(1, x1));
+  x2 = Math.max(0, Math.min(1, x2));
+  function bx(u) { var v = 1 - u; return 3 * v * v * u * x1 + 3 * v * u * u * x2 + u * u * u; }
+  function dbx(u) { var v = 1 - u; return 3 * v * v * x1 + 6 * v * u * (x2 - x1) + 3 * u * u * (1 - x2); }
+  function by(u) { var v = 1 - u; return 3 * v * v * u * y1 + 3 * v * u * u * y2 + u * u * u; }
+  function dby(u) { var v = 1 - u; return 3 * v * v * y1 + 6 * v * u * (y2 - y1) + 3 * u * u * (1 - y2); }
+  return function (x) {
+    if (x <= 0) return 0;
+    if (x >= 1) return 1;
+    var u = x;
+    for (var i = 0; i < 8; i++) {
+      var f = bx(u) - x;
+      var d = dbx(u);
+      if (Math.abs(d) < 1e-12) break;
+      // Stop when the *value* is accurate: near the endpoints dy/dx is steep, so a residual in x
+      // alone can still mean a visible error in y (f * dy/dx estimates it).
+      if (Math.abs(f * dby(u) / d) < 1e-9) return by(u);
+      var n = u - f / d;
+      if (!(n >= 0 && n <= 1)) break;
+      u = n;
+    }
+    var lo = 0, hi = 1;
+    for (var j = 0; j < 60; j++) {
+      var mid = (lo + hi) / 2;
+      if (bx(mid) < x) lo = mid; else hi = mid;
+    }
+    return by((lo + hi) / 2);
+  };
+}
+
+// bezier(t, tMin, tMax, value1, value2, curve), or bezier(t, value1, value2, curve): the curve is
+// the sixth / fourth argument. Read it by position, not from the end: when it is missing or
+// unusable, the interpolation falls back to linear without consuming the last value.
+function bezier() {
+  var a = arguments, n = a.length;
+  if (n >= 6) return __interp(__cubicBezier(a[5]), [a[0], a[1], a[2], a[3], a[4]]);
+  if (n === 5) return __interp(__lin, [a[0], a[1], a[2], a[3], a[4]]);
+  if (n === 4) return __interp(__cubicBezier(a[3]), [a[0], a[1], a[2]]);
+  return __interp(__lin, [a[0], a[1], a[2]]);
+}
+
 // ---------------------------------------------------------------------------------------------
 // Random numbers and noise.
 
@@ -670,14 +724,17 @@ var __groupHandler = {
   },
 };
 
-function __mkGroup(c, l, info) {
-  var f = function (k) { return f.__get(k); };
-  delete f.name;
-  delete f.length;
-  Object.setPrototypeOf(f, __GroupProto);
-  f.__c = c; f.__l = l; f.__p = info[0]; f.__info = info;
-  return new Proxy(f, __groupHandler);
-}
+// `Proxy` is private to the object model (see "Stack safety" at the end).
+var __mkGroup = (function (P) {
+  return function (c, l, info) {
+    var f = function (k) { return f.__get(k); };
+    delete f.name;
+    delete f.length;
+    Object.setPrototypeOf(f, __GroupProto);
+    f.__c = c; f.__l = l; f.__p = info[0]; f.__info = info;
+    return new P(f, __groupHandler);
+  };
+})(Proxy);
 
 // Properties ------------------------------------------------------------------------------------
 
@@ -852,9 +909,11 @@ var __propHandler = {
   },
 };
 
-function __mkProp(c, l, path) {
-  return new Proxy(new Prop(c, l, path), __propHandler);
-}
+var __mkProp = (function (P) {
+  return function (c, l, path) {
+    return new P(new Prop(c, l, path), __propHandler);
+  };
+})(Proxy);
 
 // Text styles (the Source Text style API) ------------------------------------------------------
 // A TextStyle is the source document (as JSON from the host), the character index it reads its
@@ -1069,3 +1128,101 @@ function velocityAtTime(t) { return thisProperty.velocityAtTime(t); }
 function speedAtTime(t) { return thisProperty.speedAtTime(t); }
 function key(n) { return thisProperty.key(n); }
 function nearestKey(t) { return thisProperty.nearestKey(t); }
+
+// ---------------------------------------------------------------------------------------------
+// Stack safety (#2124, #2125). A stack overflow aborts the whole app, so nothing a script does
+// may nest native code without bound. The expression text is checked for nesting before it is
+// compiled; source handed to `eval` and the function constructors at run time is checked by
+// `__nest`. The natives that walk nested values recursively (`join`, which `toString` and string
+// conversion use, `toLocaleString`, `JSON.stringify`, `flat`) call `__stack` once per level,
+// which throws once the run has used its share of the stack. `Proxy` (chains of proxies nest
+// without any script frame) and `Reflect` are not available to expressions.
+(function () {
+  var nest = __nest, stack = __stack, apply = Reflect.apply, construct = Reflect.construct;
+  var define = Object.defineProperty, describe = Object.getOwnPropertyDescriptor, proto = Object.getPrototypeOf;
+  // Replace `obj[name]` keeping its attributes.
+  function replace(obj, name, f) {
+    var d = describe(obj, name);
+    define(obj, name, { value: f, writable: d.writable, enumerable: d.enumerable, configurable: true });
+  }
+  function guard(obj, name) {
+    var f = obj[name];
+    replace(obj, name, function () { stack(); return apply(f, this, arguments); });
+  }
+
+  // Indirect on purpose: a wrapper can't make a direct eval, so `eval` sees globals and `var`s
+  // but not `let`/`const` locals of the expression. Keeping direct eval would mean leaving it
+  // unchecked; expressions practically never need their locals inside eval.
+  var evalJs = eval;
+  eval = function (x) {
+    if (typeof x === 'string') {
+      stack();
+      nest(x);
+    }
+    return evalJs(x);
+  };
+  // `Function` and the generator / async variants (reachable as `(function* () {}).constructor`).
+  function dynamic(F) {
+    var w = function () {
+      var args = [];
+      for (var i = 0; i < arguments.length; i++) args.push(String(arguments[i]));
+      stack();
+      nest(args.slice(0, -1).join(','));
+      nest(args.length ? args[args.length - 1] : '');
+      return construct(F, args);
+    };
+    define(w, 'name', { value: F.name, configurable: true });
+    w.prototype = F.prototype;
+    replace(F.prototype, 'constructor', w);
+    return w;
+  }
+  Function = dynamic(Function);
+  dynamic(proto(function* () {}).constructor);
+  dynamic(proto(async function () {}).constructor);
+  dynamic(proto(async function* () {}).constructor);
+
+  guard(Array.prototype, 'join');
+  guard(Array.prototype, 'toLocaleString');
+  var flat = Array.prototype.flat;
+  replace(Array.prototype, 'flat', function (depth) {
+    stack();
+    var d = depth === undefined ? 1 : Number(depth);
+    return apply(flat, this, [d > 64 ? 64 : d]);
+  });
+
+  // A replacer function sees every value before it is serialized: the per-level check. An array
+  // replacer (a list of keys) becomes one that copies each object's listed keys, in list order.
+  // Each source object gets one copy per call, so a cycle in the source is a cycle of copies and
+  // the native check reports it (TypeError); an object shared without a cycle is still fine.
+  var stringify = JSON.stringify, MapJs = Map;
+  replace(JSON, 'stringify', function (value, replacer, space) {
+    var fn = typeof replacer === 'function' ? replacer : null;
+    var keys = null, copies = new MapJs();
+    if (Array.isArray(replacer)) {
+      keys = [];
+      for (var i = 0; i < replacer.length; i++) {
+        var k = replacer[i];
+        if (typeof k === 'number' || k instanceof Number || k instanceof String) k = String(k);
+        if (typeof k === 'string' && keys.indexOf(k) < 0) keys.push(k);
+      }
+    }
+    return apply(stringify, JSON, [value, function (key, v) {
+      stack();
+      if (fn !== null) v = apply(fn, this, [key, v]);
+      if (keys !== null && v !== null && typeof v === 'object' && !Array.isArray(v) &&
+          !(v instanceof Number || v instanceof String || v instanceof Boolean)) {
+        var o = copies.get(v);
+        if (o === undefined) {
+          o = {};
+          for (var j = 0; j < keys.length; j++) if (keys[j] in v) o[keys[j]] = v[keys[j]];
+          copies.set(v, o);
+        }
+        v = o;
+      }
+      return v;
+    }, space]);
+  });
+
+  delete globalThis.Proxy;
+  delete globalThis.Reflect;
+})();
