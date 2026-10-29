@@ -467,7 +467,9 @@ fn drag_toggle(ui: &Ui, response: &Response, value: Option<bool>) -> Option<bool
     let steps: Vec<(Step, bool)> = pointer_steps(ui).into_iter().map(|(step, pos)| (step, over(pos))).collect();
     ui.data_mut(|data| {
         let drag = data.get_temp_mut_or_default::<CheckboxDrag>(egui::Id::unique("checkbox-drag"));
-        if (!down && !released) || (pressed && drag.press_frame != frame) {
+        // A release in the press frame leaves crossings pending: keep them for the next frame.
+        let flushing = !drag.pending.is_empty() && drag.target.is_some() && frame <= drag.press_frame.saturating_add(1);
+        if (!down && !released && !flushing) || (pressed && drag.press_frame != frame) {
             *drag = CheckboxDrag { press_frame: frame, ..Default::default() };
         }
         let on = value?;
@@ -475,8 +477,7 @@ fn drag_toggle(ui: &Ui, response: &Response, value: Option<bool>) -> Option<bool
             return None;
         }
         // Crossed in the frame of the press before the value was known: take it now.
-        if down
-            && drag.pending.remove(&response.id)
+        if drag.pending.remove(&response.id)
             && let Some(target) = drag.target
             && drag.visited.insert(response.id)
             && on != target
@@ -1097,6 +1098,19 @@ mod tests {
         checkbox_frame(&ctx, &mut values, events);
         checkbox_frame(&ctx, &mut values, vec![]);
         assert_eq!(values, [Some(false), Some(false), None, Some(false), Some(false)], "a press outside starts no gesture");
+        // Pressed on the second, moved to the first (drawn before it) and released, all in one
+        // frame: the first still takes the state in the next frame.
+        let ctx = egui::Context::default();
+        let mut values = [Some(false); 5];
+        values[2] = None;
+        checkbox_frame(&ctx, &mut values, vec![]);
+        let mut events = vec![moved(b)];
+        events.extend(button(b, true));
+        events.push(moved(a));
+        events.extend(button(a, false));
+        checkbox_frame(&ctx, &mut values, events);
+        checkbox_frame(&ctx, &mut values, vec![]);
+        assert_eq!((values[0], values[1]), (Some(true), Some(true)), "a crossing before the release still takes the state");
     }
 
     #[test]
