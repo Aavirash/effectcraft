@@ -1073,3 +1073,115 @@ fn workers_rendering_a_layer_at_once_share_one_buffer() {
     assert!(bufs.iter().all(|b| std::sync::Arc::ptr_eq(b, &bufs[0])), "one shared buffer");
     assert_eq!(cache.stats().entries, 1);
 }
+
+// ------------------------------------------------------------------------------ 3D layer instances
+
+/// A red triangle in the Z = 0 plane (the engine instance3d tests' glTF, buffer embedded as a
+/// data URI), parsed in memory: a FootageSource that knows one model item.
+const TRIANGLE: &str = r#"{
+  "asset": {"version": "2.0"},
+  "scenes": [{"nodes": [0]}],
+  "nodes": [{"mesh": 0}],
+  "meshes": [{"primitives": [{"attributes": {"POSITION": 0, "NORMAL": 1}, "material": 0}]}],
+  "materials": [{"pbrMetallicRoughness": {"baseColorFactor": [1.0, 0.0, 0.0, 1.0]}}],
+  "buffers": [{"byteLength": 72, "uri": "data:application/octet-stream;base64,AACAvwAAgL8AAAAAAACAPwAAgL8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/"}],
+  "bufferViews": [
+    {"buffer": 0, "byteOffset": 0, "byteLength": 36},
+    {"buffer": 0, "byteOffset": 36, "byteLength": 36}
+  ],
+  "accessors": [
+    {"bufferView": 0, "componentType": 5126, "type": "VEC3", "count": 3, "min": [-1.0, -1.0, 0.0], "max": [1.0, 1.0, 0.0]},
+    {"bufferView": 1, "componentType": 5126, "type": "VEC3", "count": 3}
+  ]
+}"#;
+
+struct SoloModels;
+
+impl crate::FootageSource for SoloModels {
+    fn frame(&self, _: ItemId, _: &effectcraft_project::Footage, _: Tick) -> Option<std::sync::Arc<crate::Image>> {
+        None
+    }
+    fn model(&self, _: ItemId, f: &effectcraft_project::Footage) -> Option<std::sync::Arc<effectcraft_model::Model>> {
+        effectcraft_model::load(&f.path, TRIANGLE.as_bytes(), &|_| None).ok().map(std::sync::Arc::new)
+    }
+}
+
+/// A red triangle 3D model, a camera panned right by `pan` px and, on top of the stack, the
+/// copy: a solid with a 3D Layer Instance effect referencing the model.
+fn instance_scene(pan: f64) -> (Project, ItemId) {
+    let (mut p, cid, comp) = setup();
+    // Models are Advanced 3D (layer.newModel switches a Classic comp over).
+    p.comp_mut(cid).unwrap().renderer = effectcraft_project::Renderer::Advanced3D;
+    let mid = p.add_item(
+        "Triangle",
+        Label::Red,
+        None,
+        ItemKind::Footage(effectcraft_project::Footage {
+            path: "Triangle.gltf".into(),
+            kind: effectcraft_project::FootageKind::Model,
+            frame_rate: FrameRate::FPS_30,
+            codec: "glTF".into(),
+            ..Default::default()
+        }),
+    );
+    let model = build::layer(&mut p, &comp, "Triangle", LayerSource::Model { item: mid }, (200, 100), None);
+    let mut cam = build::layer(&mut p, &comp, "Camera", LayerSource::Camera, (200, 100), None);
+    for path in ["transform/position", "transform/poi"] {
+        let pr = cam.props.prop_mut(path).unwrap();
+        let Value::Vec3(v) = pr.value else { panic!("{path}: {:?}", pr.value) };
+        pr.value = Value::Vec3([v[0] + pan, v[1], v[2]]);
+    }
+    let mut owner = solid(&mut p, &comp, [1.0, 1.0, 1.0], 200, 100);
+    add_effect_200(&mut p, &mut owner, "ec.3d.instance3d", &[("layer", Value::Layer(Some(model.id.0)))]);
+    p.comp_mut(cid).unwrap().layers = vec![cam, owner, model];
+    (p, cid)
+}
+
+fn render_models(p: &Project, cid: ItemId, t: Tick, cache: Option<&crate::LayerCache>) -> crate::Image {
+    let mut r = crate::Renderer::new(p, &SoloModels, crate::RenderOpts::default());
+    r.cache = cache;
+    r.comp_frame(cid, t)
+}
+
+/// The coverage-weighted centre of the triangle (x): where its drawn pixels are, lit or not.
+fn cover_x(img: &crate::Image) -> f32 {
+    let (mut m, mut sx) = (0.0, 0.0);
+    for y in 0..img.height {
+        for x in 0..img.width {
+            let a = img.get(x as i64, y as i64)[3];
+            m += a;
+            sx += a * x as f32;
+        }
+    }
+    assert!(m > 1.0, "the triangle is drawn");
+    sx / m
+}
+
+/// Create 3D Layer Instance: the copy (the owner) is cached, and its key covers what the
+/// referenced model's solo render depends on — the camera, and the model's in/out gate.
+#[test]
+fn an_instance_of_a_model_is_cached_and_follows_the_camera() {
+    let t = Tick::from_seconds_f64(1.0);
+    let (p, cid) = instance_scene(0.0);
+    let (q, _) = instance_scene(40.0);
+    let key_at = |p: &Project, t: Tick| {
+        let c = p.comp(cid).unwrap();
+        crate::cache::layer_key(&crate::EvalCtx::new(p, cid, c, t), &c.layers[1], 1.0, false, false).unwrap()
+    };
+    assert_ne!(key_at(&p, t), key_at(&q, t), "moving the camera changes the copy's key");
+    // The same layer at a later time, outside its in/out range: the read turns transparent.
+    let mut out = p.clone();
+    out.comp_mut(cid).unwrap().layers[2].out_point = Tick::from_seconds_f64(0.5);
+    assert_ne!(key_at(&out, Tick::from_seconds_f64(0.25)), key_at(&out, t), "leaving the model's in/out range changes the copy's key");
+    // Two renders of one time: the second is served from the cache.
+    let cache = crate::LayerCache::default();
+    let here = render_models(&p, cid, t, Some(&cache));
+    let again = render_models(&p, cid, t, Some(&cache));
+    assert_same(&again, &render_models(&p, cid, t, None), "the second render is the cached one");
+    assert!(cache.stats().hits > 0, "the copy was served from the cache");
+    // Panning the camera: the copy (and the model) move with it.
+    let panned = render_models(&q, cid, t, Some(&cache));
+    assert_same(&panned, &render_models(&q, cid, t, None), "cached render after the camera moved");
+    let (a, b) = (cover_x(&here), cover_x(&panned));
+    assert!(b < a - 20.0, "panning the camera right moves the copy left: {a} -> {b}");
+}

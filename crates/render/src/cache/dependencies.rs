@@ -63,17 +63,45 @@ impl Dependencies<'_> {
         Some(())
     }
 
+    /// What a referenced 3D model or primitive layer's solo render depends on: the layer itself
+    /// (geometry, materials, switches, in/out), its animated values and transform at the time,
+    /// the mesh item, the comp's camera and lights at the time (the lights are off in draft 3D,
+    /// and the renderer setting changes the pixels), and the in/out gate (outside the range the
+    /// read is transparent). Comp size and render scale are in the owner's key already.
+    fn soloed_model(&mut self, ctx: &EvalCtx, layer: &Layer) -> Option<()> {
+        self.remaining = self.remaining.checked_sub(1)?;
+        // Expressions sampled at other times: not cacheable, as in the ordinary path.
+        if (self.other_times || super::reads_other_times(layer)) && super::has_expression(&layer.props) {
+            return None;
+        }
+        hash_debug(self.h, layer);
+        hash_values(self.h, ctx, layer, &layer.props);
+        hash_debug(self.h, &ctx.world_matrix(layer));
+        if let Some(item) = layer.source.item() {
+            hash_debug(self.h, &ctx.project.item(item));
+        }
+        // The solo render goes through the comp's camera and lights.
+        hash_debug(self.h, &ctx.camera());
+        hash_debug(self.h, &crate::three_d::light::lights_at(ctx));
+        hash_debug(self.h, &ctx.comp.draft_3d);
+        hash_debug(self.h, &ctx.comp.renderer);
+        // Outside the layer's in/out range the read is transparent: fold the gate in, so a
+        // static model renders once inside it and again when it leaves.
+        layer.is_active_at(ctx.time).hash(self.h);
+        Some(())
+    }
+
     fn layer(&mut self, ctx: &EvalCtx, layer: &Layer) -> Option<()> {
         let id = (ctx.comp_id, layer.id);
         if self.path.len() > crate::MAX_FX_DEPTH || self.path.contains(&id) {
             return None;
         }
         // A referenced 3D model or primitive layer renders through the comp's camera and lights
-        // (an effect layer parameter reads it that way — Create 3D Layer Instance's CC
-        // Composite): those move its pixels without a trace in its own properties, so the owner
-        // keeps no cache entry for it.
+        // (an effect layer parameter reads it that way — Create 3D Layer Instance): hash what
+        // moves its pixels, so the owner keeps a cache entry that changes when any of it does.
         if layer.source.is_model() {
-            return None;
+            self.soloed_model(ctx, layer)?;
+            return Some(());
         }
         self.remaining = self.remaining.checked_sub(1)?;
         if (self.other_times || super::reads_other_times(layer)) && super::has_expression(&layer.props) {

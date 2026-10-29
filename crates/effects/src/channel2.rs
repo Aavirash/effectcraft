@@ -171,9 +171,7 @@ const CC_COMPOSITE_MODES: [&str; 16] = [
     "Stencil Alpha",
 ];
 
-/// Composites the original stack input over/under/with the result of preceding effects. With a
-/// layer chosen (Create 3D Layer Instance's solid), that layer takes the original's place — a 2D
-/// copy of it, rendered through the comp's camera when it is a 3D model layer.
+/// Composites the original stack input over/under/with the result of preceding effects.
 fn cc_composite(ctx: &EffectCtx, mut b: Buf) -> Buf {
     let op = (ctx.params.f("opacity") as f32 / 100.0).clamp(0.0, 1.0);
     let m = ctx.params.e("compositeOriginal");
@@ -195,24 +193,11 @@ fn cc_composite(ctx: &EffectCtx, mut b: Buf) -> Buf {
         15 => BlendMode::StencilAlpha,
         _ => BlendMode::Normal,
     };
-    // The chosen layer takes the original's place (a 2D copy of it); the layer's own original
-    // otherwise, as before.
-    let referenced = ctx.layer_param("layer", true).map(|o| crate::util::fit_layer(ctx, &b, &o, false));
-    // A chosen layer in front replaces the layer's pixels, alpha included: the copy of a 3D
-    // layer is transparent where the model isn't. The other modes composite with them.
-    let replace = referenced.is_some() && m == 0;
-    let original =
-        referenced.or_else(|| ctx.env.host.and_then(|h| h.original()).map(|o| crate::util::fit_buffer(o, b.img.width, b.img.height, b.offset, b.scale)));
+    let original = ctx.env.host.and_then(|h| h.original()).map(|o| crate::util::fit_buffer(o, b.img.width, b.img.height, b.offset, b.scale));
     b.img.data.par_iter_mut().enumerate().for_each(|(i, px)| {
         let result = *px;
         let orig = original.as_ref().and_then(|o| o.data.get(i)).copied().unwrap_or(result).map(|v| v * op);
-        let mut o = if replace {
-            orig
-        } else if m == 1 {
-            blend_pixel(BlendMode::Normal, orig, result, 0.5)
-        } else {
-            blend_pixel(mode, result, orig, 0.5)
-        };
+        let mut o = if m == 1 { blend_pixel(BlendMode::Normal, orig, result, 0.5) } else { blend_pixel(mode, result, orig, 0.5) };
         o[3] = o[3].clamp(0.0, 1.0);
         if rgb_only {
             let (c, _) = unpremul(o);
@@ -338,7 +323,6 @@ pub fn specs() -> Vec<EffectSpec> {
             "ec.channel.cccomposite",
             "CC Composite",
             vec![
-                layer_param("layer", "Layer"),
                 p("opacity", "Opacity", num(100.0), pct()),
                 p("compositeOriginal", "Composite Original", Value::Enum(0), popup(&CC_COMPOSITE_MODES)),
                 p("rgbOnly", "RGB Only", Value::Bool(false), ParamUi::Checkbox),
@@ -437,39 +421,6 @@ pub(crate) mod tests {
         assert!(close(&out.img, &img, 1e-6));
         let add = run_fx("ec.channel.cccomposite", &[("compositeOriginal", Value::Enum(2))], img.clone(), 0.0, EffectEnv::default());
         assert!((add.img.get(0, 0)[0] - 0.6).abs() < 1e-5);
-    }
-
-    #[test]
-    fn cc_composite_layer_takes_the_originals_place() {
-        // Create 3D Layer Instance's solid: the chosen layer takes the original's place. In
-        // Front replaces the pixels — alpha included, the copy of a 3D layer is transparent
-        // where the model isn't — and the other modes composite with them.
-        let solid = || Image::filled(4, 4, [1.0, 1.0, 1.0, 1.0]);
-        let model = |write: bool| {
-            let mut img = Image::new(4, 4);
-            if write {
-                img.set(1, 1, [1.0, 0.0, 0.0, 1.0]);
-            }
-            img
-        };
-        let out = with_host(model(true), |env| run_fx("ec.channel.cccomposite", &[("layer", Value::Layer(Some(7)))], solid(), 0.0, env));
-        assert_eq!(out.img.get(1, 1), [1.0, 0.0, 0.0, 1.0], "the chosen layer's pixel");
-        assert_eq!(out.img.get(3, 3), [0.0; 4], "transparent where the chosen layer isn't");
-        // Half opacity keeps the copy's shape at half strength.
-        let out =
-            with_host(model(true), |env| run_fx("ec.channel.cccomposite", &[("layer", Value::Layer(Some(7))), ("opacity", num(50.0))], solid(), 0.0, env));
-        let p = out.img.get(1, 1);
-        assert!((p[0] - 0.5).abs() < 1e-6 && (p[3] - 0.5).abs() < 1e-6, "{p:?}");
-        assert_eq!(out.img.get(3, 3), [0.0; 4]);
-        // In Back: the layer's own pixels over the chosen layer.
-        let out = with_host(model(true), |env| {
-            run_fx("ec.channel.cccomposite", &[("layer", Value::Layer(Some(7))), ("compositeOriginal", Value::Enum(1))], solid(), 0.0, env)
-        });
-        assert_eq!(out.img.get(1, 1), [1.0, 1.0, 1.0, 1.0]);
-        assert_eq!(out.img.get(3, 3), [1.0, 1.0, 1.0, 1.0]);
-        // No layer chosen: the layer's own original, as before.
-        let out = with_host(model(true), |env| run_fx("ec.channel.cccomposite", &[], Image::filled(4, 4, [0.5, 0.5, 0.5, 1.0]), 0.0, env));
-        assert_eq!(out.img.get(0, 0), [0.5, 0.5, 0.5, 1.0]);
     }
 
     #[test]

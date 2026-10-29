@@ -27,9 +27,9 @@ fn create(s: &mut Session, p: &Value) -> Result<Value> {
     if op == "instance3d" {
         // After Effects' Create 3D Layer Instance (Layer ▸ Create): 3D model layers take
         // no masks or effects, so a comp-sized solid goes at the top of the layer stack
-        // with CC Composite referencing the model — a 2D copy of its render, through the
-        // comp's camera, that 2D effects can be applied to. The model is switched off,
-        // as After Effects does (back on to keep its shadow).
+        // with a 3D Layer Instance effect referencing the model — a 2D copy of its render,
+        // through the comp's camera, that 2D effects can be applied to. The model is switched
+        // off, as After Effects does (back on to keep its shadow).
         let comp = s.project.comp(cid).ok_or(EngineError::NoComp)?.clone();
         let mut eligible = vec![];
         for lid in &lids {
@@ -55,9 +55,9 @@ fn create(s: &mut Session, p: &Value) -> Result<Value> {
                     // A soloed source keeps its Solo switch with video off, and any_solo hides
                     // the non-soloed copy: the copy takes the Solo over to stay visible.
                     l.switches.solo = src.switches.solo;
-                    // CC Composite referencing the 3D layer: the solid shows its render (the 2D
-                    // copy).
-                    let fx = effectcraft_effects::find("ec.channel.cccomposite").ok_or_else(|| bad("layer.create", "the CC Composite effect is missing"))?;
+                    // A 3D Layer Instance effect referencing the 3D layer: the solid shows its
+                    // render (the 2D copy).
+                    let fx = effectcraft_effects::find("ec.3d.instance3d").ok_or_else(|| bad("layer.create", "the 3D Layer Instance effect is missing"))?;
                     let mut g = effectcraft_effects::instantiate(fx, &mut Ids(&mut proj.next_id), fx.name, [comp.width as f64, comp.height as f64]);
                     if let Some(pr) = g.get_mut("layer") {
                         pr.value = KV::Layer(Some(lid.0));

@@ -74,7 +74,7 @@ impl EffectHost for FxHost<'_, '_, '_> {
         let sub = self.r.nested();
         // A 3D model or primitive layer has no 2D source of its own: an effect referencing one
         // reads it as After Effects does — the layer rendered on its own through the comp's
-        // camera (Create 3D Layer Instance's CC Composite), in the layer's effect space (the
+        // camera (Create 3D Layer Instance's effect), in the layer's effect space (the
         // comp, centred on the layer's anchor).
         if other.source.is_model() {
             let buf = sub.solo_3d(self.ctx, other);

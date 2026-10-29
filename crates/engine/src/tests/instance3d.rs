@@ -1,6 +1,6 @@
 //! Create 3D Layer Instance (Layer ▸ Create): a comp-sized solid at the top of the layer stack
-//! with CC Composite referencing the selected 3D model layer — a 2D copy of its render that 2D
-//! effects can be applied to (behaviour, pixels, undo/redo, serde).
+//! with a 3D Layer Instance effect referencing the selected 3D model layer — a 2D copy of its
+//! render that 2D effects can be applied to (behaviour, pixels, undo/redo, serde).
 
 use std::sync::Arc;
 
@@ -97,9 +97,9 @@ fn instance3d_creates_a_2d_copy_of_the_model() {
     let l = layer_in(&s, comp, solid);
     assert_eq!(l.name, "Triangle Instance");
     assert_eq!(s.active_comp().unwrap().layers[0].id.0, solid, "at the top of the layer stack");
-    // CC Composite referencing the 3D layer.
+    // A 3D Layer Instance effect referencing the 3D layer.
     let g = l.effects().unwrap().groups().next().unwrap().clone();
-    assert!(matches!(&g.kind, GroupKind::Effect { effect } if effect == "ec.channel.cccomposite"), "{:?}", g.kind);
+    assert!(matches!(&g.kind, GroupKind::Effect { effect } if effect == "ec.3d.instance3d"), "{:?}", g.kind);
     assert_eq!(g.get("layer").unwrap().value, KV::Layer(Some(model)));
     // The model is switched off, the copy selected.
     assert!(!layer_in(&s, comp, model).switches.video, "the referenced 3D layer is off, as After Effects does");
