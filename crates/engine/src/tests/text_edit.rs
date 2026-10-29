@@ -1313,6 +1313,35 @@ fn duplicate_during_an_edit_leaves_no_key_or_vertex_selected_on_the_original() {
 }
 
 #[test]
+fn duplicate_during_an_edit_copies_the_edited_layer_after_another_is_selected() {
+    use effectcraft_project::LayerId;
+    // An engine route (MCP, control channel, script) can select another layer while the edit
+    // stays open. The implicit Duplicate still means the edited layer, as Clear does; a named
+    // target keeps its meaning.
+    let (mut s, t) = session("Hello");
+    let other = s.execute("layer.newText", json!({"text": "Other"})).unwrap()["layer"].as_u64().unwrap();
+    begin_edit_at(&mut s, t, 5);
+    s.execute("layer.select", json!({"layer": other})).unwrap();
+    assert!(s.state.text_edit.as_ref().is_some_and(|e| e.layer == LayerId(t)), "selecting another layer leaves the edit open");
+    let before = layer_count(&s);
+    let copy = s.execute("edit.duplicate", json!({})).unwrap()[0].as_u64().unwrap();
+    assert!(s.state.text_edit.is_none(), "Duplicate ends the open edit");
+    assert_eq!(layer_count(&s), before + 1, "one layer is copied");
+    assert_eq!(doc(&s, copy).text, "Hello", "the edited layer is copied, not the newly selected one");
+    assert_eq!(s.state.selected_layers, vec![LayerId(copy)], "and its copy is selected");
+    // Null parameters name no layer, as everywhere else layers are read.
+    for unnamed in [json!({"layers": null}), json!({"layer": null})] {
+        begin_edit_at(&mut s, t, 5);
+        s.execute("layer.select", json!({"layer": other})).unwrap();
+        let copy = s.execute("edit.duplicate", unnamed.clone()).unwrap()[0].as_u64().unwrap();
+        assert_eq!(doc(&s, copy).text, "Hello", "{unnamed}: the edited layer is copied");
+    }
+    begin_edit_at(&mut s, t, 5);
+    let named = s.execute("edit.duplicate", json!({"layer": other})).unwrap()[0].as_u64().unwrap();
+    assert_eq!(doc(&s, named).text, "Other", "a named layer is copied as named");
+}
+
+#[test]
 fn duplicate_ends_the_open_edit_and_selects_the_copy() {
     let (mut s, t) = editing("Hello", 5);
     s.execute("text.insert", json!({"text": "!"})).unwrap();

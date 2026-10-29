@@ -6,7 +6,7 @@ use effectcraft_project::{Comp, Expression, ItemId, ItemKind, Layer, LayerId, La
 use effectcraft_time::Tick;
 use serde_json::{Value, json};
 
-use super::{CommandSpec, has_comp, has_layers, layers_p, match_path_of, selected_leaf_props, str_p};
+use super::{CommandSpec, has_comp, has_layers, layers_or, layers_p, match_path_of, selected_leaf_props, str_p};
 use crate::{EngineError, KeyRef, LinkClip, Result, Session, cmd};
 
 fn can_undo(s: &Session) -> std::result::Result<(), String> {
@@ -104,6 +104,10 @@ pub(crate) fn reid(layer: &mut Layer, next: &mut u64) {
     *next += 1;
 }
 
+/// `edit.duplicate`: copies the targets in place. Without `layers` the targets are, in order:
+/// during a text edit the edited layer (the edit is committed first, as `text.endEdit` does),
+/// else the selected effects, shape items or text animators, else the selected layers. Layer
+/// copies are selected and their ids returned; the other paths return their delegated result.
 fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
     let editing = s.state.text_edit.is_some();
     // Effects selected → duplicate them (Edit ▸ Duplicate in Effect Controls). An open text edit
@@ -132,9 +136,15 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
     // A deselected layer never keeps an open text edit: the copies take the selection, so commit
     // an open edit first, exactly as `text.endEdit` (typed text kept, an empty Type-tool layer
     // discarded) and as Deselect All does — one call on the command path so every route (menu,
-    // shortcut, palette, MCP, script) ends the edit and leaves the same final state.
+    // shortcut, palette, MCP, script) ends the edit and leaves the same final state. Unnamed, the
+    // target is the edited layer even when an engine route selected another one meanwhile; it is
+    // read before the commit, which may discard an empty Type-tool layer and leave nothing to copy.
+    let edited = s.state.text_edit.as_ref().map(|e| e.layer);
     super::text_edit::end_edit(s, &Value::Null)?;
-    let (cid, ids) = layers_p(s, p)?;
+    let (cid, ids) = match edited {
+        Some(layer) => layers_or(s, p, &[layer])?,
+        None => layers_p(s, p)?,
+    };
     let new = s.edit("Duplicate", None, |proj, st| {
         let mut next = proj.next_id;
         let comp = proj.comp_mut(cid).ok_or(crate::EngineError::NoComp)?;

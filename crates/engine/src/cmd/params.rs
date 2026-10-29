@@ -142,6 +142,11 @@ pub(crate) fn layer_p(s: &Session, p: &Value, cmd: &str) -> Result<(ItemId, Laye
 
 /// `layers` param (array) or the selection.
 pub(crate) fn layers_p(s: &Session, p: &Value) -> Result<(ItemId, Vec<LayerId>)> {
+    layers_or(s, p, &s.state.selected_layers)
+}
+
+/// `layers` param (array), else `layer`, else those of `fallback` still in the comp.
+pub(crate) fn layers_or(s: &Session, p: &Value, fallback: &[LayerId]) -> Result<(ItemId, Vec<LayerId>)> {
     let cid = comp_id(s, p)?;
     let comp = s.project.comp(cid).ok_or(EngineError::NoComp)?;
     // Explicit references that match no layer are an error (agents otherwise get a silent no-op).
@@ -153,7 +158,7 @@ pub(crate) fn layers_p(s: &Session, p: &Value) -> Result<(ItemId, Vec<LayerId>)>
     if let Some(v) = p.get("layer").filter(|v| !v.is_null()) {
         return Ok((cid, vec![resolve(v)?]));
     }
-    Ok((cid, s.state.selected_layers.iter().copied().filter(|l| comp.layer(*l).is_some()).collect()))
+    Ok((cid, fallback.iter().copied().filter(|l| comp.layer(*l).is_some()).collect()))
 }
 
 /// Whether a layer can be picked by the user (Select All, Ctrl+Up/Down, a Timeline click): not
