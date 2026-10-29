@@ -449,6 +449,19 @@ pub fn look_at(pos: Vec3, poi: Vec3, extra: Mat4) -> Mat4 {
 mod tests {
     use super::*;
 
+    /// A quad with three collinear corners has no projective map: identity, not NaN.
+    #[test]
+    fn square_to_quad_degenerate_is_finite() {
+        let m = Mat3::square_to_quad([vec2(0.0, 5.0), vec2(0.0, 0.0), vec2(10.0, 0.0), vec2(20.0, 0.0)]);
+        assert!(m.0.iter().flatten().all(|v| v.is_finite()), "non-finite: {m:?}");
+    }
+
+    #[test]
+    fn square_to_quad_regular_is_finite() {
+        let m = Mat3::square_to_quad([vec2(0.0, 0.0), vec2(10.0, 0.0), vec2(8.0, 6.0), vec2(0.0, 5.0)]);
+        assert!(m.0.iter().flatten().all(|v| v.is_finite()));
+    }
+
     fn close(a: Vec2, b: Vec2) -> bool {
         (a - b).length() < 1e-9
     }
