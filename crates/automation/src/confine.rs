@@ -86,7 +86,6 @@ const WRITES: &[(&str, &[&str])] = &[
     ("essential.exportTemplate", &["path"]),
     ("shortcuts.export", &["path"]),
     ("renderQueue.add", &["output", "path"]),
-    ("file.createProxy", &["path", "output"]),
 ];
 
 /// Commands that write where they are not told: the project's file, the Render Queue's outputs.

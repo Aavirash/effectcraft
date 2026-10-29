@@ -1414,12 +1414,16 @@ fn automation_roots_refuse_a_queued_output_from_an_unsaved_project() {
     assert_eq!(queue["items"].as_array().map(Vec::len), Some(0), "nothing was queued: {queue}");
     // Naming an output inside a write root is how it is done.
     call_json(&mut s, "execute_command", json!({"command": "renderQueue.add", "params": {"comp": "A", "output": p("named.mp4")}}));
-    // A proxy's own `path` is a write, not the read it used to be checked as (#2131 F-11).
+    // A proxy named outside the roots is refused. Whether that reads as a write or a read is
+    // #1347's to classify, so this asserts the refusal and not its wording.
     let (c, err) = call(&mut s, "execute_command", json!({"command": "file.createProxy", "params": {"comp": "A", "path": "/elsewhere/proxy.mov"}}));
     assert!(err, "a proxy outside the roots should be refused: {c:?}");
-    assert!(c[0]["text"].as_str().unwrap_or_default().contains("cannot write"), "{c:?}");
+    assert!(c[0]["text"].as_str().unwrap_or_default().contains("outside the automation roots"), "{c:?}");
     // Once the project is saved there, the default output (beside it) is queued as before.
     call_json(&mut s, "save_project", json!({"path": p("proj.ecproj")}));
+    // A name that is not a path is an Output Module template, and the output it resolves to lands
+    // beside the saved project: inside the write root, so it is allowed (#1347 relies on this).
+    call_json(&mut s, "execute_command", json!({"command": "file.createProxy", "params": {"comp": "A", "path": "ProxyTemplate"}}));
     call_json(&mut s, "execute_command", json!({"command": "renderQueue.add", "params": {"comp": "A"}}));
     let queue = call_json(&mut s, "execute_command", json!({"command": "renderQueue.list"}));
     let out = queue["items"][1]["outputPath"].as_str().unwrap_or_default();
