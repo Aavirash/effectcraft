@@ -195,13 +195,13 @@ fn mb_samples(r: &Renderer, ctx: &EvalCtx, layer: &Layer) -> usize {
 }
 
 /// Prepare a layer (buffer, geometry, material). `None` when it shows nothing.
-pub(crate) fn prepare<'a>(r: &Renderer, ctx: &EvalCtx<'a>, layer: &'a Layer, order: usize, out: (u32, u32), in_run: bool) -> Option<Item<'a>> {
+pub(crate) fn prepare<'a>(r: &Renderer, ctx: &EvalCtx<'_>, layer: &'a Layer, order: usize, out: (u32, u32), in_run: bool) -> Option<Item<'a>> {
     let buf = r.blend_layer_buf(ctx, layer)?;
     prepare_with(r, ctx, layer, order, out, in_run, PlaneInput { buf, local: Mat4::IDENTITY })
 }
 
 /// Prepare a layer as planes: one per character for per-character 3D text, else one.
-pub(crate) fn prepare_all<'a>(r: &Renderer, ctx: &EvalCtx<'a>, layer: &'a Layer, order: usize, out: (u32, u32), in_run: bool) -> Vec<Item<'a>> {
+pub(crate) fn prepare_all<'a>(r: &Renderer, ctx: &EvalCtx<'_>, layer: &'a Layer, order: usize, out: (u32, u32), in_run: bool) -> Vec<Item<'a>> {
     if crate::text::per_char_3d(ctx, layer) {
         return crate::text::per_char_planes(ctx, layer, r.opts.scale)
             .into_iter()
@@ -218,7 +218,7 @@ struct PlaneInput {
 }
 
 /// Prepare the plane's geometry, motion samples and material.
-fn prepare_with<'a>(r: &Renderer, ctx: &EvalCtx<'a>, layer: &'a Layer, order: usize, out: (u32, u32), in_run: bool, plane: PlaneInput) -> Option<Item<'a>> {
+fn prepare_with<'a>(r: &Renderer, ctx: &EvalCtx<'_>, layer: &'a Layer, order: usize, out: (u32, u32), in_run: bool, plane: PlaneInput) -> Option<Item<'a>> {
     let PlaneInput { mut buf, local } = plane;
     if buf.img.is_empty() {
         return None;
@@ -449,8 +449,8 @@ fn gather<'a>(r: &Renderer<'a>, ctx: &EvalCtx<'a>, run: &[&'a Layer], out: (u32,
         .flat_map_iter(|(i, l)| {
             // Stack order with room for a collapsed precomp's layers in between.
             let i = i * 1024;
-            if let Some(item) = r.collapsed(ctx, l) {
-                return collapsed_items(r, ctx, l, item, i, out);
+            if let Some(collapsed) = r.collapsed(ctx, l) {
+                return collapsed_items(r, ctx, l, &collapsed, i, out);
             }
             let mut its = prepare_all(r, ctx, l, i, out, true);
             if !its.is_empty() {
@@ -483,20 +483,13 @@ fn gather<'a>(r: &Renderer<'a>, ctx: &EvalCtx<'a>, run: &[&'a Layer], out: (u32,
 /// 3D space (world = precomp layer's world × nested world), depth-sorted with the run, so they
 /// intersect the parent's 3D layers; nested 2D layers lie on the precomp layer's plane in stack
 /// order. (Nested adjustment layers are skipped here.)
-fn collapsed_items<'a>(
-    r: &Renderer<'a>,
-    ctx: &EvalCtx<'a>,
-    layer: &'a Layer,
-    item: effectcraft_project::ItemId,
-    order: usize,
-    out: (u32, u32),
-) -> Vec<Item<'a>> {
+fn collapsed_items<'a>(r: &Renderer<'a>, ctx: &EvalCtx<'a>, layer: &'a Layer, collapsed: &crate::Collapsed, order: usize, out: (u32, u32)) -> Vec<Item<'a>> {
     let op = ctx.opacity(layer) as f32 * r.opacity_mul();
-    let Some((sub, nctx)) = r.collapse_into(ctx, layer, item, op) else { return vec![] };
+    let Some((sub, nctx)) = r.collapse_into(ctx, layer, collapsed, op) else { return vec![] };
     let t = nctx.time;
-    let any_solo = nctx.comp.any_solo();
-    let nested: Vec<&'a Layer> = nctx
-        .comp
+    let Some(nc) = r.project.comp(collapsed.item) else { return vec![] };
+    let any_solo = nc.any_solo();
+    let nested: Vec<&'a Layer> = nc
         .layers
         .iter()
         .rev()
@@ -645,6 +638,13 @@ fn shade_texel(it: &Item, g: &Geo, u: f64, v: f64, t: Px, lights: &[LightState],
     [lit[0] * a, lit[1] * a, lit[2] * a, a]
 }
 
+/// Samples per side of the Shadow Diffusion kernel for a penumbra radius of `r_px` caster pixels:
+/// odd, at least 3, and enough that neighbouring samples are at most 1.5 pixels apart, up to 15.
+pub(crate) fn shadow_taps(r_px: f64) -> u32 {
+    let n = ((2.0 * r_px / 1.5).ceil() as u32).clamp(3, 15);
+    n | 1
+}
+
 /// RGB transmittance of light `l` reaching `p` past caster `c` (1 = unoccluded).
 fn occlusion(c: &Item, p: Vec3, l: &LightState) -> [f32; 3] {
     const FAR: f64 = 1.0e6;
@@ -672,11 +672,17 @@ fn occlusion(c: &Item, p: Vec3, l: &LightState) -> [f32; 3] {
     if r * c.buf.scale < 0.5 {
         px = c.texel(hit.x, hit.y);
     } else {
-        for j in -1..=1 {
-            for i in -1..=1 {
-                let q = c.texel(hit.x + i as f64 * r * 0.66, hit.y + j as f64 * r * 0.66);
+        // Box filter over the penumbra square: n × n cell centres, dense enough that a wide
+        // diffusion blurs the caster instead of stamping copies of it (#2444).
+        let n = shadow_taps(r * c.buf.scale);
+        let step = 2.0 * r / n as f64;
+        let h = (n / 2) as i32;
+        let w = 1.0 / (n * n) as f32;
+        for j in -h..=h {
+            for i in -h..=h {
+                let q = c.texel(hit.x + f64::from(i) * step, hit.y + f64::from(j) * step);
                 for k in 0..4 {
-                    px[k] += q[k] / 9.0;
+                    px[k] += q[k] * w;
                 }
             }
         }
@@ -850,7 +856,7 @@ pub(crate) fn aux_pass(r: &Renderer, ctx: &EvalCtx) -> effectcraft_raster::AuxCh
                     if nv[2] > 0.0 {
                         nv = nv.map(|v| -v);
                     }
-                    let (sw, sh) = crate::source_size(r.project, it.layer);
+                    let (sw, sh) = ctx.source_size(it.layer);
                     let size = if sw == 0 { [ctx.comp.width as f64, ctx.comp.height as f64] } else { [sw as f64, sh as f64] };
                     (number(it.layer), source_id(it.layer), crypto_hash(&it.layer.name), crypto_hash(&source_name(it.layer)), nv, size)
                 })

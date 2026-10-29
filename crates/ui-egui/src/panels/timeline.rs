@@ -158,16 +158,23 @@ fn with_expr_rows(rows: Vec<Row>, comp: &Comp, tl: &crate::state::TimelineState,
 }
 
 /// A pick-whip drag in progress: (kind, layer, prop uid, start point). The kinds are the
-/// layer's parent pick whip, an expression's and a property's (Parent & Link column).
+/// layer's parent pick whip, an expression's, a property's (Parent & Link column) and the layer's
+/// track matte pick whip.
 type PickWhip = (u8, u64, u64, Pos2);
 const WHIP_PARENT: u8 = 0;
 const WHIP_EXPR: u8 = 1;
 const WHIP_PROP: u8 = 2;
+const WHIP_MATTE: u8 = 3;
 
 /// The `egui::Id` under which a pick-whip drag in progress ([`PickWhip`]) is kept during the
 /// drag.
 fn pick_whip_id() -> egui::Id {
     egui::Id::unique("tl-pickwhip")
+}
+
+/// The layers a layer pick whip (parent, track matte) links, taken as its drag starts.
+fn whip_layers_id() -> egui::Id {
+    egui::Id::unique("tl-pickwhip-layers")
 }
 
 /// The automation id, label and hover hint of a pick whip.
@@ -193,7 +200,15 @@ fn pick_whip(
     app.auto.add(auto, rect, label);
     if resp.drag_started() {
         let state: PickWhip = (kind, layer, prop, rect.center());
-        ui.ctx().data_mut(|d| d.insert_temp(pick_whip_id(), state));
+        let selected = &app.session.state.selected_layers;
+        let layers = match (kind, app.session.active_comp()) {
+            (WHIP_MATTE, Some(comp)) => video_targets(comp, LayerId(layer), selected),
+            _ => edited_layers(LayerId(layer), selected),
+        };
+        ui.ctx().data_mut(|d| {
+            d.insert_temp(pick_whip_id(), state);
+            d.insert_temp(whip_layers_id(), layers);
+        });
     }
     resp
 }
@@ -795,12 +810,11 @@ fn display_name(app: &EffectcraftApp, l: &Layer) -> String {
 /// layer whose names contain `q` (lowercase), each with its enclosing groups. A matching group
 /// brings its whole contents.
 fn search_rows(l: &Layer, q: &str) -> Vec<Row> {
-    /// The row for a group in search results: depth, its effect's enabled flag, and the eye
-    /// switch for layer-style groups (not Blending Options).
+    /// The row for a group in search results: depth, its effect's enabled flag, and its eye
+    /// switch ([`eye_of`]).
     fn group_row(l: &Layer, g: &PropGroup, depth: usize, parent: &PropGroup) -> Row {
         let fx = matches!(g.kind, GroupKind::Effect { .. }).then_some(g.enabled);
-        let eye =
-            (parent.match_id == effectcraft_engine::project::styles::GROUP && g.match_id != effectcraft_engine::project::styles::BLENDING).then_some(g.enabled);
+        let eye = eye_of(parent, g);
         Row { layer: l.id, depth, kind: RowKind::Group { uid: g.uid, name: g.name.clone(), open: true, has_children: !g.children.is_empty(), fx, eye } }
     }
     /// Every visible child of `g` at `depth`, groups recursed into whole — a matching group
@@ -1235,6 +1249,14 @@ fn collect_props(g: &PropGroup, out: &mut Vec<u64>, f: &dyn Fn(&Property) -> boo
 /// in `open`, text animators list their selectors and properties directly (as in AE), and a
 /// shape group's inner Contents (AE's elided `ADBE Vectors Group`) is skipped so its items
 /// list directly under the group.
+/// The eye switch of group `g` inside `parent`, as in After Effects: layer styles (not Blending
+/// Options) and every item in a shape layer's Contents (#959), which the renderer skips when off.
+fn eye_of(parent: &PropGroup, g: &PropGroup) -> Option<bool> {
+    let style = parent.match_id == effectcraft_engine::project::styles::GROUP && g.match_id != effectcraft_engine::project::styles::BLENDING;
+    let shape_item = parent.match_id == "contents" && g.match_id != "transform";
+    (style || shape_item).then_some(g.enabled)
+}
+
 fn push_group(rows: &mut Vec<Row>, l: &Layer, g: &PropGroup, depth: usize, open: &std::collections::BTreeSet<u64>) {
     for c in &g.children {
         match c {
@@ -1250,9 +1272,7 @@ fn push_group(rows: &mut Vec<Row>, l: &Layer, g: &PropGroup, depth: usize, open:
             Node::Group(sg) => {
                 let o = open.contains(&sg.uid);
                 let fx = matches!(sg.kind, GroupKind::Effect { .. }).then_some(sg.enabled);
-                // Layer style groups have eye switches (not Blending Options).
-                let eye = (g.match_id == effectcraft_engine::project::styles::GROUP && sg.match_id != effectcraft_engine::project::styles::BLENDING)
-                    .then_some(sg.enabled);
+                let eye = eye_of(g, sg);
                 rows.push(Row {
                     layer: l.id,
                     depth,
@@ -1293,6 +1313,13 @@ fn layer_icon(l: &Layer, project: &effectcraft_engine::project::Project) -> Icon
 }
 
 /// Layers being dragged to a new place in the stack (timeline rows).
+#[derive(Clone)]
+struct LayerDrag {
+    comp: ItemId,
+    owner: egui::Id,
+    layers: Vec<u64>,
+}
+
 fn layer_drag_id() -> egui::Id {
     egui::Id::unique("tl-layer-drag")
 }
@@ -1388,8 +1415,9 @@ fn switch_gesture(ui: &egui::Ui, resp: &egui::Response, row: Rect, switch: &'sta
     (a.min(b) < row.max.y && a.max(b) >= row.min.y).then_some((d.value, d.merge))
 }
 
-/// The layers an edit made on `layer`'s row applies to (a switch, its label, its blending mode):
-/// the selection when the row is selected, else that layer alone, as in After Effects.
+/// The layers an edit made on `layer`'s row applies to (a switch, its label, its blending mode,
+/// its parent or track matte, moving its bar): the selection when the row is selected, else that
+/// layer alone, as in After Effects (#1260).
 fn edited_layers(layer: LayerId, selected: &[LayerId]) -> Vec<u64> {
     if selected.contains(&layer) { selected.iter().map(|l| l.0).collect() } else { vec![layer.0] }
 }
@@ -1415,9 +1443,10 @@ fn switch_targets(comp: &Comp, project: &Project, selected: &[LayerId], layer: u
     edited_layers(LayerId(layer), selected).into_iter().filter(|l| comp.layer(LayerId(*l)).is_some_and(|l| switch_applies(l, name, project))).collect()
 }
 
-/// The layers a Modes column edit on `layer`'s row (its blending mode, Preserve Transparency)
-/// acts on: [`edited_layers`] that have video.
-fn mode_targets(comp: &Comp, layer: LayerId, selected: &[LayerId]) -> Vec<u64> {
+/// The layers a Modes column edit (blending mode, Preserve Transparency) or a Track Matte edit
+/// on `layer`'s row acts on: [`edited_layers`] that have video. Selected nulls, cameras and
+/// lights (no Modes or Track Matte on their rows) are left out.
+fn video_targets(comp: &Comp, layer: LayerId, selected: &[LayerId]) -> Vec<u64> {
     edited_layers(layer, selected).into_iter().filter(|l| comp.layer(LayerId(*l)).is_some_and(|l| l.source.is_av())).collect()
 }
 
@@ -1502,10 +1531,18 @@ fn insertion(layer_rows: &[(Rect, LayerId)], py: f32, top: f32) -> (Option<usize
     (at, y)
 }
 
-/// The `egui::Id` of the flag the row drag's release sets, telling the same frame's reorder
-/// drawing code to apply the drop.
-fn layer_drop_id() -> egui::Id {
-    egui::Id::unique("tl-layer-drop")
+/// Resolve a visible insertion boundary through the full outline, including offscreen layers.
+fn layer_drop_target(rows: &[Row], visible: &[(Rect, LayerId)], at: Option<usize>, moving: &[u64]) -> Option<LayerId> {
+    let (anchor, after) = match at {
+        Some(i) => (visible.get(i)?.1, false),
+        None => (visible.last()?.1, true),
+    };
+    rows.iter()
+        .filter(|row| matches!(row.kind, RowKind::Layer))
+        .skip_while(|row| row.layer != anchor)
+        .skip(usize::from(after))
+        .find(|row| !moving.contains(&row.layer.0))
+        .map(|row| row.layer)
 }
 
 /// Whether a Project item can replace a layer's source (the same set `layer.replaceSource`
@@ -1828,7 +1865,16 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
     pick_whip_edge_scroll(app, g);
     let snap_project = app.session.project.clone();
     let snap_expr = app.session.expr.clone();
-    let ectx = EvalCtx { project: &snap_project, comp_id: cid, comp: &comp, time: g.time, expr: snap_expr.as_deref(), footage: None };
+    let ectx = EvalCtx {
+        project: &snap_project,
+        comp_id: cid,
+        comp: &comp,
+        time: g.time,
+        expr: snap_expr.as_deref(),
+        footage: None,
+        property_overrides: &[],
+        media_overrides: &[],
+    };
     let mut rw = begin_rows(app, ui, tl);
     let g = &mut rw;
     draw_rows(app, ui, g, &ectx);
@@ -2903,13 +2949,10 @@ fn layer_row_actions(app: &mut EffectcraftApp, ui: &mut egui::Ui, g: &mut Rw, rc
     let is_sel = rc.is_sel;
     // Locked layers can't be selected or moved (unlock them with the lock switch).
     let locked = layer.switches.locked;
-    if row_resp.drag_started() && !locked {
+    if row_resp.drag_started_by(egui::PointerButton::Primary) && !locked {
         // The selected layers move together; an unselected row moves alone.
         let moving: Vec<u64> = if is_sel { comp.layers.iter().filter(|l| selected.contains(&l.id)).map(|l| l.id.0).collect() } else { vec![layer.id.0] };
-        ctx.data_mut(|d| d.insert_temp(layer_drag_id(), moving));
-    }
-    if row_resp.drag_stopped() {
-        ctx.data_mut(|d| d.insert_temp(layer_drop_id(), true));
+        ctx.data_mut(|d| d.insert_temp(layer_drag_id(), LayerDrag { comp: cid, owner: row_resp.id, layers: moving }));
     }
     app.auto.add(&format!("timeline.layer.{}.row", layer.id.0), left, &layer.name);
     if row_resp.clicked() && !locked {
@@ -2996,7 +3039,7 @@ fn layer_mode_cell(app: &mut EffectcraftApp, ui: &mut egui::Ui, g: &mut Rw, rc: 
     let opts: Vec<String> =
         BlendMode::ALL.iter().flat_map(|m| if m.ends_group() { vec![m.label().to_string(), "-".to_string()] } else { vec![m.label().to_string()] }).collect();
     if let Some(i) = widgets::popup_menu(ui, pop, mr.left_bottom(), &opts, opts.iter().position(|o| o == layer.blend_mode.label())) {
-        actions.push(("layer.setBlendMode".into(), json!({"layers": mode_targets(&comp, layer.id, selected), "mode": opts[i]})));
+        actions.push(("layer.setBlendMode".into(), json!({"layers": video_targets(&comp, layer.id, selected), "mode": opts[i]})));
     }
     let tr = Rect::from_center_size(pos2(cw.mode + 76.0 + 6.0, cy), vec2(14.0, 14.0));
     app.auto.add(&format!("timeline.layer.{}.preserveTransparency", layer.id.0), tr, "Preserve Transparency");
@@ -3006,7 +3049,7 @@ fn layer_mode_cell(app: &mut EffectcraftApp, ui: &mut egui::Ui, g: &mut Rw, rc: 
         actions.push((
             "layer.setSwitch".into(),
             json!({
-                "layers": mode_targets(&comp, layer.id, selected),
+                "layers": video_targets(&comp, layer.id, selected),
                 "switch": "preserveTransparency",
                 "value": !layer.preserve_transparency
             }),
@@ -3020,10 +3063,25 @@ fn layer_matte_cell(app: &mut EffectcraftApp, ui: &mut egui::Ui, g: &mut Rw, rc:
     let comp = g.tl.comp.clone();
     let cw = &g.tl.cw;
     let actions = &mut g.tl.actions;
+    let lp = g.lp.clone();
+    let selected = &g.selected;
     let layer = rc.layer;
     let cy = rc.cy;
-    // Track matte: layer picker + kind.
-    let mr = Rect::from_min_size(pos2(cw.trkmat + 2.0, cy - 9.0), vec2(104.0, 18.0));
+    // Track matte: a pick whip, then the layer picker with the mode. Like the parent, they set
+    // the matte of every selected layer when the row is selected (#1260).
+    pick_whip(
+        app,
+        ui,
+        &lp,
+        Rect::from_center_size(pos2(cw.trkmat + 9.0, cy), vec2(15.0, 15.0)),
+        (WHIP_MATTE, layer.id.0, 0),
+        WhipText {
+            auto: &format!("timeline.layer.{}.trackMattePickWhip", layer.id.0),
+            label: "Track Matte pick whip",
+            hint: crate::i18n::tr("Track Matte pick whip: drag onto a layer"),
+        },
+    );
+    let mr = Rect::from_min_size(pos2(cw.trkmat + 20.0, cy - 9.0), vec2(88.0, 18.0));
     let label = match layer.track_matte {
         Some(m) => comp.layer(m.layer).map(|l| format!("{} {}", comp.index_of(l.id).unwrap_or(0), l.name)).unwrap_or("None".into()),
         None => "No Track Matte".into(),
@@ -3053,7 +3111,7 @@ fn layer_matte_cell(app: &mut EffectcraftApp, ui: &mut egui::Ui, g: &mut Rw, rc:
     let current = layer.track_matte.and_then(|m| opts.iter().position(|o| o == m.kind.label()));
     if let Some(i) = widgets::popup_menu(ui, pop, mr.left_bottom(), &opts, current) {
         let ids: Vec<LayerId> = candidates.iter().map(|l| l.id).collect();
-        if let Some(a) = opts.get(i).and_then(|o| track_matte_pick(layer, &ids, i, o)) {
+        if let Some(a) = opts.get(i).and_then(|o| track_matte_pick(&video_targets(&comp, layer.id, selected), &ids, i, o)) {
             actions.push(a);
         }
     }
@@ -3070,6 +3128,7 @@ fn layer_parent_cell(app: &mut EffectcraftApp, ui: &mut egui::Ui, g: &mut Rw, rc
     let cw = &g.tl.cw;
     let actions = &mut g.tl.actions;
     let lp = g.lp.clone();
+    let selected = &g.selected;
     let layer = rc.layer;
     let cy = rc.cy;
     pick_whip(
@@ -3101,8 +3160,10 @@ fn layer_parent_cell(app: &mut EffectcraftApp, ui: &mut egui::Ui, g: &mut Rw, rc
         }
     }
     if let Some(i) = widgets::popup_menu(ui, pop, pr_rect.left_bottom(), &popts, None) {
-        let par = if i == 0 { serde_json::Value::Null } else { json!(cands[i - 2].id.0) };
-        actions.push(("layer.setParent".into(), json!({"layers": [layer.id.0], "parent": par})));
+        let par = cands.get(i.wrapping_sub(2)).map(|l| l.id.0);
+        // (The new parent itself, if selected, stays as it is.)
+        let layers: Vec<u64> = edited_layers(layer.id, selected).into_iter().filter(|l| Some(*l) != par).collect();
+        actions.push(("layer.setParent".into(), json!({"layers": layers, "parent": par})));
     }
 }
 
@@ -3270,7 +3331,6 @@ fn layer_bar_drag(g: &mut Rw, rc: &RowCtx<'_>, bars: &BarResps, quick: bool) {
     let selected = &g.selected;
     let ui_actions = &mut g.ui_actions;
     let layer = rc.layer;
-    let is_sel = rc.is_sel;
     let drag_key = format!("bar-{}", layer.id.0);
     for (resp, kind) in [(&body, "move"), (&lin, "in"), (&lout, "out")] {
         if kind == "move" && quick {
@@ -3286,7 +3346,7 @@ fn layer_bar_drag(g: &mut Rw, rc: &RowCtx<'_>, bars: &BarResps, quick: bool) {
                 let d = frames as f64 * fd;
                 // Moving or trimming a selected layer acts on the whole
                 // selection; each layer trims from its own in/out point.
-                let targets = if is_sel { json!(selected.iter().map(|l| l.0).collect::<Vec<_>>()) } else { json!([layer.id.0]) };
+                let targets = json!(edited_layers(layer.id, selected));
                 let params = match kind {
                     "move" => json!({"layers": targets, "delta": d, "merge": drag_key}),
                     "in" => json!({"layers": targets, "inDelta": d, "merge": drag_key}),
@@ -3388,11 +3448,16 @@ fn group_switches(app: &mut EffectcraftApp, ui: &mut egui::Ui, g: &mut Rw, rc: &
         app.auto.add(&format!("timeline.group.{uid}.fx"), fr_, name);
     }
     if let Some(en) = eye {
-        // Layer style eye switch in the A/V column, like AE.
+        // A layer style's or shape item's eye switch in the A/V column, like AE.
         let er = Rect::from_center_size(pos2(cw.av + 10.0, cy), vec2(15.0, 15.0));
         lp.rect_stroke(er.shrink(1.5), 2.0, Stroke::new(1.0, t.separator), StrokeKind::Inside);
         if widgets::icon_toggle(ui, er, Icon::Eye, *en, &t, egui::Id::unique(("geye", uid)), Sense::click()).clicked() {
-            actions.push(("layer.style.toggle".into(), json!({"layer": layer.id.0, "style": uid})));
+            let style = layer.props.sub(effectcraft_engine::project::styles::GROUP).is_some_and(|s| s.find_group(*uid).is_some());
+            actions.push(if style {
+                ("layer.style.toggle".into(), json!({"layer": layer.id.0, "style": uid}))
+            } else {
+                ("prop.setGroupEnabled".into(), json!({"layer": layer.id.0, "prop": uid, "value": !*en}))
+            });
         }
         app.auto.add(&format!("timeline.group.{uid}.eye"), er, name);
     }
@@ -4238,6 +4303,7 @@ fn pick_whip_drag(g: &mut Rw) {
     let t = g.tl.t;
     let graph_x0 = g.tl.graph_x0;
     let ctx = g.tl.ctx.clone();
+    let comp = g.tl.comp.clone();
     let actions = &mut g.tl.actions;
     let hit_rows = &mut g.hit_rows;
     let dim_hits = &mut g.dim_hits;
@@ -4250,7 +4316,7 @@ fn pick_whip_drag(g: &mut Rw) {
         let target = hit_rows.iter().find(|(r, _)| r.contains(ptr)).map(|(r, row)| (*r, row.clone()));
         // Shown this pass or the last one (Effect Controls may draw after the Timeline).
         let pass = ctx.cumulative_pass_nr();
-        let elsewhere = (target.is_none() && kind != WHIP_PARENT)
+        let elsewhere = (target.is_none() && !matches!(kind, WHIP_PARENT | WHIP_MATTE))
             .then(|| ctx.data(|d| d.get_temp::<WhipTargets>(whip_targets_id())))
             .flatten()
             .filter(|(p, _)| p.saturating_add(1) >= pass)
@@ -4261,10 +4327,13 @@ fn pick_whip_drag(g: &mut Rw) {
             fg.rect_stroke(*tr, 0.0, Stroke::new(1.0, t.accent), StrokeKind::Inside);
         }
         if ctx.input(|i| !i.pointer.any_down()) {
-            ctx.data_mut(|d| {
+            let whip_layers = ctx.data_mut(|d| {
                 d.remove::<PickWhip>(pick_whip_id());
                 d.remove::<WhipTargets>(whip_targets_id());
+                d.remove_temp::<Vec<u64>>(whip_layers_id())
             });
+            // The layers a layer pick whip links, less the one it was dropped on.
+            let linked = |onto: u64| -> Vec<u64> { whip_layers.clone().unwrap_or_else(|| vec![src_layer]).into_iter().filter(|l| *l != onto).collect() };
             let into = (kind == WHIP_EXPR).then(|| ctx.data_mut(|d| d.remove_temp::<WhipInto>(whip_into_id(src_prop)))).flatten();
             // The property dropped on, and the value (dimension) if on one of them: `position[0]`.
             let dim = |fields: &[Rect]| fields.iter().position(|r| r.contains(ptr));
@@ -4277,7 +4346,11 @@ fn pick_whip_drag(g: &mut Rw) {
             };
             match (kind, target, prop_target) {
                 (WHIP_PARENT, Some((_, row)), _) if row.layer.0 != src_layer => {
-                    actions.push(("layer.setParent".into(), json!({"layers": [src_layer], "parent": row.layer.0})));
+                    actions.push(("layer.setParent".into(), json!({"layers": linked(row.layer.0), "parent": row.layer.0})));
+                }
+                // Each layer keeps its own matte mode.
+                (WHIP_MATTE, Some((_, row)), _) if row.layer.0 != src_layer && comp.layer(row.layer).is_some_and(|l| l.source.is_av()) => {
+                    actions.push(("layer.setTrackMatte".into(), json!({"layers": linked(row.layer.0), "matte": row.layer.0, "kind": "preserve"})));
                 }
                 // The property pick whip replaces the expression with the reference (or adds one),
                 // as the expression pick whip does when its expression isn't being edited.
@@ -4285,6 +4358,10 @@ fn pick_whip_drag(g: &mut Rw) {
                     let mut params = json!({"layer": src_layer, "prop": src_prop, "target": {"layer": tl, "prop": tu}});
                     if let Some(d) = d {
                         params["target"]["dimension"] = json!(d);
+                    }
+                    // Alt held as it drops: an effect's properties by their index (#1072).
+                    if ctx.input(|i| i.modifiers.alt) {
+                        params["byIndex"] = json!(true);
                     }
                     if let Some((text, [a, b])) = into {
                         // Into the expression being edited, which goes on being edited.
@@ -4351,6 +4428,7 @@ fn graph_empty_area(ui: &mut egui::Ui, g: &mut Rw) {
 
 /// Layer reorder drag: a line where the layers land.
 fn layer_reorder_drag(ui: &mut egui::Ui, g: &mut Rw) {
+    let cid = g.tl.cid;
     let t = g.tl.t;
     let rect = g.tl.rect;
     let graph_x0 = g.tl.graph_x0;
@@ -4360,16 +4438,29 @@ fn layer_reorder_drag(ui: &mut egui::Ui, g: &mut Rw) {
     let p = g.tl.p.clone();
     let actions = &mut g.tl.actions;
     let hit_rows = &mut g.hit_rows;
-    if let Some(moving) = ctx.data(|d| d.get_temp::<Vec<u64>>(layer_drag_id())) {
-        let dropped = ctx.data_mut(|d| d.remove_temp::<bool>(layer_drop_id())).unwrap_or(false);
+    // The origin row can scroll out of view, so finish the gesture here, independently of
+    // its Response. Disabled UI, Escape or lost ownership cancels; only a primary release drops layers.
+    if let Some(drag) = ctx.data(|d| d.get_temp::<LayerDrag>(layer_drag_id())) {
+        let (down, released, escape) =
+            ctx.input(|i| (i.pointer.primary_down(), i.pointer.button_released(egui::PointerButton::Primary), i.key_pressed(egui::Key::Escape)));
+        let dropped = ctx.drag_stopped_id() == Some(drag.owner) && released;
+        let valid = ui.is_enabled()
+            && drag.comp == cid
+            && drag.layers.iter().all(|id| comp.layer(LayerId(*id)).is_some())
+            && !escape
+            && (dropped || (down && ctx.dragged_id() == Some(drag.owner)));
+        if dropped || !valid {
+            ctx.data_mut(|d| d.remove::<LayerDrag>(layer_drag_id()));
+        }
+        let moving = &drag.layers;
         let layer_rows: Vec<(Rect, LayerId)> = hit_rows.iter().filter(|(_, r)| matches!(r.kind, RowKind::Layer)).map(|(rr, r)| (*rr, r.layer)).collect();
         if let Some(py) = ui.input(|i| i.pointer.interact_pos().or(i.pointer.latest_pos())).map(|p| p.y)
+            && valid
             && !layer_rows.is_empty()
         {
             let (at, line_y) = insertion(&layer_rows, py, rows_rect.min.y);
-            let target = at.and_then(|i| layer_rows[i..].iter().find(|(_, l)| !moving.contains(&l.0)).map(|(_, l)| *l));
+            let target = layer_drop_target(&g.tl.rows, &layer_rows, at, moving);
             if dropped {
-                ctx.data_mut(|d| d.remove::<Vec<u64>>(layer_drag_id()));
                 // Only when the order changes (no empty undo step for a drop in place).
                 let mut order: Vec<u64> = comp.layers.iter().map(|l| l.id.0).filter(|id| !moving.contains(id)).collect();
                 let at = target.and_then(|t| order.iter().position(|id| *id == t.0)).unwrap_or(order.len());
@@ -4385,8 +4476,6 @@ fn layer_reorder_drag(ui: &mut egui::Ui, g: &mut Rw) {
                 ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
                 p.with_clip_rect(rows_rect).line_segment([pos2(rect.min.x, line_y), pos2(graph_x0, line_y)], Stroke::new(2.0, t.accent));
             }
-        } else if dropped {
-            ctx.data_mut(|d| d.remove::<Vec<u64>>(layer_drag_id()));
         }
     }
     // Quick Offset of layer bars: the last selected layer moves by whole frames with the pointer
@@ -5103,19 +5192,21 @@ fn text_anim_popups(
     }
 }
 
-/// The command for the Track Matte menu item `i` (`choice`) of `layer`, whose menu lists "No Track
-/// Matte", a separator, the matte `candidates`, a separator and the modes. A mode without a matte
-/// layer takes the layer above, like Layer ▸ Track Matte (#864: it used to do nothing).
-fn track_matte_pick(layer: &Layer, candidates: &[LayerId], i: usize, choice: &str) -> Option<(String, serde_json::Value)> {
+/// The command for the Track Matte menu item `i` (`choice`) of a row, setting `layers`' mattes,
+/// whose menu lists "No Track Matte", a separator, the matte `candidates`, a separator and the
+/// modes. A new matte layer keeps each layer's mode (the matte itself, if among them, is left
+/// out); a mode without a matte layer takes the layer above, like Layer ▸ Track Matte (#864: it
+/// used to do nothing).
+fn track_matte_pick(layers: &[u64], candidates: &[LayerId], i: usize, choice: &str) -> Option<(String, serde_json::Value)> {
     if i == 0 {
-        return Some(("layer.setTrackMatte".into(), json!({"layer": layer.id.0, "matte": null})));
+        return Some(("layer.setTrackMatte".into(), json!({"layers": layers, "matte": null})));
     }
     if let Some(m) = i.checked_sub(2).and_then(|j| candidates.get(j)) {
-        let kind = layer.track_matte.map(|m| m.kind).unwrap_or_default();
-        return Some(("layer.setTrackMatte".into(), json!({"layer": layer.id.0, "matte": m.0, "kind": kind_name(kind)})));
+        let layers: Vec<u64> = layers.iter().copied().filter(|l| *l != m.0).collect();
+        return (!layers.is_empty()).then(|| ("layer.setTrackMatte".into(), json!({"layers": layers, "matte": m.0, "kind": "preserve"})));
     }
     let k = MatteKind::ALL.into_iter().find(|k| k.label() == choice)?;
-    Some(("layer.trackMatte".into(), json!({"layers": [layer.id.0], "op": kind_name(k)})))
+    Some(("layer.trackMatte".into(), json!({"layers": layers, "op": kind_name(k)})))
 }
 
 fn kind_name(k: MatteKind) -> &'static str {
@@ -5448,7 +5539,8 @@ fn value_editor(app: &mut EffectcraftApp, ui: &mut egui::Ui, ve: &ValueEdit<'_>,
 fn scalar_editor(app: &mut EffectcraftApp, ui: &mut egui::Ui, ve: &ValueEdit<'_>, actions: &mut Vec<(String, serde_json::Value)>, value: &Value) {
     let Value::Scalar(v) = value else { return };
     let (layer, prop, at, uid) = (ve.layer, ve.prop, ve.at, ve.uid);
-    let t = app.tokens;
+    // The values themselves: red while an expression drives the property (#1306).
+    let vt = app.tokens.for_value(prop.has_expression());
     let (x, y) = (at.x, at.y - 9.0);
     let (min, max, dec, speed) = match &prop.ui {
         ParamUi::Slider { min, max, decimals, .. } => (*min, *max, *decimals as usize, widgets::slider_scrub_speed(&prop.ui)),
@@ -5456,7 +5548,7 @@ fn scalar_editor(app: &mut EffectcraftApp, ui: &mut egui::Ui, ve: &ValueEdit<'_>
         _ => (-1e9, 1e9, 1, 1.0),
     };
     if matches!(prop.ui, ParamUi::Angle) {
-        let (rr, dr, nv) = super::fx_widgets::angle_field(ui, pos2(x, y), egui::Id::unique(("v", uid, 0)), *v, 1, &t);
+        let (rr, dr, nv) = super::fx_widgets::angle_field(ui, pos2(x, y), egui::Id::unique(("v", uid, 0)), *v, 1, &vt);
         app.auto.add(&format!("timeline.prop.{uid}.value"), dr, &prop.name);
         app.auto.add(&format!("timeline.prop.{uid}.revolutions"), rr, &prop.name);
         if let Some(nv) = nv {
@@ -5472,7 +5564,7 @@ fn scalar_editor(app: &mut EffectcraftApp, ui: &mut egui::Ui, ve: &ValueEdit<'_>
             egui::Id::unique(("v", uid, 0)),
             *v,
             &widgets::HotSpec { speed, range: (min, max), decimals: dec.max(1), suffix },
-            &t,
+            &vt,
         );
         app.auto.add(&format!("timeline.prop.{uid}.value"), r, &prop.name);
         if let Some(nv) = nv {
@@ -5485,6 +5577,7 @@ fn scalar_editor(app: &mut EffectcraftApp, ui: &mut egui::Ui, ve: &ValueEdit<'_>
 fn vector_editor(app: &mut EffectcraftApp, ui: &mut egui::Ui, ve: &ValueEdit<'_>, actions: &mut Vec<(String, serde_json::Value)>, value: &Value) -> Vec<Rect> {
     let (p, layer, prop, at, uid) = (ve.p, ve.layer, ve.prop, ve.at, ve.uid);
     let t = app.tokens;
+    let vt = t.for_value(prop.has_expression());
     let (mut x, y) = (at.x, at.y - 9.0);
     let is_3d = layer.is_3d();
     let mut dims = vec![];
@@ -5495,15 +5588,17 @@ fn vector_editor(app: &mut EffectcraftApp, ui: &mut egui::Ui, ve: &ValueEdit<'_>
     let feather = prop.match_id == "feather" && layer.props.parent_of(uid).is_some_and(|g| matches!(g.kind, GroupKind::Mask { .. }));
     let range = if feather { (0.0, 1e9) } else { (-1e9, 1e9) };
     // Scale and Mask Feather: the chain link (Constrain Proportions, on by default).
-    let linkable = feather || (pct && prop.match_id == "scale");
-    let linked = linkable && !app.ui.timeline.unlinked.contains(&uid);
+    // Rectangle and Ellipse Path Size have it too, off by default (#2489).
+    let size = prop.match_id == "size" && layer.props.parent_of(uid).is_some_and(|g| matches!(g.match_id.as_str(), "rect" | "ellipse"));
+    let linkable = feather || size || (pct && prop.match_id == "scale");
+    let linked = linkable && app.ui.timeline.is_linked(uid, !size);
     if linkable {
         let lr = Rect::from_center_size(pos2(x + 7.0, at.y), vec2(14.0, 14.0));
         let resp = ui.interact(lr, egui::Id::unique(("tl-link", uid)), Sense::click()).on_hover_text(crate::i18n::tr("Constrain Proportions"));
         icons::paint(p, lr, Icon::Link, if linked { t.accent } else { t.text_faint });
         app.auto.add(&format!("timeline.prop.{uid}.link"), lr, "Constrain Proportions");
-        if resp.clicked() && !app.ui.timeline.unlinked.remove(&uid) {
-            app.ui.timeline.unlinked.insert(uid);
+        if resp.clicked() {
+            app.ui.timeline.toggle_link(uid, !size);
         }
         x += 18.0;
     }
@@ -5515,7 +5610,7 @@ fn vector_editor(app: &mut EffectcraftApp, ui: &mut egui::Ui, ve: &ValueEdit<'_>
             egui::Id::unique(("v", uid, d)),
             c[d],
             &widgets::HotSpec { speed: if pct { 0.5 } else { 1.0 }, range, decimals: 1, suffix },
-            &t,
+            &vt,
         );
         app.auto.add(&format!("timeline.prop.{uid}.value.{d}"), r, &prop.name);
         dims.push(r);
@@ -5538,7 +5633,7 @@ fn vector_editor(app: &mut EffectcraftApp, ui: &mut egui::Ui, ve: &ValueEdit<'_>
         }
         x = r.max.x + if d + 1 < n { 2.0 } else { 0.0 };
         if d + 1 < n {
-            p.text(pos2(x, at.y), Align2::LEFT_CENTER, ",", Tokens::ui(12.0), t.hot_text);
+            p.text(pos2(x, at.y), Align2::LEFT_CENTER, ",", Tokens::ui(12.0), vt.hot_text);
             x += 6.0;
         }
     }
@@ -5613,7 +5708,7 @@ fn enum_editor(app: &mut EffectcraftApp, ui: &mut egui::Ui, ve: &ValueEdit<'_>, 
             ve.set(actions, json!(ni));
         }
     } else {
-        p.text(pos2(x, at.y), Align2::LEFT_CENTER, fmt_num(*i as f64, 0), Tokens::ui(12.0), t.hot_text);
+        p.text(pos2(x, at.y), Align2::LEFT_CENTER, fmt_num(*i as f64, 0), Tokens::ui(12.0), t.for_value(prop.has_expression()).hot_text);
     }
 }
 
