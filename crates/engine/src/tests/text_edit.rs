@@ -199,6 +199,20 @@ fn typing_deleting_and_caret_movement() {
     assert!(s.state.text_edit.is_none());
 }
 
+/// Duplicating during a text edit moves the selection to the copy: the edit on the original ends
+/// (#2226), as in After Effects — typing must not keep editing an unselected layer.
+#[test]
+fn duplicate_during_a_text_edit_ends_the_edit() {
+    let (mut s, t) = session("Hello");
+    s.execute("text.edit", json!({"layer": t, "caret": 5})).unwrap();
+    let copy = s.execute("edit.duplicate", json!({"layers": [t]})).unwrap()[0].as_u64().unwrap();
+    assert_ne!(copy, t, "the duplicate is created");
+    assert_eq!(s.state.selected_layers, vec![effectcraft_project::LayerId(copy)], "the copy is selected");
+    assert!(s.state.text_edit.is_none(), "the edit ended with the selection move (#2226)");
+    assert_eq!(doc(&s, t).text, "Hello", "the original keeps its text");
+    assert_eq!(doc(&s, copy).text, "Hello", "and the copy carries it");
+}
+
 #[test]
 fn caret_style_applies_to_the_next_typed_text() {
     let (mut s, t) = session("ab");
@@ -928,11 +942,19 @@ fn fonts_lists_bundled_and_installed_families() {
     let r = s.execute("text.fonts", json!({"query": "noto ser", "rescan": true})).unwrap();
     assert_eq!(r["families"][0]["family"], "Noto Serif");
     // The bundled face is Regular; the OS can also provide Bold, Italic, or other faces.
-    // Compare against the independent directory inventory rather than assuming an empty OS.
-    let mut expected_styles = std::collections::BTreeSet::from(["Regular".to_string()]);
-    expected_styles.extend(installed.iter().filter(|face| face.family.eq_ignore_ascii_case("Noto Serif")).map(|face| face.style.clone()));
+    // Model `add_source()` on the independent directory inventory: a system face whose family
+    // and primary style duplicate an earlier face is skipped, with its named instances.
+    let mut expected_styles = std::collections::BTreeSet::from(["regular".to_string()]);
+    let mut retained = std::collections::BTreeSet::from([("noto serif".to_string(), "regular".to_string())]);
+    for face in installed.iter().filter(|face| face.family.eq_ignore_ascii_case("Noto Serif")) {
+        if retained.insert((face.family.to_ascii_lowercase(), face.style.to_ascii_lowercase())) {
+            expected_styles.insert(face.style.to_ascii_lowercase());
+            expected_styles.extend(face.instances.iter().map(|i| i.style.to_ascii_lowercase()));
+        }
+    }
     let styles: Vec<String> = r["families"][0]["styles"].as_array().unwrap().iter().map(|style| style.as_str().unwrap().to_string()).collect();
-    assert_eq!(styles.iter().cloned().collect::<std::collections::BTreeSet<_>>(), expected_styles);
+    // `families()` keeps the first spelling of a style that differs only in case.
+    assert_eq!(styles.iter().map(|style| style.to_ascii_lowercase()).collect::<std::collections::BTreeSet<_>>(), expected_styles);
     assert_eq!(styles.len(), expected_styles.len(), "style menu has no duplicates");
     assert!(r["families"].as_array().unwrap().iter().all(|f| f["family"].as_str().unwrap().to_lowercase().contains("noto ser")));
     // The style menus offer a family's own styles.

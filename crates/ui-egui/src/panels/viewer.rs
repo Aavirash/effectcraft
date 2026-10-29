@@ -178,7 +178,16 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
     phase_frame(app, &mut v);
     let snap_project = app.session.project.clone();
     let snap_expr = app.session.expr.clone();
-    let ectx = EvalCtx { project: &snap_project, comp_id: cid, comp: &comp, time: v.time, expr: snap_expr.as_deref(), footage: None };
+    let ectx = EvalCtx {
+        project: &snap_project,
+        comp_id: cid,
+        comp: &comp,
+        time: v.time,
+        expr: snap_expr.as_deref(),
+        footage: None,
+        property_overrides: &[],
+        media_overrides: &[],
+    };
     phase_guides(app, &ectx, &mut v);
     phase_layers(app, ui, &ectx, &mut v);
     phase_scene(app, &ectx, &mut v);
@@ -1812,7 +1821,7 @@ use geometry::{
 pub(crate) use geometry::{from_effect_space, fx2c, l2c, layer_outline, layer_quad};
 use gesture::{Gesture, HANDLE, ROTO_HINT, pen_id, roi_drag, roi_handles, vertex_grab_radius};
 use shapes::{create_shape, draw_shape_ghost, shape_drag};
-pub(crate) use shapes::{layer_at, layers_at, pick, selectable_layers};
+pub(crate) use shapes::{layer_at, layer_at_including_locked, layers_at, pick, selectable_layers};
 #[cfg(test)]
 use tools::constrain_45;
 use tools::{add_motion_key, axis_at, axis_drag, drag_axes, draw_rigs, parent_world_inverse, pen_cursor, pen_cursor_icon, pen_press, select_motion_key};
