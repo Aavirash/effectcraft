@@ -16,6 +16,7 @@ mod frame_blend;
 mod guides;
 mod mask_blur;
 mod mask_expansion;
+mod mask_feather;
 mod motion_tile;
 mod nested;
 mod paint;
