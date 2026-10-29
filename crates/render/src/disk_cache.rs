@@ -721,7 +721,7 @@ pub fn read_layer_entry(data: &[u8]) -> Option<Buf> {
 /// The disk key of a segmentation: its chain key and scale.
 fn seg_key(key: u64, scale: f64) -> u128 {
     let mut h = Hash128::default();
-    h.write(b"segmentation-v1");
+    h.write(b"segmentation-v2");
     h.write_u64(key);
     h.write_u64(scale.to_bits());
     h.finish()
