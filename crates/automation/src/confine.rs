@@ -97,6 +97,7 @@ const MIXED_WRITES: &[(&str, &[&str])] = &[("templates.create", &["projectPath",
 
 /// Commands that write files named by these parameters.
 const WRITES: &[(&str, &[&str])] = &[
+    ("camera.exportBlender", &["path"]),
     ("file.save", &["path"]),
     ("file.saveAs", &["path"]),
     ("file.saveCopy", &["path"]),

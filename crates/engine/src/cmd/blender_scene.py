@@ -2,8 +2,7 @@
 # Run in Blender's Scripting workspace (Open, Run Script), or:
 # blender --background --python "Tracked Scene.py"
 # Creates a NEW scene; existing scenes and objects are preserved. Save the .blend yourself.
-# Public API references: https://docs.blender.org/api/4.5/bpy.types.Camera.html
-# https://docs.blender.org/api/4.5/bpy.types.ImageUser.html
+# Public API types: bpy.types.Camera, bpy.types.ImageUser
 import json
 import math
 import os
