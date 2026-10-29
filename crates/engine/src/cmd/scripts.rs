@@ -25,6 +25,9 @@ pub const SCRIPTS_DIR: &str = "Scripts";
 pub const PANELS_DIR: &str = "Scripts/ScriptUI Panels";
 /// [`PANELS_DIR`]'s name in [`SCRIPTS_DIR`]: it holds the panels, so it is not a folder of scripts.
 const PANELS_FOLDER: &str = "ScriptUI Panels";
+/// Subfolders of Scripts that hold scripts the app runs itself (panels; launch and quit, as in
+/// After Effects): never listed as File ▸ Scripts submenus.
+const RESERVED_FOLDERS: [&str; 3] = [PANELS_FOLDER, "Startup", "Shutdown"];
 /// The ScriptUI panels open when EffectCraft last quit (settings store), reopened at launch.
 pub const OPEN_PANELS_FILE: &str = "scriptui_panels.json";
 /// Scripts' `app.settings` in the settings store: `{section: {key: value}}`, as After Effects
@@ -129,14 +132,14 @@ fn is_script(name: &str) -> bool {
 }
 
 /// Whether `name` can name an installed script: a file name, or `Folder/File` for one in a
-/// subfolder of a Scripts folder (one level, and not `ScriptUI Panels/…`, the panels' own
-/// folder). Each part is a bare name, never a path (names are joined onto the Scripts folders of
+/// subfolder of a Scripts folder (one level, and not one of [`RESERVED_FOLDERS`]: `ScriptUI
+/// Panels/…`, `Startup/…`, `Shutdown/…`). Each part is a bare name, never a path (names are joined onto the Scripts folders of
 /// the settings store, which takes them as relative paths), and on Windows none of the names
 /// [`windows_unsafe_name`] lists.
 fn is_script_name(name: &str) -> bool {
     let part = |n: &str| is_bare_name(n) && !(cfg!(windows) && windows_unsafe_name(n));
     match name.split_once('/') {
-        Some((folder, file)) => part(folder) && part(file) && !folder.eq_ignore_ascii_case(PANELS_FOLDER),
+        Some((folder, file)) => part(folder) && part(file) && !RESERVED_FOLDERS.iter().any(|r| folder.eq_ignore_ascii_case(r)),
         None => part(name),
     }
 }
@@ -610,7 +613,7 @@ mod tests {
         for name in ["Tools/Hello.jsx", "Rename Layers.jsx"] {
             assert!(bad_params(&s.execute("window.scriptPanel", json!({"name": name}))), "{name}");
         }
-        for name in ["../x.jsx", "a/b/c.jsx", "a\\b.jsx", "Motion Kit/sub/Deep.jsx", "ScriptUI Panels/Top.jsx", "Tools/../../../outside.jsx"] {
+        for name in ["../x.jsx", "a/b/c.jsx", "a\\b.jsx", "Motion Kit/sub/Deep.jsx", "ScriptUI Panels/Top.jsx", "Startup/Run.jsx", "shutdown/Run.jsx", "Tools/../../../outside.jsx"] {
             assert_eq!(script_code(&s, name, None), None, "{name:?}");
             for c in ["file.runScript", "window.scriptPanel", "file.uninstallScript"] {
                 let r = s.execute(c, json!({"name": name}));
