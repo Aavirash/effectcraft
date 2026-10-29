@@ -282,9 +282,8 @@ impl<'a> Cx<'a> {
         }
         // The GPU cap is for the GPU's memory: once it has stopped for good, frames render on the
         // CPU, in parallel or under the CPU cap (#1615), which holds throughout.
-        let caps = Inflight { gpu: self.gpu_cap(), cpu: cpu_inflight(std::env::var(CPU_INFLIGHT_ENV).ok().as_deref()) };
         let gpu_live = || self.job.accel.is_none_or(|a| a.available());
-        map_frames_while(ks, caps, gpu_live, |k| self.frame(comp, k), f)
+        map_frames_while(ks, self.inflight(), gpu_live, |k| self.frame(comp, k), f)
     }
 
     /// [`Cx::frames`] for `ks` while `encode` runs beside them on `beside`'s threads, so the
@@ -339,6 +338,11 @@ impl<'a> Cx<'a> {
     /// frames render on the CPU: no accelerator, or a Software Only project.
     fn gpu_cap(&self) -> Option<usize> {
         (self.job.accel.is_some() && self.project.settings.gpu_acceleration).then(|| gpu_inflight(std::env::var(GPU_INFLIGHT_ENV).ok().as_deref()))
+    }
+
+    /// The GPU and CPU frames-in-flight caps every frame loop shares (#1615).
+    fn inflight(&self) -> Inflight {
+        Inflight { gpu: self.gpu_cap(), cpu: cpu_inflight(std::env::var(CPU_INFLIGHT_ENV).ok().as_deref()) }
     }
 
     /// Output frame `i`: sampled (fields, pulldown), at the colour depth, cropped and resized.
@@ -418,7 +422,7 @@ impl<'a> Cx<'a> {
         let gpu_live = || self.job.accel.is_none_or(|a| a.available());
         map_frames_while(
             ks,
-            self.gpu_cap(),
+            self.inflight(),
             gpu_live,
             |k| self.yuv420_frame(comp, k, w, h).ok_or_else(|| self.frame(comp, k)),
             |k, r| match r {
