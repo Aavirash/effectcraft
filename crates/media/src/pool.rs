@@ -67,6 +67,10 @@ const CONFORM_VERSION: u32 = 3;
 /// conform thread allocate all of it at once (#408).
 const MAX_CONFORM_SECONDS: i64 = 24 * 3600;
 
+/// The sample rates audio is read at; a header outside them is damaged or hostile (#2141).
+const MIN_SAMPLE_RATE: u32 = 1_000;
+const MAX_SAMPLE_RATE: u32 = 768_000;
+
 /// The sample frames of `footage`'s audio at `rate` Hz that a conformed file holds, `None` past
 /// [`MAX_CONFORM_SECONDS`].
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
@@ -513,6 +517,11 @@ impl MediaPool {
         let src = self.inner.source(&path).ok_or("the file can't be opened")?;
         let s0 = start.to_units_floor(rate as i64);
         let native = src.info().audio.as_ref().map_or(rate, |a| a.sample_rate);
+        // The header's rate scales the samples read: 0xFFFFFFFF Hz made one conform chunk about
+        // 47 GB (#2141). Real audio is 1–768 kHz.
+        if native != 0 && !(MIN_SAMPLE_RATE..=MAX_SAMPLE_RATE).contains(&native) {
+            return Err(format!("a sample rate of {native} Hz is outside {MIN_SAMPLE_RATE}–{MAX_SAMPLE_RATE} Hz"));
+        }
         if native == 0 || rate == 0 || native == rate {
             return read_stereo(&src, s0, frames, rate);
         }
@@ -581,7 +590,7 @@ impl Inner {
         if let Some(b) = lock(&self.files).get(path) {
             return Ok(b.clone());
         }
-        std::fs::read(path).map(Into::into).map_err(|e| MediaError::Io(format!("{path}: {e}")))
+        crate::read_regular_file(std::path::Path::new(path)).map(Into::into).map_err(|e| MediaError::Io(format!("{path}: {e}")))
     }
 
     /// The opened movie/audio source for `path`. The first caller opens it, outside the map's
@@ -1218,8 +1227,8 @@ mod tests {
         assert_eq!(px(&f, FloatCurve::Gamma24), g24);
     }
 
-    /// A model's material library is read beside it; one named by a path to another computer
-    /// is not read.
+    /// A model's material library is read beside it; one named by a path to another computer is
+    /// looked up under its own file name beside the model, never fetched from that machine (#1274).
     #[test]
     fn model_files_on_other_computers_are_not_read() {
         let dir = std::env::temp_dir().join(format!("ec-model-files-{}", std::process::id()));
@@ -1233,11 +1242,13 @@ mod tests {
             model.materials.iter().any(|m| m.base_color[..3] == [1.0, 0.0, 0.0])
         };
         assert!(red("beside.obj", "red.mtl"));
-        assert!(!red("unc.obj", r"\\192.0.2.1\share\red.mtl"));
-        assert!(!red("url.obj", "file://192.0.2.1/s/red.mtl"));
+        // 192.0.2.1 is a test-net address nothing here can reach, so these passes prove the
+        // material library came from beside the model, not from another computer.
+        assert!(red("unc.obj", r"\\192.0.2.1\share\red.mtl"));
+        assert!(red("url.obj", "file://192.0.2.1/s/red.mtl"));
         // Linux reads `//dir/red.mtl` as the local file.
         #[cfg(unix)]
-        assert!(!red("slashes.obj", &format!("/{}", dir.join("red.mtl").display())));
+        assert!(red("slashes.obj", &format!("/{}", dir.join("red.mtl").display())));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

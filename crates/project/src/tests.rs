@@ -183,7 +183,7 @@ fn project_files_refuse_newer_schemas() {
         crate::SCHEMA_VERSION
     );
     assert_eq!(p.to_file_json().unwrap_err().to_string(), expected);
-    assert_eq!(p.to_file_json_with_view(&crate::SavedView::default()).unwrap_err().to_string(), expected);
+    assert_eq!(p.to_file_json_with_view(&crate::SavedView::default(), false).unwrap_err().to_string(), expected);
 }
 
 #[test]
@@ -197,7 +197,7 @@ fn saved_files_reopen_in_pretty_and_compact_form() {
 fn project_files_remember_the_open_comps() {
     let (p, cid) = project_with_layer();
     let view = crate::SavedView { active_comp: Some(cid), open_comps: vec![cid], comp_times: [(cid, effectcraft_time::Tick(4_237_833_600))].into() };
-    let text = p.to_file_json_with_view(&view).unwrap();
+    let text = p.to_file_json_with_view(&view, false).unwrap();
     assert_eq!(crate::saved_view(&text), view);
     assert_eq!(Project::from_json(&text).unwrap(), p, "the view is not part of the project");
     // Files from before #748 have no view; a garbled one is ignored, not an error.
@@ -289,4 +289,36 @@ fn comp_contains_ends_on_cycles_long_chains_and_shared_precomps() {
     let (p, c) = comp_graph(n, &(0..n - 1).map(|i| (i, i + 1)).collect::<Vec<_>>());
     assert!(p.comp_contains(c[0], c[n - 1]));
     assert!(!p.comp_contains(c[n - 1], c[0]));
+}
+
+/// A Wiggle Paths 100 000 groups deep gets Spatial Phase on a 2 MiB stack.
+#[test]
+fn upgrading_deeply_nested_shape_groups_fits_a_small_stack() {
+    let n = 100_000;
+    let mut next = 1;
+    let mut contents = build::shape_simple_op(&mut Ids(&mut next), "wiggle").unwrap();
+    contents.children.retain(|c| c.match_id() != "spatialPhase");
+    for _ in 0..n {
+        let uid = Ids(&mut next).alloc();
+        contents = crate::PropGroup::new(uid, "group", "Group 1").with(contents);
+    }
+    let h = std::thread::Builder::new()
+        .stack_size(2 << 20)
+        .spawn(move || {
+            let added = build::upgrade_shape_contents(&mut Ids(&mut next), &mut contents);
+            (added, contents)
+        })
+        .unwrap();
+    let (added, mut g) = h.join().unwrap();
+    assert!(added);
+    // One level at a time: dropping the whole tree would recurse as deep as it is nested.
+    let mut depth = 0;
+    while g.match_id == "group" {
+        let Some(crate::Node::Group(child)) = g.children.pop() else { panic!("a nested group") };
+        g = child;
+        depth += 1;
+    }
+    assert_eq!(depth, n);
+    let ids: Vec<&str> = g.children.iter().map(|c| c.match_id()).collect();
+    assert_eq!(ids, ["size", "detail", "points", "speed", "correlation", "phase", "spatialPhase", "seed"]);
 }

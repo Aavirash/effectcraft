@@ -131,24 +131,35 @@ impl NativeMenu {
 /// otherwise follows the project clipboard and would be greyed out with nothing copied there,
 /// while the field can paste.
 pub fn build_now(app: &EffectcraftApp, ctx: &egui::Context) -> NativeMenu {
-    fn enable(nodes: &mut [NativeNode]) {
+    fn enable(app: &EffectcraftApp, nodes: &mut [NativeNode]) {
         for node in nodes {
             match node {
-                NativeNode::Item(item) if edits_text(&item.command) => item.enabled = true,
-                NativeNode::Submenu { children, .. } => enable(children),
+                NativeNode::Item(item) if edits_text(&item.command) => {
+                    item.enabled = true;
+                    let source = match item.command.as_str() {
+                        "edit.undo" => Some("Undo"),
+                        "edit.redo" => Some("Redo"),
+                        _ => None,
+                    };
+                    if let Some(source) = source {
+                        item.label = crate::i18n::label(app, &item.command, source).into();
+                    }
+                }
+                NativeNode::Submenu { children, .. } => enable(app, children),
                 _ => {}
             }
         }
     }
     let mut menu = build(app);
     if text_field_window(ctx).is_some() {
-        enable(&mut menu.menus);
+        enable(app, &mut menu.menus);
     }
     menu
 }
 
 /// Build the native menu spec for the app's current state.
 pub fn build(app: &EffectcraftApp) -> NativeMenu {
+    /// Append the native nodes of `nodes` to `out`; item ids start with `path`.
     fn rec(app: &EffectcraftApp, nodes: &[MenuNode], path: &str, out: &mut Vec<NativeNode>) {
         let mut services_added = false;
         for (i, n) in nodes.iter().enumerate() {
@@ -159,8 +170,8 @@ pub fn build(app: &EffectcraftApp) -> NativeMenu {
                     // Recent projects / footage / presets, undo history, shortcut slots, viewers,
                     // saved workspaces.
                     let saved = app.saved_workspace_names();
-                    let (entries, empty) = effectcraft_engine::menus::dynamic(&app.session, name, &crate::menus::dyn_ctx(&app.ui.workspace, &saved));
-                    if entries.is_empty()
+                    let (nodes, empty) = effectcraft_engine::menus::dynamic_nodes(&app.session, name, &crate::menus::dyn_ctx(&app.ui.workspace, &saved));
+                    if nodes.is_empty()
                         && let Some(e) = empty
                     {
                         out.push(NativeNode::Item(NativeItem {
@@ -174,7 +185,12 @@ pub fn build(app: &EffectcraftApp) -> NativeMenu {
                             checked: None,
                         }));
                     }
-                    for (k, e) in entries.iter().enumerate() {
+                    for (k, n) in nodes.iter().enumerate() {
+                        // A folder of scripts or panels: a submenu.
+                        let MenuNode::Item(e) = n else {
+                            rec(app, std::slice::from_ref(n), &format!("{id}.d{k}"), out);
+                            continue;
+                        };
                         out.push(NativeNode::Item(NativeItem {
                             id: format!("{id}.d{k}"),
                             label: e.label.clone(),
@@ -340,6 +356,7 @@ pub fn state_key(app: &EffectcraftApp) -> u64 {
     s.journal.last().map(|j| &j.0).hash(&mut h);
     s.prefs.recent_projects.hash(&mut h);
     (&s.prefs.recent_footage, &s.prefs.recent_presets).hash(&mut h);
+    s.prefs.recent_scripts.hash(&mut h);
     s.history.undo.iter().for_each(|(l, _)| l.hash(&mut h));
     s.state.open_comps.hash(&mut h);
     s.active_comp_id().and_then(|c| s.state.views3d.get(&c)).map(|v| format!("{:?}", v.current)).hash(&mut h);
@@ -734,5 +751,46 @@ mod tests {
         assert!(activate(&mut app, &ctx, &spec, "m.999").is_err());
         assert!(edits_text("edit.copy") && edits_text("edit.paste"));
         assert!(!edits_text("layer.newNull"));
+    }
+    /// #2459: while a text field has the keyboard the Edit menu's Undo and Redo act on the field and
+    /// read plain "Undo" / "Redo"; the project history labels come back once focus leaves.
+    #[test]
+    fn a_focused_text_field_gets_plain_undo_and_redo_labels() {
+        fn label(menu: &NativeMenu, id: &str) -> String {
+            menu.items().into_iter().find(|i| i.command == id).map(|i| i.label.to_string()).unwrap_or_default()
+        }
+        for (language, undo, redo) in [("en", "Undo", "Redo"), ("ja", "取り消し", "やり直し")] {
+            let mut app = app();
+            app.session.execute("prefs.set", json!({"key": "general.language", "value": language})).unwrap();
+            app.session.execute("layer.newNull", json!({})).unwrap();
+            app.session.execute("layer.newNull", json!({})).unwrap();
+            app.session.execute("edit.undo", json!({})).unwrap();
+            let ctx = egui::Context::default();
+            let history = label(&build_now(&app, &ctx), "edit.undo");
+            let redo_history = label(&build_now(&app, &ctx), "edit.redo");
+            assert!(history.starts_with(undo) && history != undo, "{history}");
+            assert!(redo_history.starts_with(redo) && redo_history != redo, "{redo_history}");
+            let mut text = String::new();
+            let mut id = None;
+            for _ in 0..2 {
+                let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                    let r = ui.text_edit_singleline(&mut text);
+                    r.request_focus();
+                    id = Some(r.id);
+                });
+                out.textures_delta.clear();
+            }
+            assert!(text_field_window(&ctx).is_some());
+            let typing = build_now(&app, &ctx);
+            assert_eq!(label(&typing, "edit.undo"), undo);
+            assert_eq!(label(&typing, "edit.redo"), redo);
+            assert!(typing.items().into_iter().any(|i| i.command == "edit.undo" && i.enabled));
+            assert!(typing.items().into_iter().any(|i| i.command == "edit.redo" && i.enabled));
+            ctx.memory_mut(|m| m.surrender_focus(id.unwrap_or(egui::Id::NULL)));
+            assert!(text_field_window(&ctx).is_none());
+            let after = build_now(&app, &ctx);
+            assert_eq!(label(&after, "edit.undo"), history);
+            assert_eq!(label(&after, "edit.redo"), redo_history);
+        }
     }
 }

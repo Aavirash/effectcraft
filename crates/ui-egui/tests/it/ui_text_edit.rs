@@ -171,7 +171,7 @@ fn type_tool_click_type_edit_and_commit() {
 /// #831: clicking another panel (a solid's row in the Timeline) ends text editing and gives the
 /// keyboard back, whether the edit began with the Type tool (which stays selected) or by command:
 /// typed characters change no text and Space plays. The Character panel keeps the edit, and a
-/// text layer clicked into being and left empty goes away.
+/// text layer clicked into being and left empty stays, as it does in After Effects.
 #[test]
 fn clicking_another_panel_stops_typing_into_text() {
     for type_tool in [false, true] {
@@ -194,7 +194,7 @@ fn clicking_another_panel_stops_typing_into_text() {
             assert_eq!(layers(&h), 3, "the Type tool started a text layer");
             let at_row = row(&h);
             click(&mut h, at_row, Modifiers::NONE);
-            assert_eq!(layers(&h), 2, "left empty, it is removed");
+            assert_eq!(layers(&h), 3, "left empty, it stays, as in After Effects");
             click(&mut h, at, Modifiers::NONE);
         } else {
             h.state_mut().session.execute("text.edit", json!({"layer": title})).unwrap();
