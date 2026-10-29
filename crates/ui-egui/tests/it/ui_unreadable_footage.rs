@@ -83,10 +83,10 @@ fn an_undecodable_proxy_in_use_is_marked_as_the_proxy() {
     assert!(notice.label.contains(&format!("Proxy: {WHY}")), "{notice:?}");
 }
 
-/// A precomp whose proxy can't be decoded: the layer says so while it renders through the
-/// proxy, but not with Collapse Transformations on, which draws the precomp's own layers.
+/// A precomp whose proxy can't be decoded: the layer says so with Collapse Transformations off
+/// or on, since a proxy in use keeps the precomp on the flattened path that draws the proxy.
 #[test]
-fn a_collapsed_precomp_has_no_notice_for_its_proxy() {
+fn a_precomp_with_an_undecodable_proxy_has_a_notice_collapsed_or_not() {
     for collapse in [false, true] {
         let mut s = Session { footage: Arc::new(Stub(|f| f.path.ends_with(".avi"))), ..Default::default() };
         s.execute("comp.new", json!({"name": "Inner", "width": 64, "height": 36, "duration": 4})).unwrap();
@@ -99,6 +99,6 @@ fn a_collapsed_precomp_has_no_notice_for_its_proxy() {
         s.execute("layer.addItem", json!({"item": inner.0})).unwrap();
         s.execute("layer.setSwitch", json!({"layers": ["#1"], "switch": "collapse", "value": collapse})).unwrap();
         let h = open(s);
-        assert_eq!(h.state().auto.query("viewer.footageProblem.").is_empty(), collapse, "collapse {collapse}");
+        assert!(!h.state().auto.query("viewer.footageProblem.").is_empty(), "collapse {collapse}");
     }
 }

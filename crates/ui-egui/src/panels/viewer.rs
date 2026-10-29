@@ -8,8 +8,8 @@ use effectcraft_engine::commands::shape_tool::PaintKind;
 use effectcraft_engine::effects::puppet::PinKind;
 use effectcraft_engine::geom::{Mat3, vec2 as gv2};
 use effectcraft_engine::project::{Comp, Layer, LayerId, LayerSource};
+use effectcraft_engine::render::EvalCtx;
 use effectcraft_engine::render::three_d::{self, CameraState, View3D};
-use effectcraft_engine::render::{EvalCtx, Renderer};
 use effectcraft_engine::time::Tick;
 use egui::{Align2, Color32, Pos2, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 use serde_json::json;
@@ -721,13 +721,11 @@ fn phase_scene(app: &mut EffectcraftApp, ectx: &EvalCtx, v: &mut Vw<'_>) {
 }
 
 /// Up to three layers active at `time` whose footage, or the proxy in use for footage or a
-/// precomp, can't be decoded, each with the reason. A collapsed precomp draws its own layers,
-/// never the comp's proxy.
+/// precomp, can't be decoded, each with the reason.
 fn footage_problems<'c>(app: &EffectcraftApp, ectx: &EvalCtx, comp: &'c Comp, time: Tick) -> Vec<(&'c Layer, String)> {
-    let r = Renderer::new(ectx.project, &*app.session.footage, Default::default());
     comp.layers
         .iter()
-        .filter(|l| l.is_active_at(time) && l.switches.video && r.collapsed(ectx, l).is_none())
+        .filter(|l| l.is_active_at(time) && l.switches.video)
         .filter_map(|layer| {
             let (LayerSource::Footage { item } | LayerSource::Comp { item }) = &layer.source else { return None };
             Some((layer, ectx.project.item(*item).and_then(|i| app.session.footage.item_problem(i))?))
