@@ -5495,15 +5495,17 @@ fn vector_editor(app: &mut EffectcraftApp, ui: &mut egui::Ui, ve: &ValueEdit<'_>
     let feather = prop.match_id == "feather" && layer.props.parent_of(uid).is_some_and(|g| matches!(g.kind, GroupKind::Mask { .. }));
     let range = if feather { (0.0, 1e9) } else { (-1e9, 1e9) };
     // Scale and Mask Feather: the chain link (Constrain Proportions, on by default).
-    let linkable = feather || (pct && prop.match_id == "scale");
-    let linked = linkable && !app.ui.timeline.unlinked.contains(&uid);
+    // Rectangle and Ellipse Path Size have it too, off by default (#2489).
+    let size = prop.match_id == "size" && layer.props.parent_of(uid).is_some_and(|g| matches!(g.match_id.as_str(), "rect" | "ellipse"));
+    let linkable = feather || size || (pct && prop.match_id == "scale");
+    let linked = linkable && app.ui.timeline.is_linked(uid, !size);
     if linkable {
         let lr = Rect::from_center_size(pos2(x + 7.0, at.y), vec2(14.0, 14.0));
         let resp = ui.interact(lr, egui::Id::unique(("tl-link", uid)), Sense::click()).on_hover_text(crate::i18n::tr("Constrain Proportions"));
         icons::paint(p, lr, Icon::Link, if linked { t.accent } else { t.text_faint });
         app.auto.add(&format!("timeline.prop.{uid}.link"), lr, "Constrain Proportions");
-        if resp.clicked() && !app.ui.timeline.unlinked.remove(&uid) {
-            app.ui.timeline.unlinked.insert(uid);
+        if resp.clicked() {
+            app.ui.timeline.toggle_link(uid, !size);
         }
         x += 18.0;
     }
