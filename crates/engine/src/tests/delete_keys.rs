@@ -64,3 +64,23 @@ fn a_locked_layers_keys_cannot_be_deleted_or_edited() {
     s.execute_checked("keys.set", json!({"layer": layer, "prop": prop, "time": 0, "value": 90})).unwrap();
     assert_eq!(s.execute_checked("keys.delete", json!({})).unwrap(), json!(3));
 }
+
+/// Easy Ease, Toggle Hold and Time-Reverse leave a locked layer's keys as they are and keep them
+/// selected; unlocked, they change them.
+#[test]
+fn selection_based_key_edits_skip_a_locked_layer() {
+    let (mut s, layer, prop) = setup();
+    let keys = keys_of(&s, layer, prop);
+    let stored = |s: &Session| s.active_comp().unwrap().layer(LayerId(layer)).unwrap().props.find(prop).unwrap().keys.clone();
+    let before = stored(&s);
+    s.state.selected_keys = keys.clone();
+    s.execute_checked("layer.setSwitch", json!({"layers": [layer], "switch": "locked", "value": true})).unwrap();
+    for command in ["keys.easyEase", "keys.toggleHold", "keys.timeReverse"] {
+        s.execute_checked(command, json!({})).unwrap();
+        assert_eq!(stored(&s), before, "{command} changed a locked layer's keys");
+        assert_eq!(s.state.selected_keys, keys, "{command} dropped the selection of a locked layer's keys");
+    }
+    s.execute_checked("layer.setSwitch", json!({"layers": [layer], "switch": "locked", "value": false})).unwrap();
+    s.execute_checked("keys.easyEase", json!({})).unwrap();
+    assert_ne!(stored(&s), before, "unlocked, Easy Ease changes the keys");
+}

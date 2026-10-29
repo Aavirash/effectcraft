@@ -895,7 +895,16 @@ pub(crate) fn edit_keys(s: &mut Session, label: &str, merge: Option<&str>, f: im
             groups.entry((k.layer, k.prop)).or_default().push(k.time);
         }
         for ((lid, uid), times) in groups {
-            let Some(pr) = comp.layer_mut(lid).and_then(|l| l.props.find_mut(uid)) else { continue };
+            let Some(layer) = comp.layer_mut(lid) else { continue };
+            // A locked layer's keys stay as they are, and stay selected.
+            if layer.switches.locked {
+                for time in times {
+                    let r = KeyRef { layer: lid, prop: uid, time };
+                    remapped.insert(r, r);
+                }
+                continue;
+            }
+            let Some(pr) = layer.props.find_mut(uid) else { continue };
             // Process each stored key once, in an order that avoids collisions when moving.
             let mut idx: Vec<(usize, Tick)> = times.iter().filter_map(|t| key_at(&pr.keys, *t).map(|i| (i, *t))).collect();
             idx.sort_by_key(|x| x.0);

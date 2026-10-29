@@ -498,7 +498,13 @@ fn time_reverse(s: &mut Session, _: &Value) -> Result<Value> {
         }
         let mut new_sel = vec![];
         for ((lid, uid), times) in groups {
-            let Some(pr) = comp.layer_mut(lid).and_then(|l| l.props.find_mut(uid)) else { continue };
+            let Some(layer) = comp.layer_mut(lid) else { continue };
+            // A locked layer's keys stay as they are, and stay selected.
+            if layer.switches.locked {
+                new_sel.extend(times.iter().map(|time| KeyRef { layer: lid, prop: uid, time: *time }));
+                continue;
+            }
+            let Some(pr) = layer.props.find_mut(uid) else { continue };
             let (mut picked, rest): (Vec<Keyframe>, Vec<Keyframe>) = pr.keys.drain(..).partition(|k| times.contains(&k.time));
             effectcraft_keyframe::time_reverse(&mut picked);
             new_sel.extend(picked.iter().map(|k| KeyRef { layer: lid, prop: uid, time: k.time }));
