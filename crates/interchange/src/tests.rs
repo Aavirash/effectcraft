@@ -411,7 +411,7 @@ fn ae_project() -> (Project, ItemId) {
     let mut ls = effectcraft_project::build::layer(&mut p, &c, "tone", LayerSource::Footage { item: s }, (0, 0), None);
     ls.out_point = t(3.0);
     ls.props.prop_mut("audio/levels").unwrap().value = Value::Vec2([-3.0, -3.0]);
-    c.layers = vec![lt, lp, la, ls];
+    c.layers = vec![lt, lp, la, ls].into();
     let cid = comp_item(&mut p, "Main", c);
     (p, cid)
 }
