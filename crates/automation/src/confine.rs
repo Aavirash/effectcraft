@@ -396,6 +396,7 @@ mod tests {
             let classified = keys_of(READS, id).is_some()
                 || keys_of(WRITES, id).is_some()
                 || REFUSED.contains(&id)
+                || effectcraft_engine::commands::scripts::RUNS_SCRIPTS.contains(&id)
                 || IMPLICIT_WRITES.contains(&id)
                 || id.starts_with("renderQueue.")
                 || id == "render.addOutputModule"
