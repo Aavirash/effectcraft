@@ -117,6 +117,9 @@ Come tell us what matters most to you on [Discord](https://discord.gg/artcraft).
 
 ## Progress log
 
+- 2026-10-28: A shape layer's Rectangle and Ellipse Size get the Constrain Proportions chain
+  that Scale has, so a circle stays a circle while its size is typed, scrubbed or keyed; it
+  starts off, so existing shapes behave as before (#2489).
 - 2026-10-22: Localization: the panel/dialog catalogs gain 303 rows in Japanese, Simplified
   Chinese and Traditional Chinese — panel tabs, form and dialog labels, panel context menus,
   tracker/graph/text-panel controls, File-panel footers and credits. Japanese is 1,624 of
