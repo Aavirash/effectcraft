@@ -21,6 +21,7 @@ effectcraft-pdf = { workspace = true }
 effectcraft-model = { workspace = true }
 filmcraft-codecs = { workspace = true }
 filmcraft-media = { workspace = true }
+filmcraft-aac = { workspace = true }
 filmcraft-isobmff = { workspace = true }
 filmcraft-frame = { workspace = true }
 filmcraft-color = { workspace = true }

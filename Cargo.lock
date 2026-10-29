@@ -1632,6 +1632,7 @@ dependencies = [
  "effectcraft-svg",
  "effectcraft-time",
  "exr",
+ "filmcraft-aac",
  "filmcraft-codecs",
  "filmcraft-color",
  "filmcraft-frame",

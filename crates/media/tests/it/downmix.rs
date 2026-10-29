@@ -164,22 +164,64 @@ fn each_channel_reaches_stereo_at_its_bs775_gain() {
     for c in cases() {
         let freqs: Vec<u32> = FREQS.iter().copied().take(c.names.len()).collect();
         let Some(p) = fixture(c.file, c.layout, c.names, &freqs, c.codec) else { continue };
-        let s = ours(&p);
-        let sine = 0.125 * 1.0; // peak of ffmpeg's sine source (0.125 = 2^-3)
-        for (i, (name, g)) in c.names.iter().zip(&c.gains).enumerate() {
-            for (side, gain) in g.iter().enumerate() {
-                let got = amp(&s, side, freqs[i]);
-                let want = sine * gain;
-                assert!((got - want).abs() <= sine * c.tol.max(0.02), "{}: {name} -> {} is {got:.4}, expected {want:.4}", c.file, ["L", "R"][side]);
-            }
-        }
-        let theirs = ffmpeg_ac2(&p);
-        let (a, b) = (rms(&s), rms(&theirs));
-        let db = 20.0 * (a / b).log10();
-        assert!(db.abs() < 1.0, "{}: level {db:.2} dB off ffmpeg -ac 2 (rms {a:.4} vs {b:.4})", c.file);
-        let pdb = 20.0 * (peak(&s) / peak(&theirs)).log10();
-        assert!(pdb.abs() < 1.5, "{}: peak {pdb:.2} dB off ffmpeg -ac 2", c.file);
+        check(&c, &p);
     }
+}
+
+/// AAC 7.1 in channel configuration 12 (back surrounds), which FilmCraft reorders where it
+/// leaves ffmpeg's configuration 7 as coded: ffmpeg's 7.1 with its configuration rewritten (both
+/// code the same elements).
+#[test]
+fn seven_one_aac_in_configuration_12() {
+    let c = cases().into_iter().find(|c| c.file == "dm71.m4a").expect("the 7.1 AAC case");
+    let freqs: Vec<u32> = FREQS.iter().copied().take(c.names.len()).collect();
+    let Some(p) = fixture(c.file, c.layout, c.names, &freqs, c.codec) else { return };
+    let mut bytes = std::fs::read(&p).expect("read");
+    let (asc, _) = aac_entry(&bytes).expect("an AAC track");
+    assert_eq!(asc.get(..2), Some(&[0x11, 0xB8][..]), "AAC-LC 48 kHz, configuration 7");
+    let at = bytes.windows(asc.len()).position(|w| w == asc).expect("the configuration in the file");
+    bytes[at + 1] = 0xE0;
+    let p12 = fixtures().join("dm71c12.m4a");
+    std::fs::write(&p12, bytes).expect("write");
+    check(&Case { file: "dm71c12.m4a", ..c }, &p12);
+}
+
+/// The AudioSpecificConfig and sample entry channel count of an MP4's first AAC track.
+fn aac_entry(bytes: &[u8]) -> Option<(Vec<u8>, u32)> {
+    let file = filmcraft_isobmff::open(bytes).ok()?;
+    file.tracks.iter().flat_map(|t| &t.entries).find_map(|e| match &e.codec {
+        filmcraft_isobmff::CodecConfig::Aac(a) => Some((a.asc.clone(), e.audio.as_ref()?.channels)),
+        _ => None,
+    })
+}
+
+fn check(c: &Case, p: &Path) {
+    let pce_as_stereo = aac_entry(&std::fs::read(p).expect("read")).is_some_and(|(asc, entry)| {
+        let config = filmcraft_aac::AudioSpecificConfig::parse(&asc).map(|a| a.channel_config);
+        config.ok() == Some(0) && entry == 2
+    });
+    if pce_as_stereo && c.names.len() > 2 {
+        // ffmpeg 4.2 writes 2 in the sample entry of an AAC PCE layout (8.1 the real count), and
+        // that is all FilmCraft decodes.
+        eprintln!("{}: FilmCraft reads 2 of its {} channels: skipping", c.file, c.names.len());
+        return;
+    }
+    let s = ours(p);
+    let freqs: Vec<u32> = FREQS.iter().copied().take(c.names.len()).collect();
+    let sine = 0.125 * 1.0; // peak of ffmpeg's sine source (0.125 = 2^-3)
+    for (i, (name, g)) in c.names.iter().zip(&c.gains).enumerate() {
+        for (side, gain) in g.iter().enumerate() {
+            let got = amp(&s, side, freqs[i]);
+            let want = sine * gain;
+            assert!((got - want).abs() <= sine * c.tol.max(0.02), "{}: {name} -> {} is {got:.4}, expected {want:.4}", c.file, ["L", "R"][side]);
+        }
+    }
+    let theirs = ffmpeg_ac2(p);
+    let (a, b) = (rms(&s), rms(&theirs));
+    let db = 20.0 * (a / b).log10();
+    assert!(db.abs() < 1.0, "{}: level {db:.2} dB off ffmpeg -ac 2 (rms {a:.4} vs {b:.4})", c.file);
+    let pdb = 20.0 * (peak(&s) / peak(&theirs)).log10();
+    assert!(pdb.abs() < 1.5, "{}: peak {pdb:.2} dB off ffmpeg -ac 2", c.file);
 }
 
 /// Full-scale in every channel must not clip.

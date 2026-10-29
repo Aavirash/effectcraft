@@ -259,6 +259,17 @@ pub(crate) fn load_oriented(bytes: &[u8], fmt: Option<image::ImageFormat>) -> im
     Ok(img)
 }
 
+/// The AudioSpecificConfig of an MP4/MOV movie's first audio track (the one FilmCraft plays), if
+/// that is AAC.
+pub(crate) fn aac_config(bytes: &[u8]) -> Option<Vec<u8>> {
+    let file = filmcraft_isobmff::open(bytes).ok()?;
+    let track = file.tracks.iter().find(|t| t.kind == filmcraft_isobmff::TrackKind::Audio)?;
+    match &track.entries.first()?.codec {
+        filmcraft_isobmff::CodecConfig::Aac(a) => Some(a.asc.clone()),
+        _ => None,
+    }
+}
+
 /// The rotation an MP4/MOV movie is shown with (a phone held upright records sideways frames and
 /// says so in its video track's header): the quarter turn nearest the track's rotation. Only the
 /// rotation counts; any mirroring, scaling or offset in the header is ignored, and other

@@ -12,9 +12,10 @@
 //!
 //! Channel order follows the WAVE / SMPTE convention by channel count (what FilmCraft's AC-3, PCM,
 //! FLAC and Opus readers deliver): 3 = L R C, 4 = quad L R Ls Rs, 5 = L R C Ls Rs,
-//! 6 = L R C LFE Ls Rs, 7 = L R C LFE Cs Ls Rs, 8 = L R C LFE Lb Rb Ls Rs. FilmCraft's AAC-LC
-//! decoder instead delivers AAC's own order (C L R first, LFE last), so AAC gets its own tables.
-//! More than 8 channels carry no known layout: only the first two (front L/R) are used.
+//! 6 = L R C LFE Ls Rs, 7 = L R C LFE Cs Ls Rs, 8 = L R C LFE Lb Rb Ls Rs. AAC arrives in either
+//! that order or AAC's own (C L R first, LFE last) depending on its channel configuration
+//! ([`aac_order`]). More than 8 channels carry no known layout: only the first two (front L/R)
+//! are used.
 
 use std::f32::consts::FRAC_1_SQRT_2;
 
@@ -64,28 +65,59 @@ pub fn stereo_gains(count: usize, aac: bool) -> Vec<Pair> {
     out
 }
 
-/// The gains for AAC as FilmCraft's decoder hands it over: channel configurations 3 to 6 (3 to 6
-/// channels) and 12 (7.1, 8 channels) are already in WAV/SMPTE order (L R C [Cs] / [LFE] Ls Rs,
-/// L R C LFE Lb Rb Ls Rs), everything else (mono, stereo, program-config layouts such as the 6.1
-/// ffmpeg writes) in AAC's element order. Configuration 11 (6.1) and 7 (7.1 with front wides)
-/// can't be told from those by the channel count and are read in the order of the commoner one.
-pub fn decoded_aac_gains(count: usize) -> Vec<Pair> {
-    match count {
-        // C L R Cs, reordered to L R C Cs: the same gains, permuted.
-        4 => {
-            let g = stereo_gains(4, true);
-            [1, 2, 0, 3].iter().filter_map(|&i| g.get(i).copied()).collect()
-        }
-        3 | 5 | 6 | 8 => stereo_gains(count, false),
-        _ => stereo_gains(count, true),
+/// The order a source's decoded channels arrive in.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Order {
+    /// WAVE / SMPTE by channel count: PCM, FLAC, AC-3, Opus and the rest.
+    #[default]
+    Wav,
+    /// AAC that FilmCraft reorders to WAVE / SMPTE (configurations 3 to 6, 11 and 12; 4 becomes
+    /// L R C Cs) or that ffmpeg wrote in it (a program config element listing the front pair
+    /// first: ffmpeg fills a PCE's elements in its own channel order and reads them back so).
+    AacWav,
+    /// AAC in its element order (C L R … LFE), which FilmCraft keeps: configuration 7 and a PCE
+    /// listing the centre first.
+    AacElements,
+    /// AAC whose configuration the container doesn't show us (only MP4 / MOV headers are read):
+    /// as [`Order::AacWav`] up to 7 channels (configurations 3 to 6, 11 and ffmpeg's 6.1 PCE),
+    /// as [`Order::AacElements`] above (configuration 7, ffmpeg's 7.1).
+    Aac,
+}
+
+/// How FilmCraft's decoder hands over the AAC described by the AudioSpecificConfig `asc`.
+pub fn aac_order(asc: &[u8]) -> Order {
+    let Ok(asc) = filmcraft_aac::AudioSpecificConfig::parse(asc) else { return Order::Aac };
+    match (asc.channel_config, asc.pce) {
+        (3..=6 | 11 | 12, _) => Order::AacWav,
+        (0, Some(pce)) if pce.front.first().is_some_and(|&(cpe, _)| cpe) => Order::AacWav,
+        (0, None) => Order::Aac,
+        _ => Order::AacElements,
     }
 }
 
-/// Downmix planar `channels` to interleaved stereo in `out` (`out.len() / 2` frames); frames a
-/// channel is too short for count as silence, extra frames in `out` stay as they are.
-pub fn downmix_into(channels: &[Vec<f32>], aac: bool, out: &mut [f32]) {
-    let gains = if aac { decoded_aac_gains(channels.len()) } else { stereo_gains(channels.len(), false) };
-    mix(channels, &gains, out);
+/// The gains for `count` channels arriving in `order`.
+pub fn decoded_gains(count: usize, order: Order) -> Vec<Pair> {
+    let order = match order {
+        Order::Aac if (3..=7).contains(&count) => Order::AacWav,
+        Order::Aac => Order::AacElements,
+        o => o,
+    };
+    match (order, count) {
+        // C L R Cs, reordered to L R C Cs: the same gains, permuted.
+        (Order::AacWav, 4) => {
+            let g = stereo_gains(4, true);
+            [1, 2, 0, 3].iter().filter_map(|&i| g.get(i).copied()).collect()
+        }
+        (Order::AacElements, _) => stereo_gains(count, true),
+        _ => stereo_gains(count, false),
+    }
+}
+
+/// Downmix planar `channels` arriving in `order` to interleaved stereo in `out` (`out.len() / 2`
+/// frames); frames a channel is too short for count as silence, extra frames in `out` stay as
+/// they are.
+pub fn downmix_into(channels: &[Vec<f32>], order: Order, out: &mut [f32]) {
+    mix(channels, &decoded_gains(channels.len(), order), out);
 }
 
 fn mix(channels: &[Vec<f32>], gains: &[Pair], out: &mut [f32]) {
@@ -119,19 +151,46 @@ mod tests {
         }
     }
 
+    /// AudioSpecificConfigs as ffmpeg 8.1 and FilmCraft's encoder write them (48 kHz AAC-LC).
+    const PCE_FFMPEG_61: &str = "118004c848002000c4400d4c61766336322e32382e31303256e500";
+    const PCE_FILMCRAFT_61: &str = "118004c845000108840000";
+
+    fn asc(hex: &str) -> Vec<u8> {
+        (0..hex.len() / 2).filter_map(|i| hex.get(2 * i..2 * i + 2).and_then(|b| u8::from_str_radix(b, 16).ok())).collect()
+    }
+
     #[test]
-    fn decoded_aac_is_in_wav_order_for_three_to_six_and_eight_channels() {
-        // FilmCraft hands AAC 3.0 to 5.1 and 7.1 over in the order of the plain layouts.
-        for n in [3, 5, 6, 8] {
-            assert_eq!(decoded_aac_gains(n), stereo_gains(n, false), "{n} channels");
+    fn aac_order_follows_the_channel_configuration() {
+        // AAC-LC at 48 kHz with channel configuration n
+        let config = |n: u8| aac_order(&[0x11, 0x80 | n << 3]);
+        for n in [3, 4, 5, 6, 11, 12] {
+            assert_eq!(config(n), Order::AacWav, "configuration {n}");
         }
-        let g = decoded_aac_gains(4);
+        for n in [1, 2, 7] {
+            assert_eq!(config(n), Order::AacElements, "configuration {n}");
+        }
+        assert_eq!(aac_order(&asc(PCE_FFMPEG_61)), Order::AacWav, "ffmpeg's 6.1 PCE lists L R first");
+        assert_eq!(aac_order(&asc(PCE_FILMCRAFT_61)), Order::AacElements, "a PCE listing the centre first");
+        assert_eq!(aac_order(&[]), Order::Aac);
+    }
+
+    #[test]
+    fn decoded_aac_gains_follow_the_order() {
+        for n in [3, 5, 6, 7, 8] {
+            assert_eq!(decoded_gains(n, Order::AacWav), stereo_gains(n, false), "{n} channels");
+            assert_eq!(decoded_gains(n, Order::AacElements), stereo_gains(n, true), "{n} channels");
+        }
+        let g = decoded_gains(4, Order::AacWav);
         assert_eq!(g.len(), 4);
         assert!(g[0][0] > 0.0 && g[0][1] == 0.0 && g[1][1] > 0.0 && g[1][0] == 0.0, "L R first");
         assert!(g[2][0] > 0.0 && g[2][0] == g[2][1], "the centre is third and feeds both sides");
         assert!(g[3][0] > 0.0 && g[3][0] < g[2][0], "the rear centre is last, below the centre");
-        for n in [1, 2, 7, 9] {
-            assert_eq!(decoded_aac_gains(n), stereo_gains(n, true), "{n} channels");
+        assert_eq!(decoded_gains(4, Order::Wav), stereo_gains(4, false), "PCM 4 channels are quad");
+        for n in [3, 4, 5, 6, 7] {
+            assert_eq!(decoded_gains(n, Order::Aac), decoded_gains(n, Order::AacWav), "{n} channels");
+        }
+        for n in [1, 2, 8, 9] {
+            assert_eq!(decoded_gains(n, Order::Aac), stereo_gains(n, true), "{n} channels");
         }
     }
 
@@ -161,10 +220,10 @@ mod tests {
     #[test]
     fn ragged_and_empty_input_never_panics() {
         let mut out = vec![0.0; 8];
-        downmix_into(&[], false, &mut out);
-        downmix_into(&[vec![1.0; 100], vec![1.0; 2], vec![], vec![1.0; 3], vec![1.0; 1], vec![1.0]], true, &mut out);
+        downmix_into(&[], Order::Wav, &mut out);
+        downmix_into(&[vec![1.0; 100], vec![1.0; 2], vec![], vec![1.0; 3], vec![1.0; 1], vec![1.0]], Order::Aac, &mut out);
         assert!(out.iter().all(|v| v.is_finite()));
         let mut none: [f32; 0] = [];
-        downmix_into(&vec![vec![1.0; 3]; 7], false, &mut none);
+        downmix_into(&vec![vec![1.0; 3]; 7], Order::Wav, &mut none);
     }
 }
