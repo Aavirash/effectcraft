@@ -64,7 +64,8 @@ pub fn text_target(app: &EffectcraftApp) -> Option<TextTarget> {
 /// A small toggle button at `r` showing `label` (semibold 13 when `bold`, else 12), filled with
 /// the accent while `on`; returns whether it was clicked. It only reports the click: the caller
 /// decides the new state.
-fn toggle(app: &mut EffectcraftApp, ui: &mut egui::Ui, p: &egui::Painter, r: Rect, id: &str, label: &str, on: bool, bold: bool) -> bool {
+fn toggle(app: &mut EffectcraftApp, ui: &mut egui::Ui, p: &egui::Painter, r: Rect, id: &str, look: (&str, bool, bool)) -> bool {
+    let (label, on, bold) = look;
     let t = app.tokens;
     let resp = ui.interact(r, egui::Id::unique(("text-toggle", id)), Sense::click());
     p.rect_filled(
@@ -82,6 +83,103 @@ fn toggle(app: &mut EffectcraftApp, ui: &mut egui::Ui, p: &egui::Painter, r: Rec
     p.text(r.center(), Align2::CENTER_CENTER, label, font, if on { egui::Color32::WHITE } else { t.text });
     app.auto.add(id, r, label);
     resp.clicked()
+}
+
+/// Position of the numeric grid (`x0`, top `y`, width `w`) and whether edits are collected.
+#[derive(Clone, Copy)]
+struct Grid {
+    x0: f32,
+    y: f32,
+    w: f32,
+    enabled: bool,
+}
+
+/// Numeric fields in AE's two-column grid (Kerning is a popup, at row 1 left).
+fn numeric_fields(app: &mut EffectcraftApp, ui: &mut egui::Ui, p: &egui::Painter, g: Grid, doc: &TextDoc, actions: &mut Vec<serde_json::Value>) {
+    let t = app.tokens;
+    let Grid { x0, y, w, enabled } = g;
+    let fields: [(&str, &str, f64, (f64, f64), &str); 10] = [
+        ("size", "T", doc.size, (1.0, 2000.0), " px"),
+        ("leading", "A", doc.leading.unwrap_or(doc.size * 1.2), (0.0, 5000.0), " px"),
+        ("", "", 0.0, (0.0, 0.0), ""),
+        ("tracking", "VA", doc.tracking, (-1000.0, 10000.0), ""),
+        ("strokeWidth", "W", doc.stroke_width, (0.0, 500.0), " px"),
+        ("", "", 0.0, (0.0, 0.0), ""),
+        ("vScale", "↕T", doc.v_scale, (1.0, 1000.0), " %"),
+        ("hScale", "↔T", doc.h_scale, (1.0, 1000.0), " %"),
+        ("baselineShift", "A↑", doc.baseline_shift, (-1000.0, 1000.0), " px"),
+        ("tsume", "Ts", doc.tsume, (0.0, 100.0), " %"),
+    ];
+    for (i, (key, glyph, v, range, suffix)) in fields.into_iter().enumerate() {
+        if key.is_empty() {
+            continue;
+        }
+        let col = i % 2;
+        let row = i / 2;
+        let fx = x0 + col as f32 * (w / 2.0);
+        let fy = y + row as f32 * 28.0;
+        p.text(pos2(fx, fy + 9.0), Align2::LEFT_CENTER, glyph, Tokens::semibold(11.0), t.text_dim);
+        let (r, nv, _) = widgets::hot_number_at(
+            ui,
+            pos2(fx + 26.0, fy),
+            egui::Id::unique(("char", key)),
+            v,
+            &widgets::HotSpec { speed: 0.5, range, decimals: 0, suffix },
+            &t,
+        );
+        app.auto.add(&format!("character.{key}"), r, key);
+        if let Some(nv) = nv
+            && enabled
+        {
+            actions.push(json!({key: nv, "merge": format!("char-{key}")}));
+        }
+    }
+}
+
+/// Kerning: Metrics / Optical / a manual value (grid row 1, left).
+fn kerning_field(app: &mut EffectcraftApp, ui: &mut egui::Ui, p: &egui::Painter, g: Grid, doc: &TextDoc, actions: &mut Vec<serde_json::Value>) {
+    let t = app.tokens;
+    let Grid { x0, y, w, enabled } = g;
+    let fy = y + 28.0;
+    p.text(pos2(x0, fy + 9.0), Align2::LEFT_CENTER, "V/A", Tokens::semibold(11.0), t.text_dim);
+    let label = match doc.kerning {
+        Kerning::Metrics => "Metrics".to_string(),
+        Kerning::Optical => "Optical".to_string(),
+        Kerning::Manual(v) => format!("{v:.0}"),
+    };
+    let kr = Rect::from_min_size(pos2(x0 + 26.0, fy), vec2((w / 2.0 - 32.0).max(50.0), 20.0));
+    let kpop = egui::Id::unique("char-kerning-pop");
+    if widgets::dropdown(ui, kr, &label, &t, egui::Id::unique("char-kerning")).clicked() && enabled {
+        widgets::open_popup(ui, kpop);
+    }
+    app.auto.add("character.kerning", kr, "Kerning");
+    let opts: Vec<String> = ["Metrics", "Optical", "0", "-50", "-25", "-10", "10", "25", "50", "100"].iter().map(|s| s.to_string()).collect();
+    if let Some(i) = widgets::popup_menu(ui, kpop, kr.left_bottom(), &opts, None) {
+        let v = match i {
+            0 => json!("metrics"),
+            1 => json!("optical"),
+            _ => json!(opts[i].parse::<f64>().unwrap_or(0.0)),
+        };
+        actions.push(json!({"kerning": v}));
+    }
+}
+
+/// Stroke Over Fill / Fill Over Stroke (grid row 2, right).
+fn stroke_order_field(app: &mut EffectcraftApp, ui: &mut egui::Ui, g: Grid, doc: &TextDoc, actions: &mut Vec<serde_json::Value>) {
+    let t = app.tokens;
+    let Grid { x0, y, w, enabled } = g;
+    let fx = x0 + w / 2.0;
+    let fy = y + 2.0 * 28.0;
+    let dr = Rect::from_min_size(pos2(fx, fy), vec2(w / 2.0, 20.0));
+    let labels = vec!["Fill Over Stroke".to_string(), "Stroke Over Fill".to_string()];
+    let pop = egui::Id::unique("char-stroke-order-pop");
+    if widgets::dropdown(ui, dr, &labels[doc.stroke_over_fill as usize], &t, egui::Id::unique("char-stroke-order")).clicked() && enabled {
+        widgets::open_popup(ui, pop);
+    }
+    app.auto.add("character.strokeOverFill", dr, "Stroke order");
+    if let Some(i) = widgets::popup_menu(ui, pop, dr.left_bottom(), &labels, Some(doc.stroke_over_fill as usize)) {
+        actions.push(json!({"strokeOverFill": i == 1}));
+    }
 }
 
 /// The Character panel for the text being edited (or the selected text layer): font family and
@@ -122,76 +220,10 @@ pub fn character(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
         actions.push(json!({"style": st}));
     }
     y += 34.0;
-    // Numeric fields in AE's two-column grid (Kerning is a popup, at row 1 right).
-    let fields: [(&str, &str, f64, (f64, f64), &str); 10] = [
-        ("size", "T", doc.size, (1.0, 2000.0), " px"),
-        ("leading", "A", doc.leading.unwrap_or(doc.size * 1.2), (0.0, 5000.0), " px"),
-        ("", "", 0.0, (0.0, 0.0), ""),
-        ("tracking", "VA", doc.tracking, (-1000.0, 10000.0), ""),
-        ("strokeWidth", "W", doc.stroke_width, (0.0, 500.0), " px"),
-        ("", "", 0.0, (0.0, 0.0), ""),
-        ("vScale", "↕T", doc.v_scale, (1.0, 1000.0), " %"),
-        ("hScale", "↔T", doc.h_scale, (1.0, 1000.0), " %"),
-        ("baselineShift", "A↑", doc.baseline_shift, (-1000.0, 1000.0), " px"),
-        ("tsume", "Ts", doc.tsume, (0.0, 100.0), " %"),
-    ];
-    for (i, (key, glyph, v, range, suffix)) in fields.into_iter().enumerate() {
-        if key.is_empty() {
-            continue;
-        }
-        let col = i % 2;
-        let row = i / 2;
-        let fx = x0 + col as f32 * (w / 2.0);
-        let fy = y + row as f32 * 28.0;
-        p.text(pos2(fx, fy + 9.0), Align2::LEFT_CENTER, glyph, Tokens::semibold(11.0), t.text_dim);
-        let (r, nv, _) = widgets::hot_number_at(ui, pos2(fx + 26.0, fy), egui::Id::unique(("char", key)), v, 0.5, range, 0, suffix, &t);
-        app.auto.add(&format!("character.{key}"), r, key);
-        if let Some(nv) = nv
-            && enabled
-        {
-            actions.push(json!({key: nv, "merge": format!("char-{key}")}));
-        }
-    }
-    // Kerning: Metrics / Optical / a manual value (row 1, left).
-    {
-        let fy = y + 28.0;
-        p.text(pos2(x0, fy + 9.0), Align2::LEFT_CENTER, "V/A", Tokens::semibold(11.0), t.text_dim);
-        let label = match doc.kerning {
-            Kerning::Metrics => "Metrics".to_string(),
-            Kerning::Optical => "Optical".to_string(),
-            Kerning::Manual(v) => format!("{v:.0}"),
-        };
-        let kr = Rect::from_min_size(pos2(x0 + 26.0, fy), vec2((w / 2.0 - 32.0).max(50.0), 20.0));
-        let kpop = egui::Id::unique("char-kerning-pop");
-        if widgets::dropdown(ui, kr, &label, &t, egui::Id::unique("char-kerning")).clicked() && enabled {
-            widgets::open_popup(ui, kpop);
-        }
-        app.auto.add("character.kerning", kr, "Kerning");
-        let opts: Vec<String> = ["Metrics", "Optical", "0", "-50", "-25", "-10", "10", "25", "50", "100"].iter().map(|s| s.to_string()).collect();
-        if let Some(i) = widgets::popup_menu(ui, kpop, kr.left_bottom(), &opts, None) {
-            let v = match i {
-                0 => json!("metrics"),
-                1 => json!("optical"),
-                _ => json!(opts[i].parse::<f64>().unwrap_or(0.0)),
-            };
-            actions.push(json!({"kerning": v}));
-        }
-    }
-    // Stroke Over Fill / Fill Over Stroke (row 2, right).
-    {
-        let fx = x0 + w / 2.0;
-        let fy = y + 2.0 * 28.0;
-        let dr = Rect::from_min_size(pos2(fx, fy), vec2(w / 2.0, 20.0));
-        let labels = vec!["Fill Over Stroke".to_string(), "Stroke Over Fill".to_string()];
-        let pop = egui::Id::unique("char-stroke-order-pop");
-        if widgets::dropdown(ui, dr, &labels[doc.stroke_over_fill as usize], &t, egui::Id::unique("char-stroke-order")).clicked() && enabled {
-            widgets::open_popup(ui, pop);
-        }
-        app.auto.add("character.strokeOverFill", dr, "Stroke order");
-        if let Some(i) = widgets::popup_menu(ui, pop, dr.left_bottom(), &labels, Some(doc.stroke_over_fill as usize)) {
-            actions.push(json!({"strokeOverFill": i == 1}));
-        }
-    }
+    let grid = Grid { x0, y, w, enabled };
+    numeric_fields(app, ui, &p, grid, &doc, &mut actions);
+    kerning_field(app, ui, &p, grid, &doc, &mut actions);
+    stroke_order_field(app, ui, grid, &doc, &mut actions);
     y += 5.0 * 28.0 + 8.0;
     // Fill / stroke swatches with their enable boxes.
     for (i, (key, label, on, c)) in [("fill", "Fill", doc.apply_fill, doc.fill), ("stroke", "Stroke", doc.apply_stroke, doc.stroke)].into_iter().enumerate() {
@@ -242,7 +274,7 @@ pub fn character(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
     let bw = ((w - 5.0 * 4.0) / 6.0).clamp(22.0, 30.0);
     for (i, (key, label, on, bold)) in toggles.into_iter().enumerate() {
         let r = Rect::from_min_size(pos2(x0 + i as f32 * (bw + 4.0), y), vec2(bw, 24.0));
-        if toggle(app, ui, &p, r, &format!("character.{key}"), label, on, bold) && enabled {
+        if toggle(app, ui, &p, r, &format!("character.{key}"), (label, on, bold)) && enabled {
             actions.push(json!({key: !on}));
         }
     }
@@ -296,8 +328,14 @@ pub fn character(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
             let tag = a.tag.trim_end().to_string();
             let v = doc.variations.iter().chain(&instance).find(|(t2, _)| t2.trim_end() == tag).map(|(_, v)| *v).unwrap_or(a.default);
             p.text(pos2(fx, fy + 9.0), Align2::LEFT_CENTER, &tag, Tokens::semibold(10.5), t.text_dim);
-            let (r, nv, _) =
-                widgets::hot_number_at(ui, pos2(fx + 34.0, fy), egui::Id::unique(("char-axis", &tag)), v as f64, 1.0, (a.min as f64, a.max as f64), 0, "", &t);
+            let (r, nv, _) = widgets::hot_number_at(
+                ui,
+                pos2(fx + 34.0, fy),
+                egui::Id::unique(("char-axis", &tag)),
+                v as f64,
+                &widgets::HotSpec { speed: 1.0, range: (a.min as f64, a.max as f64), decimals: 0, suffix: "" },
+                &t,
+            );
             app.auto.add(&format!("character.axis.{tag}"), r, &a.name);
             if let Some(nv) = nv
                 && enabled
@@ -517,7 +555,14 @@ pub fn paragraph(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
         let fx = x0 + (i % 2) as f32 * (w / 2.0);
         let fy = y + (i / 2) as f32 * 28.0;
         p.text(pos2(fx, fy + 9.0), Align2::LEFT_CENTER, glyph, Tokens::semibold(11.0), t.text_dim);
-        let (r, nv, _) = widgets::hot_number_at(ui, pos2(fx + 26.0, fy), egui::Id::unique(("para-f", key)), v, 0.5, (-5000.0, 5000.0), 0, " px", &t);
+        let (r, nv, _) = widgets::hot_number_at(
+            ui,
+            pos2(fx + 26.0, fy),
+            egui::Id::unique(("para-f", key)),
+            v,
+            &widgets::HotSpec { speed: 0.5, range: (-5000.0, 5000.0), decimals: 0, suffix: " px" },
+            &t,
+        );
         app.auto.add(&format!("paragraph.{key}"), r, key);
         if let Some(nv) = nv
             && enabled
@@ -635,130 +680,131 @@ pub(super) fn font_picker(app: &mut EffectcraftApp, ui: &mut egui::Ui, id: egui:
         return None;
     }
     app.auto.add(&format!("{auto}.toggle"), arrow, "Close font list");
-    let mut chosen = None;
-    let screen = ui.ctx().content_rect();
-    let below = screen.bottom() - rect.bottom() - 16.0;
-    let above = below < 100.0 && rect.top() - screen.top() > below;
-    let max_height = (if above { rect.top() - screen.top() - 16.0 } else { below }).clamp(28.0, 380.0);
-    let anchor = if above { rect.left_top() } else { rect.left_bottom() };
-    let pivot = if above { Align2::LEFT_BOTTOM } else { Align2::LEFT_TOP };
     widgets::note_open_popup_list(ui.ctx());
-    let area = egui::Area::new(id.with("area")).order(egui::Order::Foreground).pivot(pivot).fixed_pos(anchor).show(ui.ctx(), |ui| {
-        egui::Frame::popup(ui.style()).show(ui, |ui| {
-            ui.set_width(rect.width().max(180.0));
-            // Filter row: a checkbox that keeps only the variable fonts.
-            let filter_h = 22.0;
-            let row = ui.add_sized([ui.available_width(), filter_h], egui::Button::selectable(false, ""));
-            let box_rect = Rect::from_min_size(row.rect.min, vec2(18.0, filter_h));
-            let label_rect = Rect::from_min_max(pos2(box_rect.max.x + 2.0, row.rect.min.y), row.rect.max);
-            let boxed = widgets::checkbox(ui, box_rect, only_variable, &t, id.with("variable-check"));
-            ui.painter().text(label_rect.left_center(), Align2::LEFT_CENTER, tr("Variable fonts only"), Tokens::ui(11.5), t.text);
-            app.auto.add(&format!("{auto}.variable"), row.rect, "Variable fonts only");
-            let toggled = row.clicked() || boxed.clicked();
-            if toggled {
-                only_variable = !only_variable;
-                ui.data_mut(|d| d.insert_temp(variable_id, only_variable));
-                // Typing goes on into the search field.
-                ui.memory_mut(|m| m.request_focus(search_id));
+    let changed = search.changed();
+    let mut open = true;
+    // The search lives in the field; the menu's header is the filter row, its list the fonts.
+    let menu = craft_ui::combo::Menu::new(ui, &search)
+        .open(&mut open)
+        .height(380.0)
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .style(egui::style::StyleModifier::default());
+    let app_ref = &mut *app;
+    let header = |ui: &mut egui::Ui| {
+        ui.set_width(rect.width().max(180.0));
+        // Filter row: a checkbox that keeps only the variable fonts.
+        let filter_h = 22.0;
+        let row = ui.add_sized([ui.available_width(), filter_h], egui::Button::selectable(false, ""));
+        let box_rect = Rect::from_min_size(row.rect.min, vec2(18.0, filter_h));
+        let label_rect = Rect::from_min_max(pos2(box_rect.max.x + 2.0, row.rect.min.y), row.rect.max);
+        let boxed = widgets::checkbox(ui, box_rect, only_variable, &t, id.with("variable-check"));
+        ui.painter().text(label_rect.left_center(), Align2::LEFT_CENTER, tr("Variable fonts only"), Tokens::ui(11.5), t.text);
+        app_ref.auto.add(&format!("{auto}.variable"), row.rect, "Variable fonts only");
+        let toggled = row.clicked() || boxed.clicked();
+        if toggled {
+            only_variable = !only_variable;
+            ui.data_mut(|d| d.insert_temp(variable_id, only_variable));
+            // Typing goes on into the search field.
+            ui.memory_mut(|m| m.request_focus(search_id));
+        }
+        let query = state.query.trim().to_lowercase();
+        let mut seen = std::collections::HashSet::new();
+        let filtered: Vec<_> = rows
+            .iter()
+            .filter(|r| {
+                !r.family.is_empty()
+                    && (!only_variable || r.variable)
+                    && (query.is_empty() || ((r.family.to_lowercase().contains(&query) || r.display.to_lowercase().contains(&query)) && seen.insert(&r.family)))
+            })
+            .collect();
+        if fresh {
+            state.selected = filtered.iter().position(|r| r.family == current).unwrap_or(0);
+        }
+        if changed || toggled {
+            state.selected = 0;
+        }
+        let last = filtered.len().saturating_sub(1);
+        state.selected = state.selected.min(last);
+        if down {
+            state.selected = state.selected.saturating_add(1).min(last);
+        }
+        if up {
+            state.selected = state.selected.saturating_sub(1);
+        }
+        let entered = if enter { filtered.get(state.selected).map(|r| r.family.clone()) } else { None };
+        (app_ref, filtered, query.is_empty(), state.selected, changed || toggled, entered)
+    };
+    let list = |ui: &mut egui::Ui,
+                (app, filtered, all, selected, restart, entered): (
+        &mut EffectcraftApp,
+        Vec<&effectcraft_engine::FontRow>,
+        bool,
+        usize,
+        bool,
+        Option<String>,
+    )| {
+        if restart {
+            ui.scroll_to_cursor(Some(egui::Align::TOP));
+        }
+        let mut chosen = entered;
+        if filtered.is_empty() {
+            let r = ui.label(tr("No matching fonts"));
+            app.auto.add(&format!("{auto}.empty"), r.rect, "No matching fonts");
+        }
+        let mut was_recent = false;
+        for (index, r) in filtered.iter().enumerate() {
+            if all && was_recent && !r.recent {
+                ui.separator();
             }
-            let query = state.query.trim().to_lowercase();
-            let mut seen = std::collections::HashSet::new();
-            let filtered: Vec<_> = rows
-                .iter()
-                .filter(|r| {
-                    !r.family.is_empty()
-                        && (!only_variable || r.variable)
-                        && (query.is_empty()
-                            || ((r.family.to_lowercase().contains(&query) || r.display.to_lowercase().contains(&query)) && seen.insert(&r.family)))
-                })
-                .collect();
-            if fresh {
-                state.selected = filtered.iter().position(|r| r.family == current).unwrap_or(0);
+            was_recent = r.recent;
+            let row_width = ui.available_width();
+            let label_width = if preview { (row_width - 100.0).max(40.0) } else { row_width };
+            let resp = ui.add_sized([row_width, 24.0], egui::Button::selectable(index == selected, ""));
+            resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), index == selected, &r.display));
+            let label_rect = Rect::from_min_size(resp.rect.min + vec2(5.0, 0.0), vec2(label_width - 5.0, resp.rect.height()));
+            ui.painter().with_clip_rect(label_rect.intersect(ui.clip_rect())).text(
+                label_rect.left_center(),
+                Align2::LEFT_CENTER,
+                &r.display,
+                Tokens::ui(12.0),
+                t.text,
+            );
+            if ui.is_rect_visible(resp.rect) {
+                app.auto.add(&format!("{auto}.option.{}", r.family), resp.rect, &r.display);
             }
-            if search.changed() || toggled {
-                state.selected = 0;
+            if index == selected && (fresh || up || down) {
+                resp.scroll_to_me(None);
             }
-            let last = filtered.len().saturating_sub(1);
-            state.selected = state.selected.min(last);
-            if down {
-                state.selected = state.selected.saturating_add(1).min(last);
-            }
-            if up {
-                state.selected = state.selected.saturating_sub(1);
-            }
-            if enter {
-                chosen = filtered.get(state.selected).map(|r| r.family.clone());
-            }
-            // Give the result list its actual height even when the previous query had
-            // only one row. A cached tiny Area must not collapse a reopened long list.
-            let filter_room = filter_h + ui.spacing().item_spacing.y;
-            let height = (filtered.len() as f32 * (24.0 + ui.spacing().item_spacing.y) + 16.0).clamp(28.0, (max_height - filter_room).max(28.0));
-            // A minimum, from below the filter row (a maximum would move the cursor back up).
-            ui.set_min_height(height);
-            let mut scroll = egui::ScrollArea::vertical().id_salt(id.with("results")).max_height(height).min_scrolled_height(height);
-            if search.changed() || toggled {
-                scroll = scroll.vertical_scroll_offset(0.0);
-            }
-            scroll.show(ui, |ui| {
-                if filtered.is_empty() {
-                    let r = ui.label(tr("No matching fonts"));
-                    app.auto.add(&format!("{auto}.empty"), r.rect, "No matching fonts");
+            if preview && ui.is_rect_visible(resp.rect) {
+                let key = egui::Id::unique(("font-preview", &r.family));
+                let lines: std::sync::Arc<Vec<Vec<[f32; 2]>>> = match ui.data(|d| d.get_temp(key)) {
+                    Some(l) => l,
+                    None => {
+                        let l = std::sync::Arc::new(effectcraft_engine::font_preview(&r.family, 14.0));
+                        ui.data_mut(|d| d.insert_temp(key, l.clone()));
+                        l
+                    }
+                };
+                // Scaled and placed to fit the row's preview column, and clipped to the row (#577).
+                let room = Rect::from_min_max(pos2(resp.rect.max.x - 95.0, resp.rect.min.y + 1.0), pos2(resp.rect.max.x - 6.0, resp.rect.max.y - 1.0));
+                if let Some((k, o)) = fit_preview(&lines, room, resp.rect.center().y + 5.0) {
+                    let painter = ui.painter().with_clip_rect(resp.rect.intersect(ui.clip_rect()));
+                    for poly in lines.iter() {
+                        let pts: Vec<egui::Pos2> =
+                            poly.iter().filter(|p| p[0].is_finite() && p[1].is_finite()).map(|p| (o + vec2(p[0], p[1]) * k).to_pos2()).collect();
+                        painter.add(egui::Shape::line(pts, egui::Stroke::new(1.0, t.text_dim)));
+                    }
                 }
-                let mut was_recent = false;
-                for (index, r) in filtered.iter().enumerate() {
-                    if query.is_empty() && was_recent && !r.recent {
-                        ui.separator();
-                    }
-                    was_recent = r.recent;
-                    let row_width = ui.available_width();
-                    let label_width = if preview { (row_width - 100.0).max(40.0) } else { row_width };
-                    let resp = ui.add_sized([row_width, 24.0], egui::Button::selectable(index == state.selected, ""));
-                    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), index == state.selected, &r.display));
-                    let label_rect = Rect::from_min_size(resp.rect.min + vec2(5.0, 0.0), vec2(label_width - 5.0, resp.rect.height()));
-                    ui.painter().with_clip_rect(label_rect.intersect(ui.clip_rect())).text(
-                        label_rect.left_center(),
-                        Align2::LEFT_CENTER,
-                        &r.display,
-                        Tokens::ui(12.0),
-                        t.text,
-                    );
-                    if ui.is_rect_visible(resp.rect) {
-                        app.auto.add(&format!("{auto}.option.{}", r.family), resp.rect, &r.display);
-                    }
-                    if index == state.selected && (fresh || up || down) {
-                        resp.scroll_to_me(None);
-                    }
-                    if preview && ui.is_rect_visible(resp.rect) {
-                        let key = egui::Id::unique(("font-preview", &r.family));
-                        let lines: std::sync::Arc<Vec<Vec<[f32; 2]>>> = match ui.data(|d| d.get_temp(key)) {
-                            Some(l) => l,
-                            None => {
-                                let l = std::sync::Arc::new(effectcraft_engine::font_preview(&r.family, 14.0));
-                                ui.data_mut(|d| d.insert_temp(key, l.clone()));
-                                l
-                            }
-                        };
-                        // Scaled and placed to fit the row's preview column, and clipped to the row (#577).
-                        let room = Rect::from_min_max(pos2(resp.rect.max.x - 95.0, resp.rect.min.y + 1.0), pos2(resp.rect.max.x - 6.0, resp.rect.max.y - 1.0));
-                        if let Some((k, o)) = fit_preview(&lines, room, resp.rect.center().y + 5.0) {
-                            let painter = ui.painter().with_clip_rect(resp.rect.intersect(ui.clip_rect()));
-                            for poly in lines.iter() {
-                                let pts: Vec<egui::Pos2> =
-                                    poly.iter().filter(|p| p[0].is_finite() && p[1].is_finite()).map(|p| (o + vec2(p[0], p[1]) * k).to_pos2()).collect();
-                                painter.add(egui::Shape::line(pts, egui::Stroke::new(1.0, t.text_dim)));
-                            }
-                        }
-                    }
-                    if resp.clicked() {
-                        chosen = Some(r.family.clone());
-                    }
-                    resp.on_hover_text(&r.display);
-                }
-            });
-        });
-    });
-    let outside = widgets::pressed_outside(ui.ctx(), &area.response) && !ui.input(|i| i.pointer.interact_pos().is_some_and(|p| rect.contains(p)));
-    if chosen.is_some() || outside || escape {
+            }
+            if resp.clicked() {
+                chosen = Some(r.family.clone());
+            }
+            resp.on_hover_text(&r.display);
+        }
+        chosen
+    };
+    let chosen = menu.show_ui_with_header(header, list).flatten();
+    if chosen.is_some() || !open || escape {
         ui.data_mut(|d| {
             d.insert_temp(id.with("open"), false);
             d.remove::<FontSearch>(state_id);

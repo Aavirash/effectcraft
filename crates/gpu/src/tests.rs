@@ -26,6 +26,36 @@ use effectcraft_time::{FrameRate, Tick};
 
 use crate::Gpu;
 
+mod adjust;
+mod adv3d;
+mod deferred;
+mod deferred_jobs;
+mod fx_color;
+mod fx_depth;
+mod fx_distort;
+mod fx_extra;
+mod fx_gen2;
+mod fx_generate;
+mod fx_key;
+mod fx_light;
+mod fx_lut;
+mod fx_noise;
+mod fx_particles;
+mod fx_pixel2;
+mod fx_sim;
+mod fx_stylize;
+mod fx_text;
+mod fx_time;
+mod fx_tone;
+mod fx_transition;
+mod fx_vr;
+mod fx_warp;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod init;
+mod particles;
+mod three_d;
+mod wgsl_grammar;
+
 /// One GPU test at a time in this process: the calling test thread holds a process-wide lock
 /// until it exits (libtest runs every test on a thread of its own). wgpu's OpenGL backend (Mesa
 /// llvmpipe on FreeBSD, Linux without Vulkan) has one context lock per adapter and panics when a
@@ -926,6 +956,16 @@ fn effects_whose_kernels_failed_render_on_the_cpu() {
         d.quantized = depth != BitDepth::Bpc32;
         check(&format!("missing kernels {depth:?}"), Some(d), 0.0);
     }
+}
+
+/// WGSL cannot read the CPU's constants, so Glow's bright pass repeats them as literals; this
+/// ties them to `effects::GLOW_GAIN` / `GLOW_KNEE` (runs without a GPU).
+#[test]
+fn glow_constants_match_the_cpu() {
+    use effectcraft_effects::{GLOW_GAIN, GLOW_KNEE};
+    let kernels = include_str!("shaders/kernels.wgsl");
+    let want = format!("max({GLOW_GAIN:?} * (px.xyz / a - vec3<f32>(thr - {GLOW_KNEE:?})), vec3<f32>(0.0))");
+    assert!(kernels.contains(&want), "Glow's bright pass in kernels.wgsl is not `{want}`");
 }
 
 /// The GPU Tint gives After Effects 2026's greys for full-frame solids at its defaults (sRGB
