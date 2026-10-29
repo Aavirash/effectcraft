@@ -802,6 +802,34 @@ fn hidden_shape_layer_keeps_its_controls_and_can_still_scale() {
     assert_ne!(scale(&h), before, "a hidden layer's handle still scales it");
 }
 
+/// #1964: Shift-dragging a selected mask vertex keeps it to the axis it moves along most, as a
+/// Shift-dragged layer does; without Shift it moves freely.
+#[test]
+fn shift_drag_keeps_a_mask_vertex_to_one_axis() {
+    let mut h = harness();
+    let plate = layer_id(&h, "Plate");
+    let corners = [[100.0, 60.0], [500.0, 60.0], [500.0, 300.0], [100.0, 300.0]];
+    let mask = {
+        let s = &mut h.state_mut().session;
+        s.execute("layer.select", json!({"layers": [plate]})).unwrap();
+        let m = s.execute("mask.new", json!({"layer": plate, "vertices": corners, "closed": true})).unwrap()["mask"].as_u64().unwrap();
+        s.execute("mask.selectVertices", json!({"vertices": [{"layer": plate, "mask": m, "index": 0}]})).unwrap();
+        m
+    };
+    h.run_steps(2);
+    let vertex = format!("viewer.mask.{mask}.vertex.0");
+    let before = mask_path(&h, "Plate").vertices[0];
+    let from = rect(&h, &vertex).center();
+    drag_path(&mut h, &[from, from + vec2(30.0, 8.0)], egui::Modifiers::SHIFT);
+    let shifted = mask_path(&h, "Plate").vertices[0];
+    assert!(shifted[0] > before[0], "it moved along x: {before:?} -> {shifted:?}");
+    assert_eq!(shifted[1], before[1], "and not along y");
+    let from = rect(&h, &vertex).center();
+    drag_path(&mut h, &[from, from + vec2(30.0, 8.0)], egui::Modifiers::NONE);
+    let free = mask_path(&h, "Plate").vertices[0];
+    assert!(free[0] > shifted[0] && free[1] > shifted[1], "without Shift both axes move: {shifted:?} -> {free:?}");
+}
+
 /// #1769: a hidden masked layer keeps its mask path and vertices, and they remain editable.
 #[test]
 fn hidden_masked_layer_keeps_its_mask_path_editable() {
