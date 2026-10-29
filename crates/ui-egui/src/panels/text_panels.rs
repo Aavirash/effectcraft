@@ -3,7 +3,7 @@
 //! otherwise they apply to the whole selected text layer.
 
 use crate::i18n::tr;
-use effectcraft_engine::keyframe::{BaselineOption, Composer, Direction, FigureStyle, FigureWidth, Justify, Kerning, TextDoc};
+use effectcraft_engine::keyframe::{BaselineOption, Composer, Direction, FigureStyle, FigureWidth, Justify, Kerning, LineJoin, TextDoc};
 use effectcraft_engine::render::EvalCtx;
 use egui::{Align2, Rect, Sense, pos2, vec2};
 use serde_json::json;
@@ -57,7 +57,16 @@ pub fn text_target(app: &EffectcraftApp) -> Option<TextTarget> {
         .iter()
         .filter_map(|id| comp.layer(*id))
         .find(|l| matches!(l.source, effectcraft_engine::project::LayerSource::Text))?;
-    let ectx = EvalCtx { project: &app.session.project, comp_id: cid, comp, time: app.session.time(), expr: app.session.expr.as_deref(), footage: None };
+    let ectx = EvalCtx {
+        project: &app.session.project,
+        comp_id: cid,
+        comp,
+        time: app.session.time(),
+        expr: app.session.expr.as_deref(),
+        footage: None,
+        property_overrides: &[],
+        media_overrides: &[],
+    };
     effectcraft_engine::render::text::source_text(&ectx, layer).map(|d| TextTarget { layer: layer.id.0, doc: d, range: None })
 }
 
@@ -182,6 +191,20 @@ fn stroke_order_field(app: &mut EffectcraftApp, ui: &mut egui::Ui, g: Grid, doc:
     }
 }
 
+/// Line Join of the stroke: Miter / Round / Bevel (grid row 5, under the stroke width).
+fn line_join_field(app: &mut EffectcraftApp, ui: &mut egui::Ui, p: &egui::Painter, g: Grid, doc: &TextDoc, actions: &mut Vec<serde_json::Value>) {
+    let Grid { x0, y, w, enabled } = g;
+    let bw = (w - 2.0 * 4.0) / 3.0;
+    for (i, (key, label, join)) in
+        [("miter", "Miter", LineJoin::Miter), ("round", "Round", LineJoin::Round), ("bevel", "Bevel", LineJoin::Bevel)].into_iter().enumerate()
+    {
+        let r = Rect::from_min_size(pos2(x0 + i as f32 * (bw + 4.0), y + 5.0 * 28.0), vec2(bw, 22.0));
+        if toggle(app, ui, p, r, &format!("character.lineJoin.{key}"), (label, doc.line_join == join, false)) && enabled {
+            actions.push(json!({"lineJoin": key}));
+        }
+    }
+}
+
 /// The Character panel for the text being edited (or the selected text layer): font family and
 /// style, size, leading, tracking, stroke, scale, baseline shift and other numeric fields, kerning,
 /// fill/stroke colours with eyedroppers, style toggles, OpenType features and variable-font axes.
@@ -224,7 +247,8 @@ pub fn character(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
     numeric_fields(app, ui, &p, grid, &doc, &mut actions);
     kerning_field(app, ui, &p, grid, &doc, &mut actions);
     stroke_order_field(app, ui, grid, &doc, &mut actions);
-    y += 5.0 * 28.0 + 8.0;
+    line_join_field(app, ui, &p, grid, &doc, &mut actions);
+    y += 6.0 * 28.0 + 8.0;
     // Fill / stroke swatches with their enable boxes.
     for (i, (key, label, on, c)) in [("fill", "Fill", doc.apply_fill, doc.fill), ("stroke", "Stroke", doc.apply_stroke, doc.stroke)].into_iter().enumerate() {
         let fx = x0 + i as f32 * (w / 2.0);
@@ -782,10 +806,11 @@ pub(super) fn font_picker(app: &mut EffectcraftApp, ui: &mut egui::Ui, id: egui:
             let resp = ui.add_sized([row_width, 24.0], egui::Button::selectable(index == selected, ""));
             resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), index == selected, &r.display));
             let label_rect = Rect::from_min_size(resp.rect.min + vec2(5.0, 0.0), vec2(label_width - 5.0, resp.rect.height()));
+            let name = drawn_font_name(ui.ctx(), r);
             ui.painter().with_clip_rect(label_rect.intersect(ui.clip_rect())).text(
                 label_rect.left_center(),
                 Align2::LEFT_CENTER,
-                &r.display,
+                name,
                 Tokens::ui(12.0),
                 t.text,
             );
@@ -819,7 +844,7 @@ pub(super) fn font_picker(app: &mut EffectcraftApp, ui: &mut egui::Ui, id: egui:
             if resp.clicked() {
                 chosen = Some(r.family.clone());
             }
-            resp.on_hover_text(&r.display);
+            resp.on_hover_text(name);
         }
         chosen
     };
@@ -965,6 +990,13 @@ fn align_glyph(p: &egui::Painter, r: Rect, op: &str, distribute: bool, t: &Token
     }
 }
 
+/// The name a font menu row draws: the font's own-language name when the interface fonts have a
+/// glyph for each of its characters, else its English family name. A Simplified Chinese name
+/// such as 微软雅黑 can have characters that the Han face of an English interface lacks.
+fn drawn_font_name<'a>(ctx: &egui::Context, row: &'a effectcraft_engine::FontRow) -> &'a str {
+    if ctx.fonts_mut(|f| f.has_glyphs(&Tokens::ui(12.0), &row.display)) { &row.display } else { &row.family }
+}
+
 /// Where a font's "Sample" outlines (`lines`, baseline at y = 0) go in `room`: `(scale, origin)`,
 /// a point `p` landing at `origin + p * scale`. At their natural size on `baseline` when they fit;
 /// fonts with large or odd metrics are scaled down (never up) and moved inside, so no preview
@@ -1022,5 +1054,18 @@ mod tests {
         }
         assert!(fit_preview(&[], room, baseline).is_none());
         assert!(fit_preview(&[vec![[f32::NAN, 1.0]]], room, baseline).is_none());
+    }
+
+    /// A font menu row draws the font's own-language name when the interface fonts have its
+    /// glyphs, and the English family name when they do not.
+    #[test]
+    fn font_menu_rows_draw_a_name_the_interface_fonts_have() {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx, &Tokens::for_kind(Default::default()), "en");
+        ctx.run_ui(Default::default(), |_| {}).textures_delta.clear();
+        let row = |display: &str| effectcraft_engine::FontRow { family: "Menu Name Test".into(), display: display.into(), recent: false, variable: false };
+        // U+F1234 is in a private use plane that no interface font maps.
+        assert_eq!(drawn_font_name(&ctx, &row("Menu \u{F1234}")), "Menu Name Test");
+        assert_eq!(drawn_font_name(&ctx, &row("Nom du menu")), "Nom du menu");
     }
 }
