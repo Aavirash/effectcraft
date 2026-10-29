@@ -77,7 +77,11 @@ assert.equal(key(canvas, { metaKey: true, key: "D" }), true);
 for (const properties of [{}, { ctrlKey: true, shiftKey: true }, { ctrlKey: true, altKey: true }, { ctrlKey: true, isComposing: true }, { ctrlKey: true, key: "r" }]) {
   assert.equal(key(canvas, properties), false);
 }
-assert.equal(delivered, 7, "all keys still reach the app");
+// Non-Latin layouts: the physical D key types "в", and eframe still reads it as D.
+assert.equal(key(canvas, { ctrlKey: true, key: "в", code: "KeyD" }), true);
+// Dvorak: the physical D key types "e", which is not Duplicate.
+assert.equal(key(canvas, { ctrlKey: true, key: "e", code: "KeyD" }), false);
+assert.equal(delivered, 9, "all keys still reach the app");
 assert.equal(key(input, { ctrlKey: true }), false, "an external HTML input keeps its shortcut");
 
 // #226: one readable and one unreadable file.
