@@ -484,18 +484,26 @@ fn drag_toggle(ui: &Ui, response: &Response, value: Option<bool>) -> Option<bool
         {
             return Some(target);
         }
+        // Whether the button is held, tracked in event order: a move after a release in the same frame is no drag.
+        // Before the first button event it is held exactly when that event is a release (or, with none, when it is down).
+        let mut held = match steps.iter().find(|(step, _)| *step != Step::Move) {
+            Some((step, _)) => *step == Step::Release,
+            None => down,
+        };
         let mut press_seen = false;
         for (step, over) in steps {
             match step {
                 Step::Press => {
                     press_seen = true;
+                    held = true;
                     if drag.target.is_none() && over {
                         drag.target = Some(!on);
                         drag.visited.insert(response.id);
                         return Some(!on);
                     }
                 }
-                Step::Move if press_seen || down => match drag.target {
+                Step::Release => held = false,
+                Step::Move if held => match drag.target {
                     Some(target) if over => {
                         if drag.visited.insert(response.id) && on != target {
                             return Some(target);
@@ -1111,6 +1119,24 @@ mod tests {
         checkbox_frame(&ctx, &mut values, events);
         checkbox_frame(&ctx, &mut values, vec![]);
         assert_eq!((values[0], values[1]), (Some(true), Some(true)), "a crossing before the release still takes the state");
+    }
+
+    /// A move that arrives after the release, in the frame of the click, is the pointer travelling without the button:
+    /// it must not carry the gesture onto the checkbox it ends over.
+    #[test]
+    fn a_move_after_the_release_in_the_same_frame_paints_nothing() {
+        let (a, b) = (28.0, 58.0);
+        let ctx = egui::Context::default();
+        let mut values = [Some(false); 5];
+        values[2] = None;
+        checkbox_frame(&ctx, &mut values, vec![]);
+        let mut events = vec![moved(a)];
+        events.extend(button(a, true));
+        events.extend(button(a, false));
+        events.push(moved(b));
+        checkbox_frame(&ctx, &mut values, events);
+        checkbox_frame(&ctx, &mut values, vec![]);
+        assert_eq!((values[0], values[1]), (Some(true), Some(false)), "the clicked one changes, the one moved onto afterwards does not");
     }
 
     #[test]
