@@ -1,5 +1,6 @@
 //! The crate's integration tests, one binary (each module is a former `tests/<name>.rs`).
 
+mod native_menu_text_keys;
 mod render_queue_snapshot;
 mod shared_docking_ui;
 mod ui_3d;
@@ -38,6 +39,7 @@ mod ui_layer_source_picker;
 mod ui_light_settings;
 mod ui_live_preview;
 mod ui_locked_color;
+mod ui_marker_names;
 mod ui_media_browser_cache;
 mod ui_media_browser_copy_path;
 mod ui_menus;
