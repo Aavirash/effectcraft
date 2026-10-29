@@ -1,6 +1,6 @@
 # Where EffectCraft falls short
 
-> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-22 · **Change:** minor (gap 11: the Chinese Han fallback reaches the installed macOS Chinese faces, #453; previous: minor, path-editing layer bounds, #1220; issue, PR and catalog references gap 21: percentage guides and effect colour labels in; earlier change: re-audited against `upstream/main` 470ea7a3; ranked gap list from the 10 October re-measure otherwise unchanged) · **Target:** Adobe After Effects 2026 (26.5.0.89)
+> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-13 · **Change:** minor (path-editing layer bounds, #1220; issue, PR and catalog references gap 21: percentage guides and effect colour labels in; earlier change: re-audited against `upstream/main` 470ea7a3; ranked gap list from the 10 October re-measure otherwise unchanged) · **Target:** Adobe After Effects 2026 (26.5.0.89)
 
 An honest assessment of how far EffectCraft is from being a real replacement for After Effects,
 and the work that closes the gap. This document is meant for contributors and agents choosing
@@ -335,7 +335,6 @@ Issues #41–#47 (all from the Linux AppImage 0.1.1, 5 October): panning the vie
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-10-22 | minor | Gap 11: the Chinese Han fallback reaches the installed macOS Chinese faces, so Chinese text in compositions no longer draws Japanese glyph forms (#453) |
 | 2026-10-16 | minor | Gap 8: #932 closed (Convert To Bezier Path converts a shape layer's parametric path, not only mask RotoBezier) |
 | 2026-10-13 | patch | G2: layer bounds no longer compete with editable shape/mask path points (#1220) |
 | 2026-10-12 | minor | Audited against `upstream/main` 470ea7a3: open-issue count and crash list, closed issues removed from rows 1, 3, 5, 6, 8–12, 15–17, 22–24, G8 and G9 (#759 `#include`), localization catalogs recounted (≈ 12% to ≈ 18%); rows 7, 14 and 21 left to open PRs #1102, #792 and #1098 |

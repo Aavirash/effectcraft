@@ -767,12 +767,6 @@ const GEORGIAN_FAMILIES: &[&str] = &["Sylfaen", ".SF Georgian", "SF Georgian", "
 /// The CJK locale the host asked fallbacks to prefer, when it has one (see [`set_cjk_locale`]).
 static REQUESTED_CJK_LOCALE: RwLock<Option<String>> = RwLock::new(None);
 
-/// Serialises the tests that change the process-global CJK locale with the tests that read it
-/// through [`fallback_for`] (the layout tests), which would otherwise cache the other order's
-/// families.
-#[cfg(test)]
-pub(crate) static TEST_CJK_LOCALE: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
 /// Ask CJK font fallbacks to prefer `tag`'s language for Han ideographs instead of the locale
 /// environment, so a Chinese interface is drawn with a Chinese face on a machine whose locale is
 /// Japanese (and the other way round). The interface sets this from its language setting; an empty

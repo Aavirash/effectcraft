@@ -1,5 +1,14 @@
 use super::*;
 
+/// Run `test` again in a child process with `variable` set. The fixture faces below go into the
+/// process-global font database and its fallback caches, so only a process that runs one such test
+/// on its own can use them.
+#[cfg(not(target_arch = "wasm32"))]
+fn run_in_child(variable: &str, test: &str) {
+    let output = std::process::Command::new(std::env::current_exe().unwrap()).args(["--exact", test, "--nocapture"]).env(variable, "1").output().unwrap();
+    assert!(output.status.success(), "{}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+}
+
 /// Concurrent language requests must neither choose another context's font nor reuse its
 /// cached family order. Synthetic fonts in a child process keep this independent of the host
 /// font installation and of other tests that exercise the process-global database/locale.
@@ -8,12 +17,7 @@ use super::*;
 fn cjk_requests_keep_their_language_and_cache_entries() {
     const CHILD: &str = "EFFECTCRAFT_TEST_ISOLATED_CJK";
     if std::env::var_os(CHILD).is_none() {
-        let output = std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "fonts::tests::cjk_requests_keep_their_language_and_cache_entries", "--nocapture"])
-            .env(CHILD, "1")
-            .output()
-            .unwrap();
-        assert!(output.status.success(), "{}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+        run_in_child(CHILD, "fonts::tests::cjk_requests_keep_their_language_and_cache_entries");
         return;
     }
     let families = [("ja", "Yu Gothic"), ("zh-hans", "Microsoft YaHei"), ("zh-hant", "Microsoft JhengHei"), ("ko", "Malgun Gothic")];
@@ -69,6 +73,52 @@ fn cjk_requests_keep_their_language_and_cache_entries() {
     for thread in threads {
         thread.join().unwrap();
     }
+}
+
+/// #453: with a Chinese interface, a Han ideograph that both a Chinese and a Japanese face cover
+/// must reach the installed Simplified Chinese family first, or Chinese text in a composition is
+/// drawn with Japanese glyph forms. Fixture faces named after the macOS families keep this
+/// independent of the host's fonts and of rendering. Before the fix the Simplified list named none
+/// of the macOS faces a stock install has, so the walk below reached the Japanese face - the
+/// regression this guards.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn zh_hans_han_fallback_puts_the_chinese_family_first() {
+    const CHILD: &str = "EFFECTCRAFT_TEST_ZH_HANS_ORDER";
+    if std::env::var_os(CHILD).is_none() {
+        run_in_child(CHILD, "fonts::tests::zh_hans_han_fallback_puts_the_chinese_family_first");
+        return;
+    }
+    let mut ids = Vec::new();
+    {
+        let mut d = db().write().unwrap();
+        d.scanned = true; // This test process uses only bundled and synthetic fonts.
+        // The Japanese face is added first, so scan order cannot be what picks the Chinese one.
+        for family in ["Hiragino Sans", "Hiragino Sans GB"] {
+            let mut data = test_font(family);
+            let table = data[12..12 + 8 * 16].as_chunks::<16>().0.iter().find(|t| &t[..4] == b"cmap").unwrap();
+            let cmap = u32::from_be_bytes(table[8..12].try_into().unwrap()) as usize + 12;
+            // Map 页 to the fixture's triangle glyph instead of its private-use range.
+            for (offset, value) in [(16, '页' as u16), (24, '页' as u16), (30, 2u16.wrapping_sub('页' as u16))] {
+                data[cmap + offset..cmap + offset + 2].copy_from_slice(&value.to_be_bytes());
+            }
+            let data = Arc::new(data);
+            let names = read_faces_bytes(&data).into_iter().next().unwrap();
+            ids.push(push(&mut d, info_from(names, FaceData::Shared(data), "test")));
+        }
+    }
+    let &[japanese, chinese] = ids.as_slice() else { panic!("two fixture faces expected: {ids:?}") };
+    let base = resolve("Inter", "Regular").face;
+    assert!(face(japanese).has_char('页') && face(chinese).has_char('页'));
+    // The fallback list itself, before any coverage check: the Chinese family comes first for
+    // zh-hans and second for ja, whether or not either face can draw the probe.
+    let zh_hans: Vec<FaceId> = family_faces(FallbackScript::Han, &face(base), CjkLocale::Simplified).to_vec();
+    assert_eq!(zh_hans, [chinese, japanese], "zh-hans tries the Chinese family first");
+    let ja: Vec<FaceId> = family_faces(FallbackScript::Han, &face(base), CjkLocale::Japanese).to_vec();
+    assert_eq!(ja, [japanese, chinese], "ja keeps the Japanese family first");
+    // ...and the face a layout actually gets for the shared ideograph.
+    assert_eq!(face(fallback_for_locale('页', base, "zh-hans")).info.family, "Hiragino Sans GB");
+    assert_eq!(face(fallback_for_locale('页', base, "ja")).info.family, "Hiragino Sans");
 }
 
 #[test]
