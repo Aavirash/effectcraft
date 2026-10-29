@@ -193,17 +193,8 @@ fn used_slots(live: &[usize], draws: &[Draw]) -> Vec<usize> {
 /// Selector's do, with each Repeater copy (`copy_of`) as one unit: the copies of a Repeater above
 /// the operation move on their own as far as Correlation allows, and the copies of a Repeater
 /// below it move as one. The four transformations of one operation move together.
-#[allow(clippy::too_many_arguments)]
-fn wiggle_transform(
-    ctx: &EvalCtx,
-    layer: &Layer,
-    g: &PropGroup,
-    tr: &PropGroup,
-    arena: &mut [BezPath],
-    live: &[usize],
-    copy_of: &HashMap<usize, usize>,
-    draws: &mut [Draw],
-) {
+fn wiggle_transform(ctx: &EvalCtx, layer: &Layer, g: &PropGroup, arena: &mut [BezPath], live: &[usize], copy_of: &HashMap<usize, usize>, draws: &mut [Draw]) {
+    let Some(tr) = g.sub("transform") else { return };
     let w = Wiggly {
         max: 1.0,
         min: -1.0,
@@ -406,10 +397,7 @@ fn collect_in(ctx: &EvalCtx, layer: &Layer, contents: &PropGroup, arena: &mut Ve
                 let t = layer.layer_time(ctx.time).seconds();
                 apply(arena, &live, |p| ops::wiggle(p, &w, t));
             }
-            "wiggler" => {
-                let Some(tr) = g.sub("transform") else { continue };
-                wiggle_transform(ctx, layer, g, tr, arena, &live, &copy_ids.of, &mut draws);
-            }
+            "wiggler" => wiggle_transform(ctx, layer, g, arena, &live, &copy_ids.of, &mut draws),
             "merge" => {
                 let mode = ops::MergeMode::from_index(ctx.e(layer, g, "mode"));
                 let input: Vec<BezPath> = live.iter().map(|&i| arena[i].clone()).collect();
