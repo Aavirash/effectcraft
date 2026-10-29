@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use effectcraft_engine::Session;
 
-use crate::{api, audio, browse, diskcache, files, frames, persist, storage, worker};
+use crate::{api, audio, browse, config_file, diskcache, files, frames, persist, storage, worker};
 use effectcraft_ui_egui::EffectcraftApp;
 use serde_json::json;
 use wasm_bindgen::prelude::*;
@@ -220,6 +220,8 @@ pub async fn start(canvas_id: String) -> Result<(), JsValue> {
     };
     api::set_info("storage", json!({"backend": persist::backend(), "entries": stored, "loadMs": t0.elapsed().as_secs_f64() * 1000.0}));
     audio::install_unlock();
+    // `./effectcraft-config.json`: what to open on load.
+    let startup = config_file::startup().await;
     browse::restore();
     diskcache::init();
     storage::refresh();
@@ -255,10 +257,11 @@ pub async fn start(canvas_id: String) -> Result<(), JsValue> {
                 let mut session = session();
                 session.load_settings();
                 let recovery = session.begin_recovery();
-                // `?empty`: a blank project; `?demo`: the demo project; otherwise the last visit's
-                // project (the demo on a first visit).
-                let restored = !empty && !query_flag("demo") && persist::restore(&mut session);
-                if !restored && !empty {
+                // `?empty`: a blank project; `?demo`: the demo project; otherwise what the config's
+                // `startup` says (default: the last visit's project, the demo on a first visit).
+                let demo = query_flag("demo");
+                let restored = !empty && !demo && startup.restores() && persist::restore(&mut session);
+                if !restored && !empty && (demo || startup.demo_when_nothing_restored()) {
                     let _ = session.execute("file.openDemoProject", json!({}));
                 }
                 api::set_info("restored", json!(restored));
