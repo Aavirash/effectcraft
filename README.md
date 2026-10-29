@@ -174,8 +174,10 @@ cannot express; File ▸ Import ▸ Lottie… opens one as a new composition.
 
 ## Built for agents
 
-Everything you can do from a menu is a command with an id, and agents can reach every one of
-them:
+Engine commands are available through the CLI, JSON control channel and MCP. UI-only commands
+need the running app's frontend dispatcher: complete menu access requires the app's control
+channel or an attached MCP bridge. Headless MCP sessions expose supported engine commands,
+but not UI-only commands or bridge-only `ui_*` tools.
 
 - **MCP server:** `effectcraft-cli mcp` speaks the Model Context Protocol over stdio, headless
   or bridged to the running app (`--bridge 9877`). Tools cover commands, the project and property
