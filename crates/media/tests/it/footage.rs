@@ -86,42 +86,35 @@ fn ffmpeg_fixture_inner(name: &str, args: &[&str], must_succeed: bool) -> Option
     Some(out)
 }
 
+/// Video options the chosen H.264 encoder actually accepts. `libx264` keeps its constant-quality
+/// `-preset`/`-crf` pair; `libopenh264` rejects both (it takes a bitrate), and the hardware
+/// backends take a bitrate too — without this, a build whose picked encoder is not libx264 failed
+/// the fixture and silently skipped every check gated on it.
+fn h264_video_options(enc: &str) -> Vec<&'static str> {
+    if enc == "libx264" { vec!["-preset", "medium", "-crf", "18"] } else { vec!["-b:v", "2M"] }
+}
+
 fn h264_mp4() -> Option<PathBuf> {
     // Made with whatever encoder this build has listed: a listed encoder can still fail at run
     // time (the hardware ones without their device), so this may skip rather than fail.
     let enc = h264_encoder()?;
-    try_ffmpeg_fixture(
-        "testsrc2_1080p.mp4",
-        &[
-            "-f",
-            "lavfi",
-            "-i",
-            "testsrc2=size=1920x1080:rate=30:duration=2",
-            "-f",
-            "lavfi",
-            "-i",
-            "sine=frequency=440:sample_rate=48000:duration=2",
-            "-c:v",
-            enc,
-            "-pix_fmt",
-            "yuv420p",
-            "-preset",
-            "medium",
-            "-crf",
-            "18",
-            "-colorspace",
-            "bt709",
-            "-color_primaries",
-            "bt709",
-            "-color_trc",
-            "bt709",
-            "-c:a",
-            "aac",
-            "-ac",
-            "2",
-            "-shortest",
-        ],
-    )
+    let mut args: Vec<&'static str> = vec![
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc2=size=1920x1080:rate=30:duration=2",
+        "-f",
+        "lavfi",
+        "-i",
+        "sine=frequency=440:sample_rate=48000:duration=2",
+        "-c:v",
+        enc,
+        "-pix_fmt",
+        "yuv420p",
+    ];
+    args.extend(h264_video_options(enc));
+    args.extend(["-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709", "-c:a", "aac", "-ac", "2", "-shortest"]);
+    try_ffmpeg_fixture("testsrc2_1080p.mp4", &args)
 }
 
 fn prores_mov() -> Option<PathBuf> {
@@ -1165,4 +1158,14 @@ fn an_unsupported_stream_reports_why_it_shows_no_picture() {
     assert_eq!(pool.problem(&f).as_deref(), Some(why.as_str()));
     pool.forget(&f.path);
     assert_eq!(pool.problem(&f), None);
+}
+
+#[test]
+fn the_h264_fixture_options_fit_the_picked_encoder() {
+    assert_eq!(h264_video_options("libx264"), ["-preset", "medium", "-crf", "18"]);
+    for enc in ["libopenh264", "h264_nvenc", "h264_vaapi", "h264_qsv"] {
+        let options = h264_video_options(enc);
+        assert!(!options.iter().any(|o| *o == "-preset" || *o == "-crf"), "{enc} rejects preset/crf: {options:?}");
+        assert!(options.contains(&"-b:v"), "{enc} gets a bitrate: {options:?}");
+    }
 }
