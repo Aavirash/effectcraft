@@ -82,8 +82,12 @@ pub(crate) fn open_or_import(app: &mut EffectcraftApp, paths: Vec<String>) {
 /// The eframe app: the shared EffectCraft UI plus the browser host's per-frame duties.
 pub struct WebApp {
     pub app: EffectcraftApp,
-    /// Keep the session snapshot (off with `?empty` and an explicit `"demo"` startup).
+    /// Keep the session snapshot (off with `?empty`; off with an explicit `"demo"` startup until
+    /// the user's own work begins, see `demo_start`).
     pub persist: bool,
+    /// Started on the demo by the config: the snapshot stays off, so the demo never replaces the
+    /// last visit's project, until the user opens a project from a file or edits the demo.
+    pub demo_start: bool,
 }
 
 impl eframe::App for WebApp {
@@ -116,6 +120,11 @@ impl eframe::App for WebApp {
         api::poll_replies();
         // Render Queue outputs written this frame (here or by a worker) → downloads.
         files::flush_downloads();
+        // The user's own work after a demo start is worth keeping too: turn the snapshot on.
+        if self.demo_start && (self.app.session.path.is_some() || self.app.session.is_dirty()) {
+            self.demo_start = false;
+            self.persist = true;
+        }
         // What a reload comes back to.
         if self.persist {
             // The app's monotonic clock: `ctx.input(|i| i.time)` is stale in a logic-only tick.
@@ -224,7 +233,7 @@ pub async fn start(canvas_id: String) -> Result<(), JsValue> {
     // `./effectcraft-config.json`: what to open on load.
     // `?empty` and `?demo` decide by themselves, so they skip the request.
     let startup = if empty || query_flag("demo") { Startup::default() } else { config_file::startup().await };
-    // An explicit `"demo"` start leaves the saved session alone: the demo must not overwrite it.
+    // An explicit `"demo"` start leaves the saved session alone until the user opens or edits something.
     let keep_session = !empty && startup.keeps_session();
     browse::restore();
     diskcache::init();
@@ -291,7 +300,7 @@ pub async fn start(canvas_id: String) -> Result<(), JsValue> {
                 app = app.with_control(rx);
                 let backend = cc.wgpu_render_state.as_ref().map(|rs| format!("{:?}", rs.adapter.get_info().backend));
                 api::set_info("backend", json!(backend));
-                Ok(Box::new(WebApp { app, persist: keep_session }))
+                Ok(Box::new(WebApp { app, persist: keep_session, demo_start: !empty && !keep_session }))
             }),
         )
         .await?;
