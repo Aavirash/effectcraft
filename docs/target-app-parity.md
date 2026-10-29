@@ -120,7 +120,7 @@ compositing and effects dominate; audio is light). Hours are to full parity for 
 | Expressions and scripting | 7% | 93% | 65% | 20–40 | `.jsxbin`, Startup/Shutdown folders, script shortcuts (`#include` landed, #759); external editor (#364); see [scripting-parity.md](scripting-parity.md) |
 | Shapes, masks and roto | 9% | 93% | 45% | 30–50 | Open mask and shape issues (#1004, #999, #1042, #932); #510, #513, #527, #509 and #303 are closed; paste SVG/AI as shape layers (26.3; SVG markup pastes since #738) |
 | Text and typography | 7% | 94% | 50% | 20–35 | CJK text in comps renders wrongly (#453); paragraph alignment inverted (#316); soft text at Fit (#417, mostly fixed by #444); toolbar font options (#550); #483 and #583 are closed; variable-font filter landed (#741) |
-| Effects and animation presets | 14% | 85% | 40% | 70–130 | All 306 effects exist, but rendered output is unmeasured against After Effects; 54 built-in presets (text, Transitions, Backgrounds) against After Effects' 621 ([effects-parity.md](effects-parity.md)); open effect bugs (#580 crash, #463, #369, #473, #474; #514 and #526 are closed); effect colour labels (26.5); see [effects-parity.md](effects-parity.md) |
+| Effects and animation presets | 14% | 85% | 40% | 70–130 | All 306 effects exist, but rendered output is unmeasured against After Effects; 76 built-in presets (text, Transitions, Backgrounds, Behaviors) against After Effects' 621 ([effects-parity.md](effects-parity.md)); open effect bugs (#580 crash, #463, #369, #473, #474; #514 and #526 are closed); effect colour labels (26.5); see [effects-parity.md](effects-parity.md) |
 | 3D (Classic and Advanced) | 6% | 82% | 35% | 35–65 | No FBX/USD/STL models, no Substance materials, mesh displacement unverified; no 3D transform gizmos (#392, #347); reflections (#261); camera aperture (#260); #489 and #315 are closed |
 | Tracking and AI-assisted tools | 5% | 80% | 35% | 35–70 | Object Matte (26.2) has the effect, the viewer tool (click / box), background tracking, Freeze and the 26.5 disk cache, not yet compared with After Effects; Roto Brush (MobileSAM) and face tracking (MediaPipe) unmeasured against After Effects; camera-tracker view (#505) |
 | Preview and cache | 7% | 92% | 40% | 25–50 | Playback stutters on cached frames (#595, #304); late audio (#504, #335); #329 and #554 are closed; no benchmark against After Effects |
@@ -688,8 +688,10 @@ Fixes from measured reports:
   step (undo and redo keep it) and keeps the comp's cached frames; projects saved before open
   with Auto. View ▸ Resolution and the panel's popup run `view.res.full|half|third|quarter|auto`
   and `view.res.custom {factor}`, which now work headless too; `comp.info` reports `resolution`
-  and `resolutionFactor` (#417). Not yet: the magnification is not saved per comp, and the
-  Composition Settings dialog has no Resolution popup.
+  and `resolutionFactor` (#417). Composition Settings ▸ Basic has the same Resolution menu, with
+  the frame size and memory per 8bpc frame at that resolution beside it; OK sets it as the popup
+  does, outside the undo step of the other settings (#2167). Not yet: the magnification is not
+  saved per comp.
 
 ### Update: plug-ins and extensions as in After Effects; ease presets become a ScriptUI panel
 
@@ -1068,7 +1070,7 @@ resolution, adjustment) and composited at 8 and 32 bpc:
   Bucket's flood-filled region, Eyedropper Fill's sample); segments and convex polygons are
   binned into 16 × 16 tiles and rasterised on the GPU with the CPU's coverage functions, glows
   and compositing included. The CPU effects were refactored to draw from the same plans with
-  bit-identical output (`crates/effects/tests/gen_golden.rs`: 288 frame hashes pinned before
+  bit-identical output (`crates/effects/tests/it/gen_golden.rs`: 288 frame hashes pinned before
   the refactor). Exception: CC Threads decides band membership and fibre shade per pixel, and at
   round parameter values (the defaults) pixel centres sit exactly on band edges, where f32 and
   the CPU's f64 can fall on either side: up to 5 % of pixels allowed (measured ≤ 3.6 % at half
@@ -1082,7 +1084,7 @@ resolution, adjustment) and composited at 8 and 32 bpc:
 7 more effects run on the GPU (280 in all, with M13.28's 37), and five CPU fallbacks are gone. Each case is
 checked against the CPU oracle (≤ 1/255 at 8 bpc, ≤ 1e-3 at 32 bpc) directly on a buffer (full
 and half resolution) and composited at 8 and 32 bpc; the CPU refactors behind the shared plans
-are pinned bit for bit by golden hashes (`crates/effects/tests/particle_golden.rs`,
+are pinned bit for bit by golden hashes (`crates/effects/tests/it/particle_golden.rs`,
 `timewarp_golden.rs`, `sim_golden.rs`).
 
 - **Particle render passes** (`gpu::fx_particles`): CC Particle World and CC Particle Systems II
