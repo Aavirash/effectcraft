@@ -370,6 +370,11 @@ fn baked_orientation_keys_are_capped_across_the_whole_property() {
     s.execute("layer.setParent", json!({"layers": [light], "parent": nul})).unwrap();
     let n = layer_in(&s, cid(&s), light).props.prop("transform/orientation").unwrap().keys.len();
     assert!(n <= 4096, "{n} keys: the cap is for the property, not per segment");
+    // the segments the cap left unchecked keep their authored easing instead of turning into straight blends
+    let orientation = layer_in(&s, cid(&s), light);
+    let keys = &orientation.props.prop("transform/orientation").unwrap().keys;
+    let last = keys.iter().rev().nth(1).expect("the penultimate key");
+    assert_ne!(last.out_interp, effectcraft_keyframe::Interp::Linear, "the last segment keeps its authored easing");
 }
 
 // ---------------------------------------------------------------- from 3D model

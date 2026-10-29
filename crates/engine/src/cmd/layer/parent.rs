@@ -317,8 +317,12 @@ fn reexpress_orientation(correction: effectcraft_geom::Mat4, pr: &mut effectcraf
             // and the authored ones still to come) count against the cap.
             let budget = BAKE_MAX_KEYS.saturating_sub(keys.len() + authored.keys.len() - i);
             bake_between(correction, &authored, (key.time, converted[i]), (next.time, converted[i + 1]), BAKE_MAX_DEPTH, budget, &mut between);
+            // With the cap reached the segment can't be checked or subdivided: it keeps its authored easing between
+            // the converted keys, rather than becoming a straight blend that was never checked against the original.
+            if between.len() >= budget {
+                between.clear();
             // An eased segment, or one that gained keys, becomes a run of straight blends.
-            if !between.is_empty() || key.out_interp != Interp::Linear || next.in_interp != Interp::Linear {
+            } else if !between.is_empty() || key.out_interp != Interp::Linear || next.in_interp != Interp::Linear {
                 k.out_interp = Interp::Linear;
                 k.out_ease.clear();
                 k.auto_bezier = false;
