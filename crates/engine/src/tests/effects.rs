@@ -803,6 +803,101 @@ fn applying_an_old_preset_upgrades_its_effects_and_property_paths() {
     assert_eq!(hue, KV::Scalar(30.0));
 }
 
+/// Save the selected effects and properties as a preset, then apply it to `target` at `at`.
+fn save_and_apply_preset(s: &mut Session, name: &str, selected: Vec<(LayerId, u64)>, target: u64, at: f64) -> serde_json::Value {
+    let path = std::env::temp_dir().join(format!("ec-1971-{name}-{}.ecpreset", std::process::id())).to_string_lossy().to_string();
+    s.state.selected_props = selected;
+    s.execute("anim.savePreset", json!({"path": path})).unwrap();
+    s.execute("time.set", json!({"time": at})).unwrap();
+    let r = s.execute("anim.applyPreset", json!({"path": path, "layers": [target]}));
+    let _ = std::fs::remove_file(&path);
+    r.unwrap()
+}
+
+/// The comp times of the keys at `path` on `lid`'s `n`th effect (0-based), or on the layer when
+/// `n` is `None`.
+fn key_times(s: &Session, lid: u64, n: Option<usize>, path: &str) -> Vec<f64> {
+    let l = layer(s, lid);
+    let group = match n {
+        Some(n) => l.effects().unwrap().groups().nth(n).unwrap().clone(),
+        None => l.props.clone(),
+    };
+    group.prop(path).unwrap().keys.iter().map(|k| l.comp_time(k.time).seconds()).collect()
+}
+
+/// #1971: a saved effect's keys start at the playhead of the layer it's applied to, as a saved
+/// property's do, nested controls included, an effect without keys still applies, and the whole
+/// apply is one undo step.
+#[test]
+fn preset_effect_keys_start_at_the_playhead() {
+    let (mut s, a, b) = comp_with_two_solids();
+    let blur = apply(&mut s, a, "Gaussian Blur");
+    let fractal = apply(&mut s, a, "Fractal");
+    let slider = apply(&mut s, a, "Slider Control");
+    animate_effect(&mut s, a, blur, "blurriness", &[(5.0, 10.0), (5.5, 30.0), (6.0, 10.0)]);
+    animate_effect(&mut s, a, fractal, "mandelbrot/mandelbrotX", &[(5.5, 1.25), (7.0, 2.5)]);
+    let before = layer(&s, b);
+    let undo = s.history.undo.len();
+    let r = save_and_apply_preset(&mut s, "effects", vec![(LayerId(a), blur), (LayerId(a), fractal), (LayerId(a), slider)], b, 0.5);
+    assert_eq!(r["applied"], 3, "{r}");
+    assert_eq!(key_times(&s, b, Some(0), "blurriness"), vec![0.5, 1.0, 1.5]);
+    assert_eq!(key_times(&s, b, Some(1), "mandelbrot/mandelbrotX"), vec![1.0, 2.5]);
+    assert_eq!(s.history.undo.len(), undo + 1, "the whole apply is one undo step");
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(layer(&s, b), before);
+}
+
+/// #1971: effects and properties saved together keep their relative timing: the earliest key of
+/// either starts at the playhead.
+#[test]
+fn preset_effects_and_properties_share_one_anchor() {
+    let (mut s, a, b) = comp_with_two_solids();
+    let blur = apply(&mut s, a, "Gaussian Blur");
+    animate_effect(&mut s, a, blur, "blurriness", &[(5.0, 10.0), (6.0, 30.0)]);
+    for (time, value) in [(4.0, -12.0), (7.0, 12.0)] {
+        s.execute("prop.addKey", json!({"layer": a, "path": "transform/rotation", "time": time, "timeBase": "comp", "value": value})).unwrap();
+    }
+    let rotation = layer(&s, a).props.prop("transform/rotation").unwrap().uid;
+    save_and_apply_preset(&mut s, "mixed", vec![(LayerId(a), blur), (LayerId(a), rotation)], b, 1.0);
+    assert_eq!(key_times(&s, b, None, "transform/rotation"), vec![1.0, 4.0]);
+    assert_eq!(key_times(&s, b, Some(0), "blurriness"), vec![2.0, 3.0]);
+}
+
+/// #1971: on a stretched layer a saved effect's keys land where a saved property's keys do.
+#[test]
+fn preset_effect_keys_follow_a_stretched_layer_like_properties() {
+    let (mut s, a, b) = comp_with_two_solids();
+    let blur = apply(&mut s, a, "Gaussian Blur");
+    animate_effect(&mut s, a, blur, "blurriness", &[(5.0, 10.0), (6.0, 30.0)]);
+    for (time, value) in [(5.0, -12.0), (6.0, 12.0)] {
+        s.execute("prop.addKey", json!({"layer": a, "path": "transform/rotation", "time": time, "timeBase": "comp", "value": value})).unwrap();
+    }
+    let rotation = layer(&s, a).props.prop("transform/rotation").unwrap().uid;
+    set_layer_clock(&mut s, b, 1.0, 200.0);
+    save_and_apply_preset(&mut s, "stretched", vec![(LayerId(a), blur), (LayerId(a), rotation)], b, 2.0);
+    let property = key_times(&s, b, None, "transform/rotation");
+    assert_eq!(property.first(), Some(&2.0), "the property's keys start at the playhead");
+    assert_eq!(key_times(&s, b, Some(0), "blurriness"), property, "and the effect's keys land with them");
+}
+
+/// #1971: a preset saved before effect keys were stored relative to the earliest key (version 1)
+/// has its effects' keys at the source layer's times; they also start at the playhead.
+#[test]
+fn old_preset_effect_keys_start_at_the_playhead() {
+    let (mut s, a, b) = comp_with_two_solids();
+    let blur = apply(&mut s, a, "Gaussian Blur");
+    animate_effect(&mut s, a, blur, "blurriness", &[(5.0, 10.0), (6.0, 30.0)]);
+    let old = json!({
+        "effectcraftAnimationPreset": 1,
+        "name": "shake",
+        "properties": [],
+        "effects": [serde_json::to_value(effect_group(&s, a, blur)).unwrap()],
+    });
+    s.execute("time.set", json!({"time": 0.5})).unwrap();
+    s.execute("anim.applyPreset", json!({"preset": old, "layers": [b]})).unwrap();
+    assert_eq!(key_times(&s, b, Some(0), "blurriness"), vec![0.5, 1.5]);
+}
+
 /// #2064: `prop.addKey` accepts the `effects/<match name>[#n]/<property>` path that
 /// `essential.list` reports.
 #[test]

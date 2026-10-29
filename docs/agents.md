@@ -614,7 +614,9 @@ Extension points and the bundled extensions: [plugins.md](plugins.md).
   Display Style between Timecode and Frames: `file.projectSettings {"timeDisplay": "frames"}`.
 * `prop.pickWhip {layer, prop, target: {layer, prop, dimension?}}` links a property as its
   expression pick whip does; `dimension` picks one of the target's values (`position[0]`), as a
-  drop on that value field does.
+  drop on that value field does. `byIndex: true` (an Alt pick whip: Alt held as it drops) refers
+  to an effect's properties by their index, `effect("Color Control")(1)`: it still reads a
+  renamed property, but another one if properties are reordered.
 * Every property row has a property pick whip in the Parent & Link column
   (`timeline.prop.<uid>.propertyPickWhip`; the expression row's is `timeline.prop.<uid>.pickWhip`).
   Dragged onto another property's name or value, in the Timeline or Effect Controls
@@ -678,6 +680,19 @@ effectcraft-cli exec layer.newNull --bridge 9877                 # same commands
 effectcraft-cli exec file.exportLottie '{"comp":"Main","path":"main.json","includeExpressions":true}' main.ecproj --json
 effectcraft-cli exec file.importLottie '{"path":"anim.json"}' main.ecproj --save
 effectcraft-cli render main.ecproj --comp Main --out main.mov --format prores --progress   # progress lines on stderr for a program that reads them
+```
+
+A long `run` doesn't fit on a command line (Windows caps it at 32 767 characters, Linux one
+argument at 128 KiB). `run --args-file F` reads the same `<id> <json>` arguments one per line;
+`run --commands FILE` reads steps as a JSON array of `{"command": ID, "params": {…}}` objects, or one
+such object per line (JSON Lines), and `--commands -` reads them from standard input. `--commands`
+may be repeated; its steps run after the positional pairs and `--args-file`. A malformed step is a
+usage error naming its index (from 0, as in the results) before anything runs, and the error of a step
+that fails ends with `(step N)`:
+
+```sh
+effectcraft-cli run --commands steps.json --empty --save-as main.ecproj
+generate-steps | effectcraft-cli run main.ecproj --commands - --save --json
 ```
 
 Scripts written against After Effects' documented scripting API run with `script`:
