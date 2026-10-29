@@ -73,7 +73,7 @@ impl Dependencies<'_> {
     fn soloed_model(&mut self, ctx: &EvalCtx, layer: &Layer) -> Option<()> {
         self.remaining = self.remaining.checked_sub(1)?;
         // Expressions sampled at other times: not cacheable, as in the ordinary path.
-        if (self.other_times || super::reads_other_times(layer)) && super::has_expression(&layer.props) {
+        if (self.other_times || super::reads_other_times(layer, None)) && super::has_expression(&layer.props) {
             return None;
         }
         hash_debug(self.h, layer);
