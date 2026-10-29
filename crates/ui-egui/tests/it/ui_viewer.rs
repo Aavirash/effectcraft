@@ -1133,7 +1133,8 @@ fn pen_mask_undoes_step_by_step_and_double_click_moves_the_whole_mask() {
         h.state_mut().session.execute("edit.redo", json!({})).unwrap();
     }
     h.run_steps(2);
-    // Double-click a point: all of them selected, in a free-transform box.
+    // Double-click a point: point editing starts, without the free-transform box and without
+    // selecting every point (After Effects: the layer's box stays hidden until editing ends).
     let at = screen(&h, [100.0, 300.0]);
     h.input_mut().events.push(Event::PointerMoved(at));
     h.step();
@@ -1141,22 +1142,14 @@ fn pen_mask_undoes_step_by_step_and_double_click_moves_the_whole_mask() {
         h.input_mut().events.push(Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() });
     }
     h.run_steps(3);
-    assert_eq!(h.state().session.state.selected_vertices.len(), 4);
-    assert!(h.state().auto.find("viewer.freeTransform.handle.0").is_some(), "the free-transform box is up");
-    // Dragging inside the box moves the whole mask.
-    let (from, to) = (screen(&h, [300.0, 120.0]), screen(&h, [310.0, 130.0]));
-    drag(&mut h, from, to);
-    let path = mask_path(&h, "Plate");
-    assert!(path.vertices.iter().zip(&moved.vertices).all(|(v, c)| near(*v, [c[0] + 10.0, c[1] + 10.0])), "{path:?}");
-    // A click away ends the box; the points stay selected and dragging one moves them all.
+    assert!(h.state().session.state.selected_vertices.is_empty(), "point editing starts without selecting every point");
+    assert!(h.state().auto.find("viewer.freeTransform.handle.0").is_none(), "no free-transform box in point editing");
+    // A click away ends point editing; nothing was moved by the double-click.
     let away = screen(&h, [600.0, 340.0]);
     click(&mut h, away);
     h.run_steps(2);
     assert!(h.state().auto.find("viewer.freeTransform.handle.0").is_none());
-    let (from, to) = (screen(&h, [110.0, 310.0]), screen(&h, [100.0, 300.0]));
-    drag(&mut h, from, to);
-    let back = mask_path(&h, "Plate");
-    assert!(back.vertices.iter().zip(&moved.vertices).all(|(v, c)| near(*v, *c)), "{back:?}");
+    assert_eq!(mask_path(&h, "Plate"), moved, "the mask is where it was");
 }
 
 /// #513: clicking away from a mask's path, even on its own layer, deselects the mask's points;
