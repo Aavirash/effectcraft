@@ -691,7 +691,7 @@ fn card_layer(r: &Renderer, ctx: &EvalCtx, layer: &Layer, b: &mut Builder) {
 /// The evaluated Environment light: its image source, intensity × colour, rotation, and
 /// shadow settings (After Effects' Light Settings shows Cast Shadows for Environment lights).
 #[derive(Clone, Copy)]
-struct EnvLight {
+pub(crate) struct EnvLight {
     src: Option<u64>,
     color: [f32; 3],
     rot: f32,
@@ -856,27 +856,17 @@ pub(crate) fn dominant_direction(w: u32, h: u32, d: &[[f32; 4]], tint: [f32; 3],
 }
 
 /// Prefilter an environment image into the scene's textures.
-pub(crate) fn add_environment(
-    b: &mut Builder,
-    w: u32,
-    h: u32,
-    data: Vec<[f32; 4]>,
-    intensity: [f32; 3],
-    rotation: f32,
-    casts_shadows: bool,
-    shadow_darkness: f64,
-    shadow_diffusion: f64,
-) {
+pub(crate) fn add_environment(b: &mut Builder, env: &EnvLight, w: u32, h: u32, data: Vec<[f32; 4]>) {
     // Intensity × colour folded into the radiance (one scalar on the GPU): tint the texels.
     // A white (or off) light leaves them as they are.
-    let k = (intensity[0] + intensity[1] + intensity[2]) / 3.0;
-    let tint = if k > 0.0 && (intensity[0] != intensity[1] || intensity[1] != intensity[2]) { intensity.map(|c| c / k) } else { [1.0, 1.0, 1.0] };
+    let k = (env.color[0] + env.color[1] + env.color[2]) / 3.0;
+    let tint = if k > 0.0 && (env.color[0] != env.color[1] || env.color[1] != env.color[2]) { env.color.map(|c| c / k) } else { [1.0, 1.0, 1.0] };
     // The shadow direction and key strength from the full-resolution image, before the mip
     // chain averages it — only a shadow-casting light reads them, so only one pays for the
     // pass — and weighted by the tint, so the shadow follows the radiance the light emits:
     // opposing chromatic regions that cancel untinted need not cancel once the colour removes
     // one of them (a red light over equally bright red and blue sides shadows from the red).
-    let (sun, key) = if casts_shadows { dominant_direction(w, h, &data, tint, rotation) } else { ([0.0; 3], 0.0) };
+    let (sun, key) = if env.casts_shadows { dominant_direction(w, h, &data, tint, env.rot) } else { ([0.0; 3], 0.0) };
     // Radiance level 0 at most 1024 wide.
     let (mut w, mut h, mut d) = (w, h, data);
     while w > 1024 {
@@ -914,13 +904,13 @@ pub(crate) fn add_environment(
         mips: levels,
         irradiance: ii,
         intensity: k,
-        rotation,
+        rotation: env.rot,
         sun,
         key,
         // Marked; `raster::shadow_maps` assigns the map (a directionless image casts none).
-        shadow: if casts_shadows { 0 } else { -1 },
-        shadow_darkness: shadow_darkness as f32,
-        shadow_diffusion: shadow_diffusion as f32,
+        shadow: if env.casts_shadows { 0 } else { -1 },
+        shadow_darkness: env.shadow_darkness as f32,
+        shadow_diffusion: env.shadow_diffusion as f32,
     });
 }
 
@@ -1091,16 +1081,14 @@ pub(crate) fn build_at(r: &Renderer, ctx: &EvalCtx, sub: Option<&EvalCtx>, run: 
         b.s.ambient = amb;
         if let Some(env) = env {
             match env_pixels(r, ctx, env.src, lin) {
-                EnvPixels::Image((w, h, d)) => {
-                    add_environment(&mut b, w, h, d, env.color, env.rot, env.casts_shadows, env.shadow_darkness, env.shadow_diffusion)
-                }
+                EnvPixels::Image((w, h, d)) => add_environment(&mut b, &env, w, h, d),
                 // No Source and no Environment Layer: the default environment, a soft studio
                 // gradient of the light's colour × intensity — After Effects "uses a default
                 // environment map" for an Environment light — so the light always lights the
                 // scene per its parameters, and its dominant region casts shadows (#2436).
                 EnvPixels::Absent => {
                     let (w, h, d) = default_environment();
-                    add_environment(&mut b, w, h, d, env.color, env.rot, env.casts_shadows, env.shadow_darkness, env.shadow_diffusion)
+                    add_environment(&mut b, &env, w, h, d)
                 }
                 // A selected or found source that produced no pixels (deleted layer, missing
                 // footage, failed decode): no environment at all — the light contributes
