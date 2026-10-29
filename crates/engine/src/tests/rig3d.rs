@@ -333,6 +333,45 @@ fn keyed_orientation_under_a_tilted_null_follows_between_the_keys() {
     }
 }
 
+/// A one-node light parented under a mirrored null (Z scale -100%) keeps the Position and
+/// Orientation it was authored with: it has no Scale to carry the mirror, so none of it is
+/// compensated rather than reversing its frame (a half-compensated light would point backwards).
+#[test]
+fn one_node_light_under_a_mirrored_null_keeps_its_authored_values() {
+    let mut s = session();
+    let light = s.execute("layer.newLight", json!({"kind": "Point", "position": [320, 180, -500]})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("prop.set", json!({"layer": light, "path": "transform/orientation", "value": [30, 0, 0]})).unwrap();
+    let before = layer_in(&s, cid(&s), light);
+    let nul = rotated_null(&mut s, [0.0, 0.0, 0.0], 0.0);
+    s.execute("prop.set", json!({"layer": nul, "path": "transform/scale", "value": [100, 100, -100]})).unwrap();
+    s.execute("layer.setParent", json!({"layers": [light], "parent": nul})).unwrap();
+    let after = layer_in(&s, cid(&s), light);
+    assert_eq!(after.parent, Some(LayerId(nul)));
+    assert_eq!(v3(&after, "transform/position"), v3(&before, "transform/position"));
+    assert_eq!(v3(&after, "transform/orientation"), v3(&before, "transform/orientation"));
+}
+
+/// The cap on keys added by baking is for the whole Orientation property, not for each segment:
+/// many strongly eased segments under a tilted parent stay within it.
+#[test]
+fn baked_orientation_keys_are_capped_across_the_whole_property() {
+    let mut s = session();
+    let light = s.execute("layer.newLight", json!({"kind": "Point", "position": [320, 180, -500]})).unwrap()["layer"].as_u64().unwrap();
+    let count = 120;
+    for i in 0..count {
+        let swing = if i % 2 == 0 { json!([0.0, 0.0, 0.0]) } else { json!([170.0, 60.0, 120.0]) };
+        s.execute("prop.addKey", json!({"layer": light, "path": "transform/orientation", "time": i as f64 * 0.05, "value": swing})).unwrap();
+    }
+    let uid = layer_in(&s, cid(&s), light).props.prop("transform/orientation").unwrap().uid;
+    let keys: Vec<_> = (0..count).map(|i| json!({"layer": light, "prop": uid, "time": i as f64 * 0.05})).collect();
+    s.execute("keys.select", json!({"keys": keys})).unwrap();
+    s.execute("keys.easyEase", json!({})).unwrap();
+    let nul = rotated_null(&mut s, [20.0, -35.0, 60.0], 30.0);
+    s.execute("layer.setParent", json!({"layers": [light], "parent": nul})).unwrap();
+    let n = layer_in(&s, cid(&s), light).props.prop("transform/orientation").unwrap().keys.len();
+    assert!(n <= 4096, "{n} keys: the cap is for the property, not per segment");
+}
+
 // ---------------------------------------------------------------- from 3D model
 
 /// Easy Ease agrees with a straight blend at the midpoint, but not at the quarter points.

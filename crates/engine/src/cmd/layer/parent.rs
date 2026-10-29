@@ -220,17 +220,19 @@ fn rotation_angle(a: effectcraft_geom::Mat4, b: effectcraft_geom::Mat4) -> f64 {
 }
 
 /// Adds keys between `(ta, ea)` and `(tb, eb)` (already converted) wherever the straight Euler blend
-/// between them drifts from `correction * Orientation(authored)` by more than the tolerance.
+/// between them drifts from `correction * Orientation(authored)` by more than the tolerance. `out`
+/// never grows past `budget` keys: what the whole property may still add, not what one segment may.
 fn bake_between(
     correction: effectcraft_geom::Mat4,
     authored: &effectcraft_project::Property,
     (ta, ea): (Tick, [f64; 3]),
     (tb, eb): (Tick, [f64; 3]),
     depth: u32,
+    budget: usize,
     out: &mut Vec<effectcraft_keyframe::Keyframe>,
 ) {
     use effectcraft_geom::{Mat4, Vec3};
-    if depth == 0 || tb.0 - ta.0 < 2 || out.len() >= BAKE_MAX_KEYS {
+    if depth == 0 || tb.0 - ta.0 < 2 || out.len() >= budget {
         return;
     }
     let tm = Tick(ta.0 + (tb.0 - ta.0) / 2);
@@ -248,9 +250,12 @@ fn bake_between(
         return;
     }
     let em = nearest_euler(euler_zyx(exact.0), blend);
-    bake_between(correction, authored, (ta, ea), (tm, em), depth - 1, out);
+    bake_between(correction, authored, (ta, ea), (tm, em), depth - 1, budget, out);
+    if out.len() >= budget {
+        return;
+    }
     out.push(effectcraft_keyframe::Keyframe::new(tm, KV::Vec3(em)));
-    bake_between(correction, authored, (tm, em), (tb, eb), depth - 1, out);
+    bake_between(correction, authored, (tm, em), (tb, eb), depth - 1, budget, out);
 }
 
 /// Re-expresses Orientation as `correction * Orientation`. A Z-only correction shifts Z exactly in the
@@ -308,7 +313,10 @@ fn reexpress_orientation(correction: effectcraft_geom::Mat4, pr: &mut effectcraf
         let segment = authored.keys.get(i + 1).filter(|_| key.out_interp != Interp::Hold);
         let mut between = vec![];
         if let Some(next) = segment {
-            bake_between(correction, &authored, (key.time, converted[i]), (next.time, converted[i + 1]), BAKE_MAX_DEPTH, &mut between);
+            // What the whole property may still add: the keys it will have already (the ones written
+            // and the authored ones still to come) count against the cap.
+            let budget = BAKE_MAX_KEYS.saturating_sub(keys.len() + authored.keys.len() - i);
+            bake_between(correction, &authored, (key.time, converted[i]), (next.time, converted[i + 1]), BAKE_MAX_DEPTH, budget, &mut between);
             // An eased segment, or one that gained keys, becomes a run of straight blends.
             if !between.is_empty() || key.out_interp != Interp::Linear || next.in_interp != Interp::Linear {
                 k.out_interp = Interp::Linear;
@@ -391,6 +399,13 @@ pub(crate) fn parent_fixes(s: &Session, cid: ItemId, ids: &[LayerId], parent: Op
     if let Some(inv) = space_3d(parent).inverse().filter(|m| m.0.iter().flatten().all(|v| v.is_finite())) {
         for layer in comp.layers.iter().filter(|l| ids.contains(&l.id) && l.is_3d() && l.parent != parent) {
             let m = inv * space_3d(layer.parent);
+            // A one-node camera or light has no Scale to carry a mirror, and its frame (forward and
+            // down) would come out reversed: compensate none of it, so Position and Orientation stay
+            // as authored instead of half-following the parent.
+            let rig = layer.is_camera() || layer.is_light();
+            if rig && !effectcraft_render::three_d::camera::is_two_node(layer) && uniform_rotation(m).is_some_and(|(_, factor)| factor <= 0.0) {
+                continue;
+            }
             if m.0.iter().flatten().all(|v| v.is_finite()) {
                 let pose_3d = layer.transform().and_then(|tr| {
                     let orientation = tr.get("orientation")?;
