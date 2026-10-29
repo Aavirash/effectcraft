@@ -1352,8 +1352,9 @@ fn phase_drag(app: &mut EffectcraftApp, ui: &mut egui::Ui, ectx: &EvalCtx, resp:
                 }
             }
             Gesture::Vertices { start, src, applied, inv, layer } => {
-                // The grabbed vertex snaps (to other layers' vertices and features, guides, grid).
-                let want = [cpt[0] - start[0], cpt[1] - start[1]];
+                // The grabbed vertex snaps (to other layers' vertices and features, guides, grid);
+                // Shift keeps it to one axis, as a layer move does (#1964).
+                let want = one_axis([cpt[0] - start[0], cpt[1] - start[1]], mods.shift);
                 let c = vt::snap(app, &ctx, ectx, &map, &[layer], &[[src[0] + want[0], src[1] + want[1]]], mods);
                 let total = [want[0] + c[0], want[1] + c[1]];
                 let d = inv.apply_vec(gv2(total[0] - applied[0], total[1] - applied[1]));

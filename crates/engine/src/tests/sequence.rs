@@ -104,10 +104,11 @@ fn numbered_stills_import_as_stills_by_default() {
     let r = s.execute("file.import", json!({"paths": [dir.clone()], "drag": true})).unwrap();
     let (name, f) = footage(&s, &r["items"][0]);
     assert_eq!((name.as_str(), f.kind), ("shot_[0001-0005].png", FootageKind::Sequence));
-    // Scripts and agents naming one frame without `sequence` still get its run.
-    let r = s.execute("file.import", json!({"paths": [at(&dir, "shot_0003.png")]})).unwrap();
-    let (_, f) = footage(&s, &r["items"][0]);
-    assert_eq!(f.kind, FootageKind::Sequence);
+    // #2018: scripts and agents naming one frame without `sequence` get that still, as
+    // `ImportOptions.sequence` defaults to false in After Effects.
+    let r = s.execute("file.import", json!({"paths": [at(&dir, "shot_0005.png")]})).unwrap();
+    let (name, f) = footage(&s, &r["items"][0]);
+    assert_eq!((name.as_str(), f.kind), ("shot_0005.png", FootageKind::Still));
 }
 
 #[test]
