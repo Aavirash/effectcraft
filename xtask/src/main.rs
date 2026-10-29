@@ -1,4 +1,4 @@
-//! Workspace automation: `cargo xtask <layers|assets|pdf-deps|wasm|web|ico|ci|i18n-report>`.
+//! Workspace automation: `cargo xtask <layers|assets|pdf-deps|wasm|web|ico|ci>`.
 //!
 //! - `layers`: enforces the dependency layering of `docs/architecture.md` §1 (downward-only edges,
 //!   listed same-layer edges, no UI/OS crates below L5).
@@ -11,8 +11,6 @@
 //! - `ico <out.ico> <in.png>…`: pack PNGs into a Windows `.ico` (used by `packaging/icons.sh`).
 //! - `ci`: fmt check, clippy -D warnings, tests (`cargo nextest run` when installed) and doctests,
 //!   PDF dependency policy, layers, assets, wasm. Everything builds in the dev profile.
-//! - `i18n-report`: the translated menu, panel and effect-name rows per language, the counts
-//!   `docs/localization-parity.md` quotes.
 //! - `bench [--bin CLI] [--quick] [--compare OLD.jsonl] …`: render benchmark of generated scenarios
 //!   (memory, CPU, wall time) into `target/bench/results.jsonl` (`bench.rs`, docs/testing.md).
 
@@ -453,12 +451,6 @@ fn ci() -> Result<(), String> {
     if failed.is_empty() { Ok(()) } else { Err(format!("ci failed: {}", failed.join(", "))) }
 }
 
-/// The translated-row counts per language, printed by the `catalog_row_counts_report` test: the
-/// numbers `docs/localization-parity.md` quotes.
-fn i18n_report() -> Result<(), String> {
-    run(Command::new(env!("CARGO")).args(["test", "-p", "effectcraft-ui-egui", "--lib", "catalog_row_counts_report", "--", "--nocapture"]))
-}
-
 fn main() -> ExitCode {
     let task = std::env::args().nth(1).unwrap_or_default();
     let r = match task.as_str() {
@@ -467,7 +459,6 @@ fn main() -> ExitCode {
         "assets" => assets(),
         "pdf-deps" => pdf_deps::run(&root()),
         "ci" => ci(),
-        "i18n-report" => i18n_report(),
         "web" => web(&std::env::args().skip(2).collect::<Vec<_>>()),
         "bench" => bench::run(&root(), &std::env::args().skip(2).collect::<Vec<_>>()),
         "ico" => {
@@ -478,7 +469,7 @@ fn main() -> ExitCode {
             let rest: Vec<String> = std::env::args().skip(2).collect();
             version::run(&root(), &rest.iter().map(String::as_str).collect::<Vec<_>>())
         }
-        _ => Err("usage: cargo xtask <layers|assets|pdf-deps|wasm|web [--dev] [--serve PORT]|ico OUT.ico IN.png…|version [set X.Y.Z]|ci|i18n-report|bench [--bin CLI] [--quick] [--project F --comp C] [--compare OLD.jsonl] (--help)>".into()),
+        _ => Err("usage: cargo xtask <layers|assets|pdf-deps|wasm|web [--dev] [--serve PORT]|ico OUT.ico IN.png…|version [set X.Y.Z]|ci|bench [--bin CLI] [--quick] [--project F --comp C] [--compare OLD.jsonl] (--help)>".into()),
     };
     match r {
         Ok(()) => ExitCode::SUCCESS,
