@@ -102,15 +102,15 @@ impl Project {
     /// `nearestKey`...). Only then do the markers of comps and layers affect what is rendered, so
     /// frame caches ignore them otherwise.
     pub fn reads_markers(&self) -> bool {
-        let mut found = false;
-        for (_, c) in self.comps() {
-            for l in &c.layers {
-                if !found {
-                    l.props.walk("", &mut |_, p| found |= p.expr.is_some());
-                }
-            }
+        // Called for every frame identity and disk-cache key: stops at the first expression and
+        // builds no paths (`PropGroup::walk` formats one per node).
+        fn any_expr(g: &crate::PropGroup) -> bool {
+            g.children.iter().any(|c| match c {
+                crate::Node::Prop(p) => p.expr.is_some(),
+                crate::Node::Group(sub) => any_expr(sub),
+            })
         }
-        found
+        self.comps().any(|(_, c)| c.layers.iter().any(|l| any_expr(&l.props)))
     }
 
     /// Allocate an id (items, layers and property uids share one counter).
