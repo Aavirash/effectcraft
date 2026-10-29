@@ -79,8 +79,11 @@ pub(super) fn transform_op(s: &mut Session, p: &Value) -> Result<Value> {
     // bounds live in layer space, where a shape is centred on the origin and text sits above its
     // baseline, so (w/2, h/2) would push it off-centre (#2198). Reset and the other ops keep the
     // source size.
-    let ectx =
-        effectcraft_render::EvalCtx { project: &s.project, comp_id: cid, comp: &comp, time: t, expr: s.expr.as_deref(), footage: Some(s.footage.as_ref()) };
+    let ectx = effectcraft_render::EvalCtx {
+        expr: s.expr.as_deref(),
+        footage: Some(s.footage.as_ref()),
+        ..effectcraft_render::EvalCtx::new(&s.project, cid, &comp, t)
+    };
     let fitting = matches!(op.as_str(), "fit" | "fitWidth" | "fitHeight");
     let sizes: Vec<(LayerId, [f64; 2], [f64; 2])> = comp
         .layers
