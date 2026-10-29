@@ -1415,8 +1415,11 @@ fn automation_roots_refuse_a_queued_output_from_an_unsaved_project() {
     // Naming an output inside a write root is how it is done.
     call_json(&mut s, "execute_command", json!({"command": "renderQueue.add", "params": {"comp": "A", "output": p("named.mp4")}}));
     // A proxy named outside the roots is refused. Whether that reads as a write or a read is
-    // #1347's to classify, so this asserts the refusal and not its wording.
-    let (c, err) = call(&mut s, "execute_command", json!({"command": "file.createProxy", "params": {"comp": "A", "path": "/elsewhere/proxy.mov"}}));
+    // #1347's to classify, so this asserts the refusal and not its wording. The path is a sibling
+    // of the write root rather than `/elsewhere/…`, which is not absolute on Windows and would be
+    // refused for that instead.
+    let outside = base.join("elsewhere").join("proxy.mov").to_string_lossy().into_owned();
+    let (c, err) = call(&mut s, "execute_command", json!({"command": "file.createProxy", "params": {"comp": "A", "path": outside}}));
     assert!(err, "a proxy outside the roots should be refused: {c:?}");
     assert!(c[0]["text"].as_str().unwrap_or_default().contains("outside the automation roots"), "{c:?}");
     // Once the project is saved there, the default output (beside it) is queued as before.
