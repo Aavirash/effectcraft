@@ -65,6 +65,47 @@ fn shown(h: &Harness<'_, EffectcraftApp>, label: &str) -> bool {
     h.query_by_label_contains(label).is_some()
 }
 
+#[test]
+fn browse_presets_clears_search_and_scrolls_to_the_visible_presets_list() {
+    use effectcraft_ui_egui::dock::PanelKind;
+
+    let mut h = harness();
+    let ctx = h.ctx.clone();
+    let favorites: Vec<String> = effectcraft_engine::effects::all().iter().map(|effect| effect.id.to_string()).collect();
+    assert!(!favorites.is_empty(), "the test needs registered effects");
+    let recent: Vec<String> = favorites.iter().take(8).cloned().collect();
+
+    h.state_mut().session.prefs.effects_favorites = favorites;
+    h.state_mut().ui.effects_recent = recent;
+    h.state_mut().ui.effects_open.extend(["favorites".into(), "recent".into()]);
+    h.state_mut().ui.effects_search = "no matching animation preset".into();
+    h.state_mut().ui.effects_view.presets = true;
+
+    let managed = effectcraft_ui_egui::menus::invoke(h.state_mut(), &ctx, "effect.manage", json!({}));
+    assert!(managed.is_ok(), "{managed:?}");
+    assert_eq!(h.state().ui.focused, PanelKind::EffectsPresets);
+    assert_eq!(h.state().ui.effects_search, "no matching animation preset", "Manage Effects keeps its existing search behavior");
+    assert!(h.state().ui.effects_view.presets, "Manage Effects keeps the existing presets setting");
+
+    h.run_steps(3);
+    assert!(h.state().auto.find("effects.category.presets").is_none(), "the unmatched search hides Animation Presets");
+    h.state_mut().ui.effects_view.presets = false;
+
+    let result = effectcraft_ui_egui::menus::invoke(h.state_mut(), &ctx, "anim.browsePresets", json!({}));
+
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(h.state().ui.focused, PanelKind::EffectsPresets);
+    assert!(h.state().ui.effects_search.is_empty());
+    assert!(h.state().ui.effects_view.presets);
+    assert!(h.state().ui.effects_open.contains("presets"));
+
+    h.run_steps(3);
+    assert!(
+        h.state().auto.find("effects.category.presets").is_some(),
+        "Animation Presets must be visible after Browse Presets, even below expanded Favorites and Recently Used"
+    );
+}
+
 /// Space (or any shortcut) while a menu is open goes to the menu, not the app: it started the
 /// preview behind the open menu.
 #[test]
@@ -372,4 +413,64 @@ fn outside_presses_and_focus_loss_close_the_menus() {
     h.input_mut().events.push(Event::WindowFocused(false));
     h.run_steps(2);
     assert!(!shown(&h, "Open Project"), "losing focus closes the menus");
+}
+
+/// From an open submenu, the pointer reaching another title switches menus too (#1290).
+#[test]
+fn hovering_a_title_from_an_open_submenu_switches_menus() {
+    let mut h = harness();
+    let (file, edit) = (rect(&h, "menu.File"), rect(&h, "menu.Edit"));
+    click_at(&mut h, file.center());
+    let new = h.query_by(|n| n.label().is_some_and(|l| l.trim_end_matches('\u{23f5}').trim() == "New")).expect("File ▸ New").rect();
+    move_to(&mut h, new.center());
+    h.run_steps(5);
+    assert!(shown(&h, "New Project from Template"), "the New submenu is open");
+    move_to(&mut h, edit.center());
+    assert!(shown(&h, "Keyboard Shortcuts"), "hovering Edit opened it");
+    assert!(!shown(&h, "New Project from Template") && !shown(&h, "Open Project"), "and closed File and its submenu");
+}
+
+/// A title the pointer can't reach (the app is disabled under a dialog) doesn't switch menus
+/// (#1290).
+#[test]
+fn a_disabled_title_does_not_switch_menus() {
+    let mut h = harness();
+    let (file, edit) = (rect(&h, "menu.File"), rect(&h, "menu.Edit"));
+    click_at(&mut h, file.center());
+    h.state_mut().dialog = Some(effectcraft_ui_egui::Dialog::About);
+    h.run_steps(2);
+    move_to(&mut h, edit.center());
+    assert!(!shown(&h, "Keyboard Shortcuts"), "Edit didn't open");
+}
+
+/// A pointer resting on a title doesn't undo Left / Right: only a moving pointer switches
+/// (#1290).
+#[test]
+fn a_resting_pointer_does_not_override_the_arrow_keys() {
+    if cfg!(target_os = "macos") {
+        // (Right / Left between menus are tested where the in-window bar is the app's menu.)
+        return;
+    }
+    let mut h = harness();
+    let file = rect(&h, "menu.File");
+    click_at(&mut h, file.center());
+    key(&mut h, Key::ArrowRight);
+    h.run_steps(3);
+    assert!(shown(&h, "Keyboard Shortcuts"), "Right opened Edit with the pointer still on File");
+    assert!(!shown(&h, "Open Project"));
+}
+
+/// Leaving the window keeps the menu open, and coming back in over another title switches to it
+/// (#1290): egui reports no pointer movement for that first position.
+#[test]
+fn pointer_reentering_over_another_title_switches_menus() {
+    let mut h = harness();
+    let (file, edit) = (rect(&h, "menu.File"), rect(&h, "menu.Edit"));
+    click_at(&mut h, file.center());
+    h.input_mut().events.push(Event::PointerGone);
+    h.run_steps(2);
+    assert!(shown(&h, "Open Project"), "leaving the window kept File open");
+    move_to(&mut h, edit.center());
+    assert!(shown(&h, "Keyboard Shortcuts"), "coming back over Edit opened it");
+    assert!(!shown(&h, "Open Project"), "and closed File");
 }

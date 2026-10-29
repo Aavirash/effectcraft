@@ -944,11 +944,14 @@ fn phase_hover(app: &mut EffectcraftApp, ui: &mut egui::Ui, ectx: &EvalCtx, resp
             }
         };
         ctx.set_cursor_icon(cursor);
-        // Scroll wheel zooms around the pointer.
-        let scroll = ui.input(|i| i.smooth_scroll_delta.y + i.zoom_delta().ln() * 300.0);
-        if scroll.abs() > 0.1 && area.contains(hp) {
-            let k = (scroll / 300.0).exp();
-            let nz = (zoom * k).clamp(0.01, 32.0);
+        // The mouse wheel and a trackpad pinch zoom around the pointer; a two-finger trackpad
+        // scroll pans.
+        let scroll = super::viewer_scroll(&ctx);
+        if scroll.pan != egui::Vec2::ZERO && area.contains(hp) {
+            app.ui.viewer.pan = [app.ui.viewer.pan[0] + scroll.pan.x, app.ui.viewer.pan[1] + scroll.pan.y];
+        }
+        if (scroll.zoom - 1.0).abs() > 3e-4 && area.contains(hp) {
+            let nz = (zoom * scroll.zoom).clamp(0.01, 32.0);
             let before = map.to_comp(hp);
             let new_origin = hp - vec2(before[0] as f32 * nz, before[1] as f32 * nz);
             let new_center = new_origin + vec2(cw * nz / 2.0, ch * nz / 2.0);
@@ -1361,8 +1364,9 @@ fn phase_drag(app: &mut EffectcraftApp, ui: &mut egui::Ui, ectx: &EvalCtx, resp:
                 }
             }
             Gesture::Vertices { start, src, applied, inv, layer } => {
-                // The grabbed vertex snaps (to other layers' vertices and features, guides, grid).
-                let want = [cpt[0] - start[0], cpt[1] - start[1]];
+                // The grabbed vertex snaps (to other layers' vertices and features, guides, grid);
+                // Shift keeps it to one axis, as a layer move does (#1964).
+                let want = one_axis([cpt[0] - start[0], cpt[1] - start[1]], mods.shift);
                 let c = vt::snap(app, &ctx, ectx, &map, &[layer], &[[src[0] + want[0], src[1] + want[1]]], mods);
                 let total = [want[0] + c[0], want[1] + c[1]];
                 let d = inv.apply_vec(gv2(total[0] - applied[0], total[1] - applied[1]));
