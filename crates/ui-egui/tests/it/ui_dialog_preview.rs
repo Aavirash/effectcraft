@@ -6,7 +6,7 @@
 //! at the lower right; the same dialogs creating something new keep the middle.
 
 use effectcraft_engine::Session;
-use effectcraft_engine::project::{ItemKind, LayerId};
+use effectcraft_engine::project::{ItemKind, LayerId, Resolution};
 use effectcraft_ui_egui::{Dialog, EffectcraftApp, menus};
 use egui::{Event, Key, Modifiers, PointerButton, Pos2, pos2};
 use egui_kittest::Harness;
@@ -216,6 +216,41 @@ fn composition_settings_preview() {
     click(&mut h, "dialog.comp.ok");
     assert_eq!(comp_width(&h), before + 40, "OK keeps it");
     assert_eq!(undo_len(&h), undo + 1, "in one undo step");
+}
+
+/// The Resolution is no part of the Composition Settings command, so a preview never applies it:
+/// OK has to, also when it keeps a preview of another field.
+#[test]
+fn composition_settings_ok_after_a_preview_still_applies_the_resolution() {
+    let mut h = harness(|_| {});
+    let before = comp_width(&h);
+    open(&mut h, "comp.settings", json!({}));
+    h.state_mut().dialog_state_mut().comp.width = before + 80;
+    h.run_steps(3);
+    assert_eq!(comp_width(&h), before + 80, "the preview applied the width");
+    h.state_mut().dialog_state_mut().comp.resolution = Resolution::Half;
+    h.run_steps(3);
+    click(&mut h, "dialog.comp.ok");
+    assert_eq!(comp_width(&h), before + 80);
+    assert_eq!(h.state().session.active_comp().unwrap().resolution, Resolution::Half, "OK applied the Resolution");
+}
+
+/// An edit made in the same frame as OK (Enter) is not in the last preview yet: OK brings the
+/// project up to the draft it finds instead of keeping the older preview.
+#[test]
+fn ok_in_the_frame_of_an_edit_keeps_the_edit_not_the_older_preview() {
+    let mut h = harness(solid_setup);
+    let l = solid_layer(&h);
+    open(&mut h, "layer.settings", json!({"layer": l}));
+    h.state_mut().dialog_state_mut().solid_size = [200, 150];
+    h.run_steps(3);
+    assert_eq!(solid_size(&h, l), [200, 150]);
+    h.state_mut().dialog_state_mut().solid_size = [240, 120];
+    h.input_mut().events.push(Event::Key { key: Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
+    h.step();
+    h.run_steps(2);
+    assert_eq!(h.state().dialog, None);
+    assert_eq!(solid_size(&h, l), [240, 120], "OK kept the draft it found, not the earlier preview");
 }
 
 /// A previewing dialog opens at the lower right so the canvas stays in view; the same dialogs

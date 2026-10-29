@@ -255,7 +255,7 @@ pub fn camera(app: &mut EffectcraftApp, ctx: &egui::Context, t: &Tokens) {
     let (id, p) = camera_command(&d);
     if ok || super::dialogs::ui_enter(ctx) {
         // A preview already made the edit (one undo step): OK keeps it.
-        if !super::live_preview::keep(app)
+        if !super::live_preview::keep(app, id, p.clone())
             && let Err(e) = app.session.execute(id, p)
         {
             app.ui.status = e.to_string();
@@ -372,7 +372,7 @@ pub fn light(app: &mut EffectcraftApp, ctx: &egui::Context, t: &Tokens) {
     let (id, p) = light_command(&d);
     if ok || super::dialogs::ui_enter(ctx) {
         // A preview already made the edit (one undo step): OK keeps it.
-        if !super::live_preview::keep(app)
+        if !super::live_preview::keep(app, id, p.clone())
             && let Err(e) = app.session.execute(id, p)
         {
             app.ui.status = e.to_string();

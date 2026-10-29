@@ -36,6 +36,7 @@ pub mod paint_panels;
 pub mod panel_kit;
 pub mod path_vr_panels;
 pub mod precomp;
+pub(crate) mod preview_merge;
 pub mod primitive_dialog;
 pub mod project;
 pub mod properties;

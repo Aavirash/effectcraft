@@ -16,7 +16,8 @@ use egui::vec2;
 use serde_json::Value;
 
 use crate::panels::dialogs::Placement;
-use crate::panels::layer_styles_dialog::{Checkpoint, checkpoint, restore};
+use crate::panels::layer_styles_dialog::{Checkpoint, checkpoint};
+use crate::panels::preview_merge::{self, Applied};
 use crate::{Dialog, EffectcraftApp};
 
 /// Where a previewing dialog opens: the lower right, undimmed.
@@ -34,6 +35,8 @@ pub struct LivePreview {
     baseline: Option<Value>,
     /// The command and parameters the preview last applied.
     applied: Option<(&'static str, Value)>,
+    /// The project as that command left it, to tell edits made since from the preview's.
+    applied_at: Option<Applied>,
 }
 
 impl LivePreview {
@@ -78,7 +81,10 @@ pub fn sync(app: &mut EffectcraftApp, command: &'static str, params: Value) {
             put_back(app);
         }
         match app.session.execute(command, params.clone()) {
-            Ok(_) => app.dialog_state.live.applied = Some((command, params)),
+            Ok(_) => {
+                app.dialog_state.live.applied = Some((command, params));
+                app.dialog_state.live.applied_at = Some(preview_merge::applied(app));
+            }
             Err(e) => app.ui.status = e.to_string(),
         }
     } else if is_applied {
@@ -89,14 +95,20 @@ pub fn sync(app: &mut EffectcraftApp, command: &'static str, params: Value) {
 /// The project as the dialog found it.
 fn put_back(app: &mut EffectcraftApp) {
     if let Some(cp) = app.dialog_state.live.checkpoint.clone() {
-        restore(app, cp);
+        let at = app.dialog_state.live.applied_at.take();
+        // Only what the preview did is taken back: an edit made while the dialog was open stays.
+        preview_merge::rollback(app, cp, at.as_ref());
     }
     app.dialog_state.live.applied = None;
+    app.dialog_state.live.applied_at = None;
 }
 
-/// OK: the preview's result is the edit. Returns whether it already is (the caller then must not
-/// run the command again); otherwise the caller runs it, as without a preview.
-pub fn keep(app: &mut EffectcraftApp) -> bool {
+/// OK: the preview's result is the edit. The preview is first brought up to `command` with
+/// `params`, the draft as OK found it (an edit made in the same frame as OK is not in the last
+/// preview). Returns whether the project then already has the edit (the caller must not run the
+/// command again); otherwise the caller runs it, as without a preview.
+pub fn keep(app: &mut EffectcraftApp, command: &'static str, params: Value) -> bool {
+    sync(app, command, params);
     let kept = active(app) && app.dialog_state.live.applied.is_some();
     app.dialog_state.live = LivePreview::default();
     kept

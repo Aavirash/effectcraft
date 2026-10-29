@@ -27,8 +27,8 @@ pub struct LayerStyleState {
 /// The project and undo history as a dialog found them, for a Cancel that rolls its live edits back.
 #[derive(Clone)]
 pub(crate) struct Checkpoint {
-    project: std::sync::Arc<effectcraft_engine::project::Project>,
-    history: effectcraft_engine::history::History,
+    pub(crate) project: std::sync::Arc<effectcraft_engine::project::Project>,
+    pub(crate) history: effectcraft_engine::history::History,
 }
 
 impl std::fmt::Debug for Checkpoint {

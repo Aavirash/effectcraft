@@ -472,7 +472,13 @@ fn comp_settings(app: &mut EffectcraftApp, ctx: &egui::Context, t: &Tokens, exis
                 m.insert("comp".into(), json!(cid.0));
             }
             // A preview already made the edit (one undo step): OK keeps it.
-            if existing && super::live_preview::keep(app) {
+            if existing && super::live_preview::keep(app, "comp.settings", params.clone()) {
+                // The Resolution is not part of the command, so the preview never applied it.
+                if let Some(cid) = app.dialog_state.editing_comp
+                    && let Err(e) = set_resolution(app, cid.0, app.dialog_state.comp.resolution)
+                {
+                    app.ui.status = e.to_string();
+                }
                 app.dialog = None;
                 return;
             }
@@ -657,7 +663,7 @@ fn solid(app: &mut EffectcraftApp, ctx: &egui::Context, t: &Tokens) {
     let (command, params) = (solid_command(ds), solid_params(ds));
     if ok || ui_enter(ctx) {
         // A preview already made the edit (one undo step): OK keeps it.
-        if !super::live_preview::keep(app)
+        if !super::live_preview::keep(app, command, params.clone())
             && let Err(e) = app.session.execute(command, params)
         {
             app.ui.status = e.to_string();

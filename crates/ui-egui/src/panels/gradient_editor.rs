@@ -22,7 +22,8 @@ use egui::{Color32, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 use serde_json::{Value as Json, json};
 
 use crate::i18n::tr;
-use crate::panels::layer_styles_dialog::{Checkpoint, checkpoint, restore};
+use crate::panels::layer_styles_dialog::{Checkpoint, checkpoint};
+use crate::panels::preview_merge::{self, Applied};
 use crate::theme::Tokens;
 use crate::{Dialog, EffectcraftApp};
 
@@ -67,6 +68,8 @@ pub struct Draft {
     pub preview: bool,
     /// The gradient the property was last given by the preview, if it has been.
     pub applied: Option<Gradient>,
+    /// The project as the preview left it, to tell edits made since from the preview's.
+    applied_at: Option<Applied>,
     /// The project and undo history as the editor opened, for Cancel.
     checkpoint: Option<Checkpoint>,
     next_id: u64,
@@ -244,12 +247,12 @@ pub fn open(app: &mut EffectcraftApp, p: &Json) -> Result<Json, String> {
 fn commit(app: &mut EffectcraftApp, ctx: &egui::Context) {
     app.dialog = None;
     let d = std::mem::take(&mut app.dialog_state.gradient);
-    // The preview already set the property, in one merged undo step: OK keeps it.
-    if d.applied.is_some() {
+    let g = d.gradient();
+    // The preview already set the property to this draft, in one merged undo step: OK keeps it.
+    if d.applied.as_ref() == Some(&g) {
         app.session.history.merge_key = None;
         return;
     }
-    let g = d.gradient();
     let Some(tg) = d.target else { return };
     if g == d.baseline {
         return;
@@ -264,6 +267,8 @@ fn commit(app: &mut EffectcraftApp, ctx: &egui::Context) {
 /// were when it opened (nothing happens when the preview never changed the property).
 pub fn finish(app: &mut EffectcraftApp, ok: bool, ctx: &egui::Context) {
     if ok {
+        // An edit made in the same frame as OK is not in the last preview yet.
+        sync_preview(app, ctx);
         commit(app, ctx);
         return;
     }
@@ -271,7 +276,7 @@ pub fn finish(app: &mut EffectcraftApp, ok: bool, ctx: &egui::Context) {
     if d.applied.is_some()
         && let Some(cp) = d.checkpoint
     {
-        restore(app, cp);
+        preview_merge::rollback(app, cp, d.applied_at.as_ref());
     }
     app.session.history.merge_key = None;
     app.dialog = None;
@@ -291,14 +296,18 @@ fn sync_preview(app: &mut EffectcraftApp, ctx: &egui::Context) {
             "value": Value::Gradient(g.clone()).to_json(), "merge": format!("gradient-editor-{}", tg.prop),
         });
         match crate::menus::invoke(app, ctx, "prop.set", params) {
-            Ok(_) => app.dialog_state.gradient.applied = Some(g),
+            Ok(_) => {
+                app.dialog_state.gradient.applied = Some(g);
+                app.dialog_state.gradient.applied_at = Some(preview_merge::applied(app));
+            }
             Err(e) => app.ui.status = e,
         }
     } else if !want
         && d.applied.is_some()
         && let Some(cp) = d.checkpoint.clone()
     {
-        restore(app, cp);
+        let at = app.dialog_state.gradient.applied_at.take();
+        preview_merge::rollback(app, cp, at.as_ref());
         app.dialog_state.gradient.applied = None;
     }
 }

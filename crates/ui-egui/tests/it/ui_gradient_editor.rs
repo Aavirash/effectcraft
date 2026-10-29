@@ -466,6 +466,21 @@ fn the_preview_applies_edits_live_and_cancel_rolls_them_back() {
     assert_eq!(undo_len(&h), undo);
 }
 
+/// An edit made in the same frame as OK is not in the last preview: OK sets the draft it finds.
+#[test]
+fn ok_in_the_frame_of_an_edit_sets_the_draft_not_the_older_preview() {
+    let (mut h, l, colors) = setup(&[]);
+    open_editor(&mut h, colors);
+    let p = along(&h, "dialog.gradient.addColor", 0.25);
+    click_at(&mut h, p);
+    assert_eq!(gradient(&colors_prop(&h, l, colors).value).colors.len(), 3, "the preview has three stops");
+    h.state_mut().gradient_draft_mut().add(Track::Color, 0.75);
+    let ctx = h.ctx.clone();
+    effectcraft_ui_egui::panels::gradient_editor::finish(h.state_mut(), true, &ctx);
+    assert_eq!(h.state().dialog, None);
+    assert_eq!(gradient(&colors_prop(&h, l, colors).value).colors.len(), 4, "OK sets the draft it found");
+}
+
 /// With Preview off nothing is set until OK, and switching it off takes back what it applied.
 #[test]
 fn with_preview_off_nothing_is_set_until_ok() {
