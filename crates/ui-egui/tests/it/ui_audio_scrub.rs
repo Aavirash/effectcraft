@@ -651,3 +651,31 @@ fn startup_gives_up_on_a_first_frame_that_never_caches() {
     assert!(fake.0.lock().unwrap().0.is_none(), "no sound started and dropped");
     assert!(h.state().playback.playing && h.state().playback.audio_held, "it goes on as a stalled preview");
 }
+
+/// Adding markers while a preview sounds (Num*, one per beat) keeps the sound going (#1083): a
+/// marker changes no pixels, so no cached frame is dropped and no frame has to be rendered again
+/// (which would stop the sound until the frames ahead are cached).
+#[test]
+fn adding_markers_does_not_stop_the_sound() {
+    let fake = Fake::default();
+    let (app, cid) = setup(true, &fake);
+    // Everything is cached before the preview starts, so the sound starts at once.
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 31.0).build_eframe(|_| app);
+    h.run_steps(2);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    let now = h.ctx.input(|i| i.time);
+    h.state_mut().play(now);
+    while h.state().audio.is_none() && std::time::Instant::now() < deadline {
+        h.step();
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert!(h.state().audio.is_some(), "the sound started");
+    for beat in 0..6 {
+        let t = 0.1 + 0.05 * beat as f64;
+        h.state_mut().session.execute("comp.addMarker", json!({"comp": cid.0, "time": t, "comment": "beat"})).unwrap();
+        h.step();
+        let app = h.state();
+        assert!(app.playback.playing && app.audio.is_some() && !app.playback.audio_held, "marker {beat}: still playing with sound");
+    }
+    assert_eq!(h.state().session.project.comp(cid).unwrap().markers.len(), 6);
+}

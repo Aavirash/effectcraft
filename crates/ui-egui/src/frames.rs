@@ -317,23 +317,6 @@ pub fn comp_content(project: &Project, comp: ItemId) -> u64 {
     comp_content_with(project, comp, project, |_, c| c)
 }
 
-/// Whether two versions of a comp draw the same pixels. Markers only count when an expression
-/// could read them (`markers_count`).
-fn same_pixels(a: &Comp, b: &Comp, markers_count: bool) -> bool {
-    if markers_count { a.same_pixels(b) } else { a.same_pixels_ignoring_markers(b) }
-}
-
-/// Whether a layer anywhere in the project has an expression, which can read markers.
-fn project_has_expressions(project: &Project) -> bool {
-    fn has_expression(g: &PropGroup) -> bool {
-        g.children.iter().any(|c| match c {
-            Node::Prop(p) => p.expr.is_some(),
-            Node::Group(sub) => has_expression(sub),
-        })
-    }
-    project.items.values().any(|i| matches!(&i.kind, ItemKind::Comp(c) if c.layers.iter().any(|l| has_expression(&l.props))))
-}
-
 /// [`comp_content`] with each comp's version selected for both its sources and its address.
 /// Sources removed by undo are read from `base`.
 fn comp_content_with<'a>(project: &'a Project, comp: ItemId, base: &'a Project, version: impl Fn(ItemId, &'a Arc<Comp>) -> &'a Arc<Comp>) -> u64 {
@@ -762,12 +745,12 @@ impl Frames {
     fn identity(&self, project: &Arc<Project>, comp: ItemId) -> Identity {
         let plain = comp_content(project, comp);
         let Ok(mut bases) = self.bases.lock() else { return (plain, None) };
-        // Markers can only change pixels through expressions, which read them.
-        let markers_count = project_has_expressions(project);
+        // Markers are pixels only to the expressions that read them (#1083).
+        let markers = project.reads_markers();
         if let Some((base_id, base)) = bases.get(&comp.0)
             && *base_id != plain
             && comp_content_with(project, comp, project, |id, c| match base.item(id).map(|i| &i.kind) {
-                Some(ItemKind::Comp(b)) if Arc::ptr_eq(b, c) || same_pixels(b, c, markers_count) => b,
+                Some(ItemKind::Comp(b)) if Arc::ptr_eq(b, c) || b.same_pixels_with(c, markers) => b,
                 _ => c,
             }) == *base_id
         {
@@ -779,7 +762,7 @@ impl Frames {
         if let Some((base_id, base)) = bases.get(&comp.0)
             && let (Some(old), Some(new)) = (base.comp(comp), project.comp(comp))
             && comp_content_with(project, comp, base, |id, c| match base.item(id).map(|i| &i.kind) {
-                Some(ItemKind::Comp(b)) if id == comp || Arc::ptr_eq(b, c) || same_pixels(b, c, markers_count) => b,
+                Some(ItemKind::Comp(b)) if id == comp || Arc::ptr_eq(b, c) || b.same_pixels_with(c, markers) => b,
                 _ => c,
             }) == *base_id
             && let Some((s, e)) = new.changed_span(old)
