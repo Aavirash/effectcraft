@@ -273,6 +273,8 @@ fn scale_comp_refuses_a_bad_factor_and_changes_nothing() {
         (json!({"width": 0}), "4 to 30,000 px"),
         (json!({"factor": 100}), "4 to 30,000 px"),
         (json!({"factor": 0.001}), "4 to 30,000 px"),
+        (json!({"factor": 2, "width": 960}), "only one of"),
+        (json!({"width": 960, "height": 360}), "only one of"),
     ];
     for (p, why) in cases {
         match s.execute("comp.scale", p.clone()) {

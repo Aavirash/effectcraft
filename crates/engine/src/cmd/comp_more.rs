@@ -153,6 +153,10 @@ fn scale_comp(s: &mut Session, p: &Value) -> Result<Value> {
     let cid = comp_id(s, p)?;
     let comp = s.project.comp(cid).ok_or(EngineError::NoComp)?;
     let (ow, oh) = (f64::from(comp.width), f64::from(comp.height));
+    // The three are alternatives: with two, one would be ignored without a word.
+    if ["factor", "width", "height"].iter().filter(|k| f_p(p, k).is_some()).count() > 1 {
+        return Err(bad(C, "pass only one of `factor`, `width` or `height`"));
+    }
     let f = match (f_p(p, "factor"), f_p(p, "width"), f_p(p, "height")) {
         (Some(f), ..) => f,
         (None, Some(w), _) => w / ow,
