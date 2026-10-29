@@ -573,12 +573,14 @@ fn premultiplied8(img: &Image, dither: bool) -> Vec<u8> {
     let mut out = Vec::with_capacity(img.data.len() * 4);
     for (i, p) in img.data.iter().enumerate() {
         let a = p[3].clamp(0.0, 1.0);
+        let a8 = (a * 255.0 + 0.5) as u8;
         let (x, y) = ((i % w) as u32, (i / w) as u32);
         for c in 0..3 {
             let v = p[c].clamp(0.0, a);
-            out.push(if dither { effectcraft_raster::dither_u8(v, x, y) } else { (v * 255.0 + 0.5) as u8 });
+            // Dither may round up past the rounded alpha; premultiplied colour never exceeds it.
+            out.push(if dither { effectcraft_raster::dither_u8(v, x, y).min(a8) } else { (v * 255.0 + 0.5) as u8 });
         }
-        out.push((a * 255.0 + 0.5) as u8);
+        out.push(a8);
     }
     out
 }
@@ -587,6 +589,19 @@ fn premultiplied8(img: &Image, dither: bool) -> Vec<u8> {
 mod tests {
     use super::*;
     use rayon::prelude::*;
+
+    /// Dither may round a colour up while alpha rounds down; premultiplied colour stays at or
+    /// below the written alpha at every pixel.
+    #[test]
+    fn dithered_premultiplied_colour_never_exceeds_alpha() {
+        let v = 100.25 / 255.0;
+        let img = Image::filled(64, 64, [v, v, v, v]);
+        let px = premultiplied8(&img, true);
+        assert!(px.chunks_exact(4).all(|p| p[..3].iter().all(|c| *c <= p[3])), "a colour byte is above its alpha");
+        assert!(px.chunks_exact(4).all(|p| p[3] == 100));
+        let plain = premultiplied8(&img, false);
+        assert!(plain.chunks_exact(4).all(|p| p == [100, 100, 100, 100]));
+    }
 
     /// Frames `0..n` through [`map_frames`] with `cap`, recording the most running at once.
     fn run_capped(n: u64, cap: Option<usize>) -> (Vec<u64>, usize) {
