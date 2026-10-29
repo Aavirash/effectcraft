@@ -87,6 +87,9 @@ filmcraft-h264enc = { git = "https://github.com/storytold/filmcraft", rev = "09a
 filmcraft-prores = { git = "https://github.com/storytold/filmcraft", rev = "09aaf9bf15d510eda1c413c0ccabb1d7e08b41c5" }
 filmcraft-aac = { git = "https://github.com/storytold/filmcraft", rev = "09aaf9bf15d510eda1c413c0ccabb1d7e08b41c5" }
 filmcraft-isobmff = { git = "https://github.com/storytold/filmcraft", rev = "09aaf9bf15d510eda1c413c0ccabb1d7e08b41c5" }
+# container headers read for AAC channel layouts (crates/media)
+filmcraft-matroska = { git = "https://github.com/storytold/filmcraft", rev = "09aaf9bf15d510eda1c413c0ccabb1d7e08b41c5" }
+filmcraft-mpegts = { git = "https://github.com/storytold/filmcraft", rev = "09aaf9bf15d510eda1c413c0ccabb1d7e08b41c5" }
 # decoder used as the round-trip oracle of effectcraft-opusenc (crates/export dev-dependency)
 filmcraft-opus = { git = "https://github.com/storytold/filmcraft", rev = "09aaf9bf15d510eda1c413c0ccabb1d7e08b41c5" }
 filmcraft-vp9 = { git = "https://github.com/storytold/filmcraft", rev = "09aaf9bf15d510eda1c413c0ccabb1d7e08b41c5" }
@@ -128,6 +131,8 @@ sys-locale = "0.3"
 # filmcraft-prores = { path = "../filmcraft/crates/prores" }
 # filmcraft-aac = { path = "../filmcraft/crates/aac" }
 # filmcraft-isobmff = { path = "../filmcraft/crates/isobmff" }
+# filmcraft-matroska = { path = "../filmcraft/crates/matroska" }
+# filmcraft-mpegts = { path = "../filmcraft/crates/mpegts" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

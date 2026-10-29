@@ -193,21 +193,20 @@ struct Opened {
 }
 
 impl Opened {
-    /// `src` with what its MP4/MOV `header` (ftyp and moov) says, if it has one.
-    fn new(src: SharedSource, header: Option<&[u8]>) -> Opened {
+    /// `src` with what its container says: `header` is an MP4/MOV's ftyp and moov (or the whole
+    /// file), `file` the file for other containers' AAC configuration.
+    fn new(src: SharedSource, header: Option<&[u8]>, file: Option<&dyn filmcraft_media::ByteReader>) -> Opened {
         let turn = header.map_or(Orientation::NoTransforms, crate::probe::video_turn);
-        let order = channel_order(&src, header.and_then(crate::probe::aac_config).as_deref());
-        Opened { src, turn, order }
+        Opened { order: channel_order(&src, header, file), src, turn }
     }
 }
 
-/// The order `src`'s audio channels decode in, AAC's decided by its AudioSpecificConfig `asc`
-/// when the container's header was read.
-fn channel_order(src: &SharedSource, asc: Option<&[u8]>) -> Order {
-    match (src.info().audio().is_some_and(|a| a.codec.starts_with("AAC")), asc) {
-        (false, _) => Order::Wav,
-        (true, Some(asc)) => crate::downmix::aac_order(asc),
-        (true, None) => Order::Aac,
+/// The order `src`'s audio channels decode in; multichannel AAC's by its configuration, where
+/// the container's header shows it ([`crate::aac::config`]).
+fn channel_order(src: &SharedSource, header: Option<&[u8]>, file: Option<&dyn filmcraft_media::ByteReader>) -> Order {
+    match src.info().audio() {
+        Some(a) if a.codec.contains("AAC") && a.channels > 2 => crate::aac::config(header, file).map_or(Order::Aac, |asc| crate::downmix::aac_order(&asc)),
+        _ => Order::Wav,
     }
 }
 
@@ -551,14 +550,14 @@ impl MediaPool {
             return Err(format!("a sample rate of {native} Hz is outside {MIN_SAMPLE_RATE}–{MAX_SAMPLE_RATE} Hz"));
         }
         if native == 0 || rate == 0 || native == rate {
-            return read_stereo(&src, order, s0, frames, rate);
+            return read_stereo(&src, &order, s0, frames, rate);
         }
         // Output sample `n` sits at source position n × native / rate.
         let (native_i, rate_i) = (i128::from(native), i128::from(rate));
         let first = (i128::from(s0) * native_i).div_euclid(rate_i);
         let last = ((i128::from(s0) + frames as i128) * native_i).div_euclid(rate_i) + 1;
         let (Ok(first64), Ok(count)) = (i64::try_from(first), usize::try_from(last - first + 1)) else { return Ok(vec![0.0; frames * 2]) };
-        let buf = read_stereo(&src, order, first64, count, native)?;
+        let buf = read_stereo(&src, &order, first64, count, native)?;
         let mut out = Vec::with_capacity(frames * 2);
         for k in 0..frames as i128 {
             let pos = (i128::from(s0) + k) * native_i;
@@ -636,15 +635,14 @@ impl Inner {
             let file = std::path::Path::new(&**path);
             let in_place = if in_memory { None } else { crate::stream::open_source(file) };
             let in_place = in_place.map(|src| {
-                let header = crate::stream::movie_header(file);
-                src.map(|src| Opened::new(src, header.as_deref()))
+                let (header, reader) = (crate::stream::movie_header(file), crate::stream::file_reader(file));
+                src.map(|src| Opened::new(src, header.as_deref(), reader.as_deref()))
             });
             let opened = in_place.unwrap_or_else(|| {
                 self.read(path).and_then(|bytes| {
                     let name = std::path::Path::new(&**path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-                    let (turn, asc) = (crate::probe::video_turn(&bytes), crate::probe::aac_config(&bytes));
-                    let src = filmcraft_codecs::open_bytes(&name, bytes).map_err(MediaError::from)?;
-                    Ok(Opened { order: channel_order(&src, asc.as_deref()), src, turn })
+                    let src = filmcraft_codecs::open_bytes(&name, bytes.clone()).map_err(MediaError::from)?;
+                    Ok(Opened::new(src, Some(&bytes), Some(&filmcraft_media::reader::MemReader(bytes.clone()))))
                 })
             });
             match opened {
@@ -978,7 +976,7 @@ impl FootageSource for MediaPool {
 /// `frames` stereo sample frames (interleaved) of `src` from sample `s0` at `rate` Hz, which
 /// FilmCraft serves as decoded when it is the source's own rate. Mono is duplicated to both
 /// channels, multichannel sources (channels in `order`) are downmixed ([`crate::downmix`]); silence before the start. An error where decoding fails.
-fn read_stereo(src: &SharedSource, order: Order, s0: i64, frames: usize, rate: u32) -> std::result::Result<Vec<f32>, String> {
+fn read_stereo(src: &SharedSource, order: &Order, s0: i64, frames: usize, rate: u32) -> std::result::Result<Vec<f32>, String> {
     let mut out = vec![0.0; frames * 2];
     let skip = usize::try_from(s0.saturating_neg()).unwrap_or(0);
     if skip >= frames {

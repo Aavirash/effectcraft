@@ -23,6 +23,8 @@ filmcraft-codecs = { workspace = true }
 filmcraft-media = { workspace = true }
 filmcraft-aac = { workspace = true }
 filmcraft-isobmff = { workspace = true }
+filmcraft-matroska = { workspace = true }
+filmcraft-mpegts = { workspace = true }
 filmcraft-frame = { workspace = true }
 filmcraft-color = { workspace = true }
 filmcraft-time = { workspace = true }
