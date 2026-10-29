@@ -89,6 +89,9 @@ fn paste(s: &mut Session, p: &Value) -> Result<Value> {
     let mut plan: Vec<(LayerId, Uid, usize)> = vec![];
     for (ti, lid) in targets.iter().enumerate() {
         let Some(l) = comp.layer(*lid) else { continue };
+        if l.switches.locked {
+            continue;
+        }
         for (ci, c) in clip.iter().enumerate() {
             if paired && sources.get(ti) != Some(&c.layer) {
                 continue;
@@ -110,11 +113,12 @@ fn paste(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     if plan.is_empty() {
-        return Err(bad("keys.paste", "no compatible property to paste into (select a property of the same type)"));
+        return Err(bad("keys.paste", "no compatible unlocked property to paste into (unlock the target or select a property of the same type)"));
     }
     s.edit("Paste Keyframes", merge_p(p), |proj, st| {
         let comp = proj.comp_mut(cid).ok_or(EngineError::NoComp)?;
-        let mut sel = vec![];
+        let mut sel: Vec<KeyRef> = st.selected_keys.iter().filter(|k| comp.layer(k.layer).is_some_and(|l| l.switches.locked)).copied().collect();
+        let retained = sel.len();
         for (lid, uid, ci) in &plan {
             let Some(l) = comp.layer_mut(*lid) else { continue };
             let times: Vec<Tick> = clip[*ci].keys.iter().map(|k| l.layer_time(t + k.time)).collect();
@@ -136,8 +140,9 @@ fn paste(s: &mut Session, p: &Value) -> Result<Value> {
             }
             retime_roving(&mut pr.keys, pr.spatial);
         }
+        let pasted = sel.len().saturating_sub(retained);
         st.selected_keys = sel;
-        Ok(json!(st.selected_keys.len()))
+        Ok(json!(pasted))
     })
 }
 
@@ -175,6 +180,9 @@ pub(super) fn paste_path(s: &mut Session, p: &Value, (cid, lid, uid): (ItemId, L
     let comp = s.project.comp(cid).ok_or(EngineError::NoComp)?;
     let t = time_p(s, p, Some(comp));
     let target = comp.layer(lid).ok_or(EngineError::NoComp)?;
+    if target.switches.locked {
+        return Err(bad("keys.paste", "the target layer is locked"));
+    }
     let mut order: Vec<usize> = (0..path.vertices.len()).collect();
     if path.closed && !order.is_empty() {
         order.push(0);

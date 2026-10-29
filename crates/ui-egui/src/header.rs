@@ -920,4 +920,40 @@ mod tests {
         assert_eq!(size, Some(effectcraft_engine::keyframe::Value::Vec2([400.0, 300.0])));
         assert_eq!(fill, effectcraft_engine::keyframe::Value::Color([0.0, 1.0, 0.0, 1.0]), "the Tools bar's Fill, not the default blue");
     }
+
+    #[test]
+    fn double_clicked_shapes_keep_the_selected_gradient_stroke_width() {
+        for kind in ["solid", "linear", "radial"] {
+            let mut s = effectcraft_engine::Session::default();
+            s.execute("comp.new", json!({"width": 400, "height": 300, "duration": 2})).unwrap();
+            s.execute("layer.newShape", json!({"kind": "rect"})).unwrap();
+            s.execute("shape.fillStroke", json!({"fill": false, "strokeType": kind, "strokeWidth": 9})).unwrap();
+            let mut app = EffectcraftApp::new(s);
+            let ctx = egui::Context::default();
+            crate::theme::install(&ctx, &app.tokens, crate::i18n::language(&app));
+            frame(&mut app, &ctx, 0.0, vec![]);
+            frame(&mut app, &ctx, 0.1, vec![]);
+            assert_eq!(app.session.state.shape_tool.stroke_width, 9.0, "selected {kind} stroke");
+            let [x, y, w, h] = app.auto.find("tools.Rectangle").unwrap().rect;
+            let at = egui::pos2(x + w / 2.0, y + h / 2.0);
+            for (time, pressed) in [(1.0, true), (1.05, false), (1.1, true), (1.15, false)] {
+                frame(
+                    &mut app,
+                    &ctx,
+                    time,
+                    vec![
+                        egui::Event::PointerMoved(at),
+                        egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() },
+                    ],
+                );
+            }
+            let comp = app.session.active_comp().unwrap();
+            assert_eq!(comp.layers.len(), 2);
+            let layer = comp.layer(app.session.state.selected_layers[0]).unwrap();
+            let (_, _, width) = effectcraft_engine::commands::shape_stroke::first_paint(layer, effectcraft_engine::time::Tick::ZERO);
+            assert_eq!(width, Some(9.0), "new {kind} stroke");
+            let (_, stroke_kind) = effectcraft_engine::commands::shape_stroke::first_paint_kinds(layer, effectcraft_engine::time::Tick::ZERO);
+            assert_eq!(stroke_kind.id(), kind);
+        }
+    }
 }

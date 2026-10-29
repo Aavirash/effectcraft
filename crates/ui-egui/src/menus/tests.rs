@@ -438,6 +438,42 @@ fn cmd_w_in_the_render_queue_closes_the_queue_not_the_comp() {
 }
 
 #[test]
+fn file_close_is_available_for_an_empty_render_queue_without_a_comp() {
+    for params in [Value::Null, json!({})] {
+        let ctx = egui::Context::default();
+        let mut app = EffectcraftApp::new(effectcraft_engine::Session::default());
+        assert!(app.session.active_comp().is_none());
+        app.show_panel(PanelKind::RenderQueue);
+        assert!(menu_items(&app).iter().find(|item| item.id == "file.close").unwrap().enabled);
+        invoke(&mut app, &ctx, "file.close", params).unwrap();
+        assert!(!app.ui.dock.is_open(PanelKind::RenderQueue));
+    }
+}
+
+#[test]
+fn closing_the_render_queue_reveals_the_panel_receiving_focus() {
+    for maximized in [false, true] {
+        let ctx = egui::Context::default();
+        let mut app = EffectcraftApp::new(effectcraft_engine::Session::default());
+        app.close_panel(PanelKind::Timeline);
+        app.close_panel(PanelKind::Composition);
+        app.show_panel(PanelKind::EffectControls);
+        assert!(!app.ui.dock.is_visible(PanelKind::Project));
+        app.show_panel(PanelKind::RenderQueue);
+        if maximized {
+            app.apply_dock(craft_ui::docking::Action::Float { panel: PanelKind::RenderQueue, rect: [50.0, 60.0, 400.0, 200.0] }).unwrap();
+            app.toggle_maximize(PanelKind::EffectControls);
+            app.ui.focused = PanelKind::RenderQueue;
+            assert!(app.ui.dock.is_floating(PanelKind::RenderQueue));
+        }
+        invoke(&mut app, &ctx, "file.close", json!({})).unwrap();
+        assert_eq!(app.ui.focused, PanelKind::Project);
+        assert!(app.ui.dock.is_visible(app.ui.focused), "focus must belong to a front tab");
+        assert_eq!(app.ui.maximized, None, "the focused docked panel must be on screen");
+    }
+}
+
+#[test]
 fn menu_items_cover_the_tree() {
     assert_eq!(menus().last(), Some(&"Help"));
     assert!(effectcraft_engine::menus::entries().len() > 500);

@@ -115,6 +115,73 @@ fn spatial_handles_cannot_edit_a_locked_layer() {
 }
 
 #[test]
+fn pasting_keys_or_motion_paths_cannot_edit_locked_targets() {
+    for path_clip in [false, true] {
+        for explicit in [false, true] {
+            let (mut s, layer, opacity) = setup();
+            let target_path = if path_clip { "transform/position" } else { "transform/opacity" };
+            let source = if path_clip {
+                s.execute("mask.new", json!({"layer": layer, "vertices": [[0, 0], [20, 10], [40, 0]], "closed": false})).unwrap();
+                s.execute("prop.toggleAnimation", json!({"layer": layer, "path": "masks/#1/path"})).unwrap();
+                s.active_comp().unwrap().layer(LayerId(layer)).unwrap().props.prop("masks/#1/path").unwrap().uid
+            } else {
+                opacity
+            };
+            s.execute("keys.select", json!({"keys": [{"layer": layer, "prop": source, "time": 0}]})).unwrap();
+            s.execute("keys.copy", json!({})).unwrap();
+            s.execute("prop.select", json!({"layer": layer, "path": target_path})).unwrap();
+            s.execute("time.set", json!({"time": 3})).unwrap();
+            s.execute("layer.setSwitch", json!({"layers": [layer], "switch": "locked", "value": true})).unwrap();
+            let params = if explicit { json!({"layer": layer, "path": target_path}) } else { json!({}) };
+            let before = s.project.to_json();
+            let selected = s.state.selected_keys.clone();
+            let undo_len = s.history.undo.len();
+            let result = s.execute("keys.paste", params.clone());
+            assert!(result.is_err(), "path={path_clip}, explicit={explicit}: {result:?}");
+            assert_eq!(s.project.to_json(), before);
+            assert_eq!(s.state.selected_keys, selected);
+            assert_eq!(s.history.undo.len(), undo_len);
+            s.execute("layer.setSwitch", json!({"layers": [layer], "switch": "locked", "value": false})).unwrap();
+            let unlocked = s.project.to_json();
+            s.execute("keys.paste", params).unwrap();
+            let pasted = s.project.to_json();
+            assert_ne!(pasted, unlocked);
+            s.execute("edit.undo", json!({})).unwrap();
+            assert_eq!(s.project.to_json(), unlocked);
+            s.execute("edit.redo", json!({})).unwrap();
+            assert_eq!(s.project.to_json(), pasted);
+        }
+    }
+}
+
+#[test]
+fn key_paste_skips_locked_targets_without_changing_layer_pairing() {
+    let (mut s, locked, locked_prop) = setup();
+    let other = s.execute("layer.newSolid", json!({"name": "Other", "color": "#fff"})).unwrap()["layer"].as_u64().unwrap();
+    for (time, value) in [(0, 100), (1, 80), (2, 60)] {
+        s.execute("prop.addKey", json!({"layer": other, "path": "transform/opacity", "time": time, "value": value})).unwrap();
+    }
+    let other_prop = s.active_comp().unwrap().layer(LayerId(other)).unwrap().props.prop("transform/opacity").unwrap().uid;
+    let locked_keys = keys_of(&s, locked, locked_prop);
+    s.state.selected_keys = locked_keys.iter().chain(keys_of(&s, other, other_prop).iter()).copied().collect();
+    s.execute("keys.copy", json!({})).unwrap();
+    s.execute("layer.setSwitch", json!({"layers": [locked], "switch": "locked", "value": true})).unwrap();
+    s.execute("time.set", json!({"time": 3})).unwrap();
+    let before = s.project.to_json();
+    assert_eq!(s.execute("keys.paste", json!({"layers": [locked, other]})).unwrap(), json!(3), "only newly pasted keys are counted");
+    assert_eq!(keys_of(&s, locked, locked_prop), locked_keys);
+    assert!(locked_keys.iter().all(|k| s.state.selected_keys.contains(k)));
+    assert_eq!(s.state.selected_keys.len(), 6);
+    let keys = &s.active_comp().unwrap().layer(LayerId(other)).unwrap().props.find(other_prop).unwrap().keys;
+    assert_eq!(keys.iter().filter(|k| k.time.seconds() >= 3.0).map(|k| k.value.as_f64()).collect::<Vec<_>>(), [100.0, 80.0, 60.0]);
+    let pasted = s.project.to_json();
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(s.project.to_json(), before);
+    s.execute("edit.redo", json!({})).unwrap();
+    assert_eq!(s.project.to_json(), pasted);
+}
+
+#[test]
 fn key_transform_preserves_locked_keys_in_a_mixed_selection() {
     let (mut s, locked, locked_prop) = setup();
     let unlocked = s.execute("layer.newSolid", json!({"name": "Unlocked", "color": "#fff"})).unwrap()["layer"].as_u64().unwrap();

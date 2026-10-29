@@ -159,7 +159,7 @@ fn vertex_delta(app: &EffectcraftApp, layer: effectcraft_engine::project::LayerI
     })
 }
 
-fn no_params(p: &Value) -> bool {
+pub(super) fn no_params(p: &Value) -> bool {
     p.as_object().is_none_or(|m| m.is_empty())
 }
 
@@ -216,12 +216,13 @@ pub fn invoke(app: &mut EffectcraftApp, ctx: &egui::Context, id: &str, params: V
     }
     // Close follows panel focus too: with the Render Queue active, Cmd+W closes that panel and
     // leaves the active composition open (it used to close the composition next to it).
-    if id == "file.close" && params.as_object().is_some_and(|p| p.is_empty()) && app.ui.focused == PanelKind::RenderQueue {
+    if id == "file.close" && no_params(&params) && app.ui.focused == PanelKind::RenderQueue {
         app.close_panel(PanelKind::RenderQueue);
         // The focus goes to a panel that is still there, so the next Close acts on the composition
         // instead of on the queue that is gone.
-        app.ui.focused =
+        let next =
             [PanelKind::Timeline, PanelKind::Composition, PanelKind::Project].into_iter().find(|p| app.ui.dock.is_visible(*p)).unwrap_or(PanelKind::Project);
+        app.show_panel(next);
         return Ok(Value::Null);
     }
     // Edit ▸ Paste with SVG markup on the system clipboard pastes it as a shape layer (After
