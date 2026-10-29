@@ -7517,7 +7517,7 @@ mod tests {
     #[test]
     fn catalog_row_counts_report() {
         println!("Localization catalog rows:");
-        for code in ["ja", "zh-hans", "zh-hant"] {
+        for code in CATALOG_CODES {
             let menus = menu_catalog(code).map_or(0, |catalog| catalog.len());
             let panels = ui::translated_rows(code);
             let effect_names = effects::translated_rows(code);

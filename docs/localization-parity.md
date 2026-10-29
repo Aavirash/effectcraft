@@ -26,8 +26,8 @@ interface; Arabic and Hebrew text *in layers* is supported through its Middle Ea
   source string, with English fallback. Catalogs exist for Japanese (996 rows), Simplified
   Chinese (998), Traditional Chinese (951, after #2244 pruned the table), Ukrainian (524),
   Brazilian Portuguese (695), Czech (518) and Spanish (513); counted at this tree. Georgian has
-  every row the Simplified Chinese catalog has, plus 191 for panels converted to the catalog
-  since.
+  the Simplified Chinese catalog's 694 rows, plus 191 for panels converted to the catalog since
+  (885 in all).
 - **Effect names:** `crates/ui-egui/src/i18n/effects.rs`, keyed by **effect id**, in Simplified
   Chinese (307 rows, one per effect in the registry), Japanese (297 of the 307 ids) and Georgian
   (307 rows, plus its 21 categories). The registry's
