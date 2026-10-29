@@ -883,6 +883,15 @@ fn select_keys(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(out)
 }
 
+/// References that can be edited, including explicit key lists supplied by commands.
+pub(crate) fn editable_keys(comp: &effectcraft_project::Comp, selected: &[KeyRef]) -> Vec<KeyRef> {
+    selected.iter().filter(|key| key_layer_editable(comp, key.layer)).copied().collect()
+}
+
+pub(crate) fn key_layer_editable(comp: &effectcraft_project::Comp, layer: LayerId) -> bool {
+    comp.layer(layer).is_some_and(|layer| !layer.switches.locked)
+}
+
 /// Apply `f` to every selected key; keeps the selection pointing at moved keys.
 pub(crate) fn edit_keys(s: &mut Session, label: &str, merge: Option<&str>, f: impl Fn(&mut Vec<Keyframe>, usize, &mut Tick) -> bool) -> Result<Value> {
     let cid = s.active_comp_id().ok_or(EngineError::NoComp)?;

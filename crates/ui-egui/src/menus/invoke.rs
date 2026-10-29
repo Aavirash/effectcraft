@@ -224,6 +224,10 @@ pub fn invoke(app: &mut EffectcraftApp, ctx: &egui::Context, id: &str, params: V
             [PanelKind::Timeline, PanelKind::Composition, PanelKind::Project].into_iter().find(|p| app.ui.dock.is_visible(*p)).unwrap_or(PanelKind::Project);
         app.show_panel(next);
         app.focus_panel(ctx, next);
+        // Activating a passive viewer emits OpenComp, which raises Timeline. Finish that routing
+        // before restoring the destination panel, including when they share the same tab group.
+        app.handle_events(ctx);
+        app.show_panel(next);
         return Ok(Value::Null);
     }
     // Edit ▸ Paste with SVG markup on the system clipboard pastes it as a shape layer (After

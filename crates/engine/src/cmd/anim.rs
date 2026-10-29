@@ -55,7 +55,7 @@ fn compatible(a: &Property, b: &effectcraft_keyframe::Value) -> bool {
     a.value.kind_name() == b.kind_name() && a.value.components().len() == b.components().len()
 }
 
-fn locked_selection(comp: &effectcraft_project::Comp, selected: &[KeyRef]) -> Vec<KeyRef> {
+pub(crate) fn locked_selection(comp: &effectcraft_project::Comp, selected: &[KeyRef]) -> Vec<KeyRef> {
     selected.iter().filter(|k| comp.layer(k.layer).is_some_and(|l| l.switches.locked)).copied().collect()
 }
 

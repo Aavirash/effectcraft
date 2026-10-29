@@ -504,6 +504,12 @@ fn queue_close_preserves_viewer_command_target() {
     app.ui.viewers.insert(0, Some(a));
     app.ui.viewers.insert(1, Some(b));
     app.ui.active_viewer = 1;
+    app.apply_dock(craft_ui::docking::Action::Move {
+        panel: PanelKind::Timeline,
+        anchor: PanelKind::Composition,
+        placement: craft_ui::docking::Placement::Tab { before: None },
+    })
+    .unwrap();
     app.close_panel(PanelKind::Timeline);
     app.show_panel(PanelKind::Composition);
     app.show_panel(PanelKind::RenderQueue);
@@ -515,6 +521,46 @@ fn queue_close_preserves_viewer_command_target() {
     invoke(&mut app, &ctx, "file.close", json!({})).unwrap();
     assert!(!app.session.state.open_comps.iter().any(|id| id.0 == a));
     assert!(app.session.state.open_comps.iter().any(|id| id.0 == b));
+}
+
+#[test]
+fn queue_close_keeps_passive_viewer_focus_across_frames() {
+    let mut session = effectcraft_engine::Session::default();
+    let a = session.execute("comp.new", json!({"name": "A", "width": 32, "height": 32, "duration": 2})).unwrap()["comp"].as_u64().unwrap();
+    let b = session.execute("comp.new", json!({"name": "B", "width": 32, "height": 32, "duration": 2})).unwrap()["comp"].as_u64().unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(|_| EffectcraftApp::new(session));
+    h.run_steps(3);
+    let ctx = h.ctx.clone();
+    let app = h.state_mut();
+    app.show_panel(PanelKind::Viewer(1));
+    app.ui.viewers.insert(0, Some(a));
+    app.ui.viewers.insert(1, Some(b));
+    app.ui.active_viewer = 1;
+    app.apply_dock(craft_ui::docking::Action::Move {
+        panel: PanelKind::Timeline,
+        anchor: PanelKind::Composition,
+        placement: craft_ui::docking::Placement::Tab { before: None },
+    })
+    .unwrap();
+    app.close_panel(PanelKind::Timeline);
+    app.show_panel(PanelKind::Composition);
+    app.show_panel(PanelKind::RenderQueue);
+    invoke(app, &ctx, "file.close", Value::Null).unwrap();
+    h.run_steps(4);
+    let app = h.state_mut();
+    assert_eq!(app.ui.focused, PanelKind::Composition);
+    assert_eq!(app.ui.active_viewer, 0);
+    assert_eq!(app.session.active_comp_id().map(|id| id.0), Some(a));
+    assert!(app.ui.dock.is_visible(PanelKind::Composition));
+    assert!(!app.ui.dock.is_open(PanelKind::RenderQueue));
+    invoke(app, &ctx, "file.close", json!({})).unwrap();
+    assert!(!app.session.state.open_comps.iter().any(|id| id.0 == a));
+    assert!(app.session.state.open_comps.iter().any(|id| id.0 == b));
+    // A later explicit Open still routes normally, rather than inheriting a deferred focus override.
+    invoke(app, &ctx, "comp.open", json!({"comp": b})).unwrap();
+    h.run_steps(3);
+    assert!(h.state().ui.dock.is_visible(PanelKind::Timeline));
+    assert_eq!(h.state().session.active_comp_id().map(|id| id.0), Some(b));
 }
 
 #[test]
