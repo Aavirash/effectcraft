@@ -16,7 +16,7 @@ fn brdf_matches_cook_torrance_formula() {
     let v = shade::norm([0.3, 0.1, 1.0]);
     let l = shade::norm([-0.4, 0.2, 1.0]);
     let (base, metal, rough) = ([0.8, 0.4, 0.2], 0.3f32, 0.45f32);
-    let got = shade::brdf(base, metal, rough, 1.0, 1.0, n, v, l);
+    let got = shade::brdf(shade::BrdfSurface { base, metallic: metal, roughness: rough, specular: 1.0, diffuse: 1.0 }, n, v, l);
     let h = shade::norm([v[0] + l[0], v[1] + l[1], v[2] + l[2]]);
     let (nv, nl, nh, vh) = (shade::dot(n, v), shade::dot(n, l), shade::dot(n, h), shade::dot(v, h));
     let a2 = (rough * rough).powi(2);
@@ -30,9 +30,9 @@ fn brdf_matches_cook_torrance_formula() {
         assert!((got[c] - expect).abs() < 1e-5, "channel {c}: {} vs {expect}", got[c]);
     }
     // No light from behind the surface.
-    assert_eq!(shade::brdf(base, metal, rough, 1.0, 1.0, n, v, [0.0, 0.0, -1.0]), [0.0; 3]);
+    assert_eq!(shade::brdf(shade::BrdfSurface { base, metallic: metal, roughness: rough, specular: 1.0, diffuse: 1.0 }, n, v, [0.0, 0.0, -1.0]), [0.0; 3]);
     // A white rough dielectric lit head-on reflects about its base colour (π folded in).
-    let w = shade::brdf([1.0; 3], 0.0, 1.0, 1.0, 1.0, n, n, n);
+    let w = shade::brdf(shade::BrdfSurface { base: [1.0; 3], metallic: 0.0, roughness: 1.0, specular: 1.0, diffuse: 1.0 }, n, n, n);
     assert!(w[0] > 0.95 && w[0] < 1.05, "{w:?}");
 }
 
@@ -370,7 +370,16 @@ fn extruded_text_renders_as_a_mesh() {
         set(l, "geometryOptions/bevelStyle", Value::Enum(1));
         set(l, "transform/rotationY", Value::Scalar(40.0));
     });
-    let ctx = crate::EvalCtx { project: &p, comp_id: cid, comp: p.comp(cid).unwrap(), time: Tick::ZERO, expr: None, footage: None };
+    let ctx = crate::EvalCtx {
+        project: &p,
+        comp_id: cid,
+        comp: p.comp(cid).unwrap(),
+        time: Tick::ZERO,
+        expr: None,
+        footage: None,
+        property_overrides: &[],
+        media_overrides: &[],
+    };
     let l = &ctx.comp.layers[0];
     let params = scene::extrusion_params(&ctx, l).unwrap();
     let meshes = scene::extruded_meshes(&ctx, l, &params);
@@ -409,7 +418,16 @@ fn shape_surface_items_colour_the_extruded_surfaces() {
         set(l, "geometryOptions/extrusionDepth", Value::Scalar(40.0));
         set(l, "transform/position", Value::Vec3([100.0, 100.0, 0.0]));
     });
-    let ctx = crate::EvalCtx { project: &p, comp_id: cid, comp: p.comp(cid).unwrap(), time: Tick::ZERO, expr: None, footage: None };
+    let ctx = crate::EvalCtx {
+        project: &p,
+        comp_id: cid,
+        comp: p.comp(cid).unwrap(),
+        time: Tick::ZERO,
+        expr: None,
+        footage: None,
+        property_overrides: &[],
+        media_overrides: &[],
+    };
     let l = &ctx.comp.layers[0];
     let params = scene::extrusion_params(&ctx, l).unwrap();
     let meshes = scene::extruded_meshes(&ctx, l, &params);
@@ -445,7 +463,16 @@ fn text_animators_colour_the_extruded_surfaces() {
         set(l, "geometryOptions/extrusionDepth", Value::Scalar(30.0));
         set(l, "geometryOptions/bevelStyle", Value::Enum(1));
     });
-    let ctx = crate::EvalCtx { project: &p, comp_id: cid, comp: p.comp(cid).unwrap(), time: Tick::ZERO, expr: None, footage: None };
+    let ctx = crate::EvalCtx {
+        project: &p,
+        comp_id: cid,
+        comp: p.comp(cid).unwrap(),
+        time: Tick::ZERO,
+        expr: None,
+        footage: None,
+        property_overrides: &[],
+        media_overrides: &[],
+    };
     let l = &ctx.comp.layers[0];
     let params = scene::extrusion_params(&ctx, l).unwrap();
     let meshes = scene::extruded_meshes(&ctx, l, &params);
@@ -643,7 +670,16 @@ fn extruded_strokes_render_as_bevelled_meshes() {
         set(l, "geometryOptions/extrusionDepth", Value::Scalar(20.0));
         set(l, "geometryOptions/bevelStyle", Value::Enum(1));
     });
-    let ctx = crate::EvalCtx { project: &p, comp_id: cid, comp: p.comp(cid).unwrap(), time: Tick::ZERO, expr: None, footage: None };
+    let ctx = crate::EvalCtx {
+        project: &p,
+        comp_id: cid,
+        comp: p.comp(cid).unwrap(),
+        time: Tick::ZERO,
+        expr: None,
+        footage: None,
+        property_overrides: &[],
+        media_overrides: &[],
+    };
     let l = &ctx.comp.layers[0];
     let params = scene::extrusion_params(&ctx, l).unwrap();
     let meshes = scene::extruded_meshes(&ctx, l, &params);
@@ -885,6 +921,26 @@ fn penumbra_dithers_along_a_straight_edge() {
     // floor), dither keyed per texel would show as texel-sized blocks of grain.
     let within: Vec<f32> = (0..8).map(|k| shade::shadow_factor(&m, &texels, [-16.0, 0.0625 + k as f32 * 0.125, 13.5], FACING, 1.0)).collect();
     assert!(distinct(&within) >= 4, "coverage inside one texel takes {} distinct values", distinct(&within));
+}
+
+#[test]
+fn penumbra_jitter_is_continuous_across_its_lattice() {
+    // Receiver pairs 1/5000 texel either side of a line of the 1/8-texel jitter lattice,
+    // across u and across v, inside the penumbra. The GPU places a receiver within a few
+    // ulps of the CPU, so coverage that jumps at a lattice line differs between the two
+    // backends there; both sides of each line must agree within one 8-bit level.
+    let (m, texels) = wall_map(64, 1.0, 6.0);
+    let f = |p: [f32; 2]| shade::shadow_factor(&m, &texels, [p[0], p[1], 13.5], FACING, 1.0);
+    let mut worst = 0.0f32;
+    for k in 0..16 {
+        let line = k as f32 * 0.125;
+        for (a, b) in [([-16.0 + line - 2e-4, 0.3], [-16.0 + line + 2e-4, 0.3]), ([-16.3, line - 2e-4], [-16.3, line + 2e-4])] {
+            let (fa, fb) = (f(a), f(b));
+            assert!(fa > 0.05 && fa < 0.95, "{a:?} lies in the penumbra: {fa}");
+            worst = worst.max((fa - fb).abs());
+        }
+    }
+    assert!(worst < 1.0 / 255.0, "coverage jumps by {worst} across a jitter lattice line");
 }
 
 #[test]

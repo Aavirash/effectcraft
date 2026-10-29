@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    EngineError, ItemKind, Label, Layer, LayerId, LayerSource, Result, Session, Tick, Value, b_p, bad, build, f_p, json, layer_mut, layers_p, merge_p,
+    resolve_layer, str_p, unlocked, with,
+};
 
 pub(super) fn timing(s: &mut Session, p: &Value) -> Result<Value> {
     let (cid, ids) = layers_p(s, p)?;
@@ -39,7 +42,9 @@ pub(super) fn timing(s: &mut Session, p: &Value) -> Result<Value> {
                     shift(l, d);
                 }
                 "trimInToTime" => l.in_point = t.min(l.out_point - fd),
-                "trimOutToTime" => l.out_point = t.max(l.in_point + fd),
+                // Alt+]: the Out edge lands one frame after the playhead, so its frame stays the
+                // layer's last visible one (as in After Effects), never before the In point.
+                "trimOutToTime" => l.out_point = t.max(l.in_point) + fd,
                 _ => {
                     if let Some(d) = delta {
                         shift(l, d);

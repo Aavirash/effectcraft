@@ -1,6 +1,16 @@
 use super::frames::adaptive_samples;
 use super::opts::{LayerTiming, Through};
-use super::*;
+use super::{
+    Arc, BlendMode, Buf, Comp, EvalCtx, Image, IndexedParallelIterator, IntoParallelRefIterator, IntoParallelRefMutIterator, Layer, LayerSource, Mat3,
+    MatteKind, ParallelIterator, Quality, Region, Renderer, Sampling, Tick, WarpOpts, cache, color, composite_warp_changed, masks, styles, vec2,
+};
+
+/// Blend policy for placing a layer, including optional output-depth quantization.
+struct PlacementBlend {
+    mode: BlendMode,
+    opacity: f32,
+    quantize: Option<f32>,
+}
 
 /// A motion-blur shutter: the comp's, or for a collapsed precomp's layers the outermost
 /// containing comp's (they are drawn into its frames).
@@ -42,7 +52,7 @@ impl<'a> Renderer<'a> {
             }
         }
         let t0 = web_time::Instant::now();
-        let size = source_size(self.project, layer);
+        let size = ctx.source_size(layer);
         let layer_size = if size.0 == 0 { [ctx.comp.width as f64, ctx.comp.height as f64] } else { [size.0 as f64, size.1 as f64] };
         let st = styles::render(ctx, layer, &content, layer_size);
         if let Some(t) = timing {
@@ -342,22 +352,13 @@ impl<'a> Renderer<'a> {
 
     /// Draw a processed layer into `target` (transform, motion blur) with `mode`/`opacity`.
     pub(crate) fn place(&self, ctx: &EvalCtx, layer: &Layer, buf: &Buf, target: &mut Image, mode: BlendMode, opacity: f32) {
-        self.place_changed(ctx, layer, buf, target, mode, opacity, None);
+        self.place_changed(ctx, layer, buf, target, PlacementBlend { mode, opacity, quantize: None });
     }
 
     /// [`Self::place`], returning the target pixels it changed when the warp tracked them (then
     /// also quantised to `quantize` levels; see [`composite_warp_changed`]).
-    #[allow(clippy::too_many_arguments)]
-    fn place_changed(
-        &self,
-        ctx: &EvalCtx,
-        layer: &Layer,
-        buf: &Buf,
-        target: &mut Image,
-        mode: BlendMode,
-        opacity: f32,
-        quantize: Option<f32>,
-    ) -> Option<[u32; 4]> {
+    fn place_changed(&self, ctx: &EvalCtx, layer: &Layer, buf: &Buf, target: &mut Image, blend: PlacementBlend) -> Option<[u32; 4]> {
+        let PlacementBlend { mode, opacity, quantize } = blend;
         let pl = self.placement(ctx, layer, buf);
         let opts = WarpOpts { sampling: pl.sampling, opacity, mode, seed: pl.seed, clip: None };
         if let [m] = pl.matrices.as_slice() {
@@ -459,7 +460,7 @@ impl<'a> Renderer<'a> {
     fn composite_layer(&self, ctx: &EvalCtx, layer: &Layer, buf: &Buf, canvas: &mut Image, opacity: f32, quantize: Option<f32>) -> Option<[u32; 4]> {
         let matte = layer.track_matte.is_some_and(|tm| tm.layer != layer.id && ctx.comp.layer(tm.layer).is_some());
         if !matte && !layer.preserve_transparency {
-            return self.place_changed(ctx, layer, buf, canvas, layer.blend_mode, opacity, quantize);
+            return self.place_changed(ctx, layer, buf, canvas, PlacementBlend { mode: layer.blend_mode, opacity, quantize });
         }
         // Render in isolation, then matte / preserve transparency, then blend.
         let mut iso = Image::new(canvas.width, canvas.height);

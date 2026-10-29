@@ -69,7 +69,16 @@ pub fn draw_overlay(
     let ov = match cached {
         Some(c) if c.key == key => Some(c),
         _ => {
-            let ectx = EvalCtx { project: &app.session.project, comp_id: cid, comp, time, expr: app.session.expr.as_deref(), footage: None };
+            let ectx = EvalCtx {
+                project: &app.session.project,
+                comp_id: cid,
+                comp,
+                time,
+                expr: app.session.expr.as_deref(),
+                footage: None,
+                property_overrides: &[],
+                media_overrides: &[],
+            };
             let mut r = Renderer::new(&app.session.project, &*app.session.footage, RenderOpts { scale, ..Default::default() });
             r.expr = app.session.expr.as_deref();
             r.cache = Some(&app.session.layer_cache);
@@ -135,17 +144,15 @@ pub fn draw_overlay(
     }
 }
 
+/// The layer <-> screen mappings [`interact`] works with.
+pub struct LayerXform<'a> {
+    pub to_screen: &'a dyn Fn([f64; 2]) -> Pos2,
+    pub to_layer: &'a dyn Fn(Pos2) -> [f64; 2],
+}
+
 /// Pointer handling for the Roto Brush / Refine Edge tools. Returns true when it handled input.
-pub fn interact(
-    app: &mut EffectcraftApp,
-    ui: &mut egui::Ui,
-    painter: &egui::Painter,
-    area: Rect,
-    layer: &Layer,
-    zoom: f64,
-    to_screen: &dyn Fn([f64; 2]) -> Pos2,
-    to_layer: &dyn Fn(Pos2) -> [f64; 2],
-) -> bool {
+pub fn interact(app: &mut EffectcraftApp, ui: &mut egui::Ui, painter: &egui::Painter, area: Rect, layer: &Layer, zoom: f64, xf: LayerXform) -> bool {
+    let LayerXform { to_screen, to_layer } = xf;
     let ctx = ui.ctx().clone();
     let mods = ui.input(|i| i.modifiers);
     let Some(kind) = app.ui.tool.roto_kind(mods.alt) else { return false };
