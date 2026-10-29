@@ -597,10 +597,10 @@ mod tests {
         let v = 100.25 / 255.0;
         let img = Image::filled(64, 64, [v, v, v, v]);
         let px = premultiplied8(&img, true);
-        assert!(px.chunks_exact(4).all(|p| p[..3].iter().all(|c| *c <= p[3])), "a colour byte is above its alpha");
-        assert!(px.chunks_exact(4).all(|p| p[3] == 100));
+        assert!(px.as_chunks::<4>().0.iter().all(|p| p[..3].iter().all(|c| *c <= p[3])), "a colour byte is above its alpha");
+        assert!(px.as_chunks::<4>().0.iter().all(|p| p[3] == 100));
         let plain = premultiplied8(&img, false);
-        assert!(plain.chunks_exact(4).all(|p| p == [100, 100, 100, 100]));
+        assert!(plain.as_chunks::<4>().0.iter().all(|p| *p == [100, 100, 100, 100]));
     }
 
     /// Frames `0..n` through [`map_frames`] with `cap`, recording the most running at once.
