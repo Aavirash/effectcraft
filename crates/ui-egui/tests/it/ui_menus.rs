@@ -16,12 +16,12 @@ fn harness() -> Harness<'static, EffectcraftApp> {
     h
 }
 
-fn rect(h: &Harness<'_, EffectcraftApp>, id: &str) -> Rect {
+pub(crate) fn rect(h: &Harness<'_, EffectcraftApp>, id: &str) -> Rect {
     let e = h.state().auto.find(id).unwrap_or_else(|| panic!("no {id}"));
     Rect::from_min_size(pos2(e.rect[0], e.rect[1]), vec2(e.rect[2], e.rect[3]))
 }
 
-fn click_at(h: &mut Harness<'_, EffectcraftApp>, p: Pos2) {
+pub(crate) fn click_at(h: &mut Harness<'_, EffectcraftApp>, p: Pos2) {
     h.input_mut().events.push(Event::PointerMoved(p));
     h.input_mut().events.push(Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
     h.step();
@@ -30,14 +30,14 @@ fn click_at(h: &mut Harness<'_, EffectcraftApp>, p: Pos2) {
 }
 
 /// Press the primary button at `p` and keep it down.
-fn press(h: &mut Harness<'_, EffectcraftApp>, p: Pos2) {
+pub(crate) fn press(h: &mut Harness<'_, EffectcraftApp>, p: Pos2) {
     h.input_mut().events.push(Event::PointerMoved(p));
     h.input_mut().events.push(Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
     h.run_steps(2);
 }
 
 /// Move the pointer to `p` (press or no press, whichever is held).
-fn move_to(h: &mut Harness<'_, EffectcraftApp>, p: Pos2) {
+pub(crate) fn move_to(h: &mut Harness<'_, EffectcraftApp>, p: Pos2) {
     h.input_mut().events.push(Event::PointerMoved(p));
     h.run_steps(2);
 }
@@ -318,7 +318,8 @@ fn hold_browse_opens_a_submenu_and_the_release_inside_picks_an_entry() {
     h.state_mut().session.state.selected_layers = vec![first];
     let effect = rect(&h, "menu.Effect");
     press(&mut h, effect.center());
-    assert!(shown(&h, "Effect Controls"), "the Effect menu opens on the press");
+    // (Effect ▸ Remove All: "Effect Controls" also names the panel's tab.)
+    assert!(shown(&h, "Remove All"), "the Effect menu opens on the press");
     // The categories come from the effect registry; the first alphabetically is "3D Channel".
     let cat = h.query_by_label_contains("3D Channel").expect("the category row is shown").rect();
     move_to(&mut h, cat.center());
@@ -326,7 +327,7 @@ fn hold_browse_opens_a_submenu_and_the_release_inside_picks_an_entry() {
     let entry = h.query_by_label_contains("Cryptomatte").expect("the submenu is open").rect();
     move_to(&mut h, entry.center());
     release(&mut h, entry.center());
-    assert!(!shown(&h, "Effect Controls"), "the release closed the menus");
+    assert!(!shown(&h, "Remove All"), "the release closed the menus");
     assert!(h.state().session.state.last_effect.is_some(), "and the release chose the entry: it applied its effect");
 }
 
@@ -371,4 +372,64 @@ fn outside_presses_and_focus_loss_close_the_menus() {
     h.input_mut().events.push(Event::WindowFocused(false));
     h.run_steps(2);
     assert!(!shown(&h, "Open Project"), "losing focus closes the menus");
+}
+
+/// From an open submenu, the pointer reaching another title switches menus too (#1290).
+#[test]
+fn hovering_a_title_from_an_open_submenu_switches_menus() {
+    let mut h = harness();
+    let (file, edit) = (rect(&h, "menu.File"), rect(&h, "menu.Edit"));
+    click_at(&mut h, file.center());
+    let new = h.query_by(|n| n.label().is_some_and(|l| l.trim_end_matches('\u{23f5}').trim() == "New")).expect("File ▸ New").rect();
+    move_to(&mut h, new.center());
+    h.run_steps(5);
+    assert!(shown(&h, "New Project from Template"), "the New submenu is open");
+    move_to(&mut h, edit.center());
+    assert!(shown(&h, "Keyboard Shortcuts"), "hovering Edit opened it");
+    assert!(!shown(&h, "New Project from Template") && !shown(&h, "Open Project"), "and closed File and its submenu");
+}
+
+/// A title the pointer can't reach (the app is disabled under a dialog) doesn't switch menus
+/// (#1290).
+#[test]
+fn a_disabled_title_does_not_switch_menus() {
+    let mut h = harness();
+    let (file, edit) = (rect(&h, "menu.File"), rect(&h, "menu.Edit"));
+    click_at(&mut h, file.center());
+    h.state_mut().dialog = Some(effectcraft_ui_egui::Dialog::About);
+    h.run_steps(2);
+    move_to(&mut h, edit.center());
+    assert!(!shown(&h, "Keyboard Shortcuts"), "Edit didn't open");
+}
+
+/// A pointer resting on a title doesn't undo Left / Right: only a moving pointer switches
+/// (#1290).
+#[test]
+fn a_resting_pointer_does_not_override_the_arrow_keys() {
+    if cfg!(target_os = "macos") {
+        // (Right / Left between menus are tested where the in-window bar is the app's menu.)
+        return;
+    }
+    let mut h = harness();
+    let file = rect(&h, "menu.File");
+    click_at(&mut h, file.center());
+    key(&mut h, Key::ArrowRight);
+    h.run_steps(3);
+    assert!(shown(&h, "Keyboard Shortcuts"), "Right opened Edit with the pointer still on File");
+    assert!(!shown(&h, "Open Project"));
+}
+
+/// Leaving the window keeps the menu open, and coming back in over another title switches to it
+/// (#1290): egui reports no pointer movement for that first position.
+#[test]
+fn pointer_reentering_over_another_title_switches_menus() {
+    let mut h = harness();
+    let (file, edit) = (rect(&h, "menu.File"), rect(&h, "menu.Edit"));
+    click_at(&mut h, file.center());
+    h.input_mut().events.push(Event::PointerGone);
+    h.run_steps(2);
+    assert!(shown(&h, "Open Project"), "leaving the window kept File open");
+    move_to(&mut h, edit.center());
+    assert!(shown(&h, "Keyboard Shortcuts"), "coming back over Edit opened it");
+    assert!(!shown(&h, "Open Project"), "and closed File");
 }
