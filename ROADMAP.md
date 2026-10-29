@@ -117,6 +117,9 @@ Come tell us what matters most to you on [Discord](https://discord.gg/artcraft).
 
 ## Progress log
 
+- 2026-10-28: A shape layer's Rectangle and Ellipse Size get the Constrain Proportions chain
+  that Scale has, so a circle stays a circle while its size is typed, scrubbed or keyed; it
+  starts off, so existing shapes behave as before (#2489).
 - 2026-10-24: Shape layers have the Wiggle Transform path operation (Contents ▸ Add, or
   `layer.addShapeItem {kind: "wiggler"}`): it wiggles the anchor point, position, scale and
   rotation of the paths above it by random amounts that change over time, up to the Transform

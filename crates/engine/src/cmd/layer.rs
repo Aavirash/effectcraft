@@ -121,7 +121,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Track Matte",
             [],
             None,
-            "{layer?, matte: layer|null, kind?: alpha|alphaInverted|luma|lumaInverted}",
+            "{layers? | layer?, matte: layer|null, kind?: alpha|alphaInverted|luma|lumaInverted|preserve}",
             has_layers,
             track_matte
         ),
