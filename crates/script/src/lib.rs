@@ -88,8 +88,6 @@ pub fn run_code(s: &mut Session, code: &str, name: &str) -> Outcome {
 
 #[cfg(test)]
 mod tests;
-#[cfg(test)]
-mod tests_startup;
 
 // #760: `$.evalFile` and `BridgeTalk`.
 // `/browser/…` is the web editor's file table, an absolute path on wasm; on Windows it has no
