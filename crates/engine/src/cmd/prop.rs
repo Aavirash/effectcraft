@@ -267,8 +267,13 @@ fn twin_params(p: &Value, lid: LayerId, uid: Uid) -> Value {
 /// The value of property `uid` of `lid` at the CTI as numbers (Position with Separate
 /// Dimensions: its X / Y / Z Position).
 fn current_components(s: &Session, cid: ItemId, lid: LayerId, uid: Uid) -> Option<Vec<f64>> {
+    components_at(s, cid, lid, uid, None)
+}
+
+/// [`current_components`] at layer time `at` (the CTI when `None`).
+fn components_at(s: &Session, cid: ItemId, lid: LayerId, uid: Uid, at: Option<Tick>) -> Option<Vec<f64>> {
     let l = s.project.comp(cid)?.layer(lid)?;
-    let lt = l.layer_time(s.time_of(cid));
+    let lt = at.unwrap_or_else(|| l.layer_time(s.time_of(cid)));
     if let Some(tr) = l.transform()
         && tr.get("position").is_some_and(|q| q.uid == uid)
         && tr.get("positionX").is_some()
@@ -329,9 +334,10 @@ fn set_selected(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let follow: Vec<usize> =
         p.get("follow").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_u64).filter_map(|d| usize::try_from(d).ok()).collect();
+    // Each layer's own value where `set` writes it (a `time` other than the CTI keys there).
     let typed = |s: &Session, q: &mut Value, olid: LayerId, ouid: Uid| {
         if let (Some(dims), Some(n)) = (&dims, &new)
-            && let Some(mut c) = current_components(s, cid, olid, ouid)
+            && let Some(mut c) = components_at(s, cid, olid, ouid, snapped_key_time(s, cid, olid, q, "prop.set").ok().flatten())
         {
             let change = dims.first().and_then(|&d| Some(n.get(d)? - c.get(d)?)).unwrap_or(0.0);
             for &d in &follow {

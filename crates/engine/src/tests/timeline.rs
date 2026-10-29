@@ -1449,4 +1449,10 @@ fn a_typed_component_moves_its_follow_components_by_each_layers_own_change() {
     assert_eq!(prop(&s, a, "audio/levels").value.components(), vec![-3.0, -9.0]);
     assert_eq!(prop(&s, b, "audio/levels").value.components(), vec![-3.0, -13.0], "B rises 17 dB on both channels");
     assert_eq!(s.history.undo.len(), undo + 1, "one undo step");
+
+    // Keyed at a time other than the CTI: B's change is measured on its key there.
+    animate(&mut s, b, "audio/levels", &[(0.0, json!([-20.0, -30.0])), (1.0, json!([-10.0, -40.0]))]);
+    s.execute("prop.set", json!({"layer": a, "prop": uid, "value": [-4.0, -10.0], "time": 1.0, "selected": true, "dims": [0], "follow": [1]})).unwrap();
+    let keys: Vec<Vec<f64>> = prop(&s, b, "audio/levels").keys.iter().map(|k| k.value.components()).collect();
+    assert_eq!(keys, vec![vec![-20.0, -30.0], vec![-4.0, -34.0]], "B's 1 s key rises 6 dB on both channels");
 }
