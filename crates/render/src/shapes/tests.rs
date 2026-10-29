@@ -76,6 +76,24 @@ fn merge_add_feeds_fill_below_and_drops_paint_above() {
     assert!((coverage(&img) - 80.0 * 40.0).abs() < 20.0, "{}", coverage(&img));
 }
 
+/// #1174: Adding Merge Paths to a shape layer's Contents, after the group that holds the
+/// shape and its paint, erased the render. The merge drops paints above it *in its group* —
+/// not paint that belongs to a group above it.
+#[test]
+fn merge_paths_below_a_group_keeps_the_group_paint() {
+    for mode in [0u32, 1] {
+        let (p, cid) = shape_comp(|ids| {
+            let rect = build::shape_rect(ids, [40.0, 40.0], [0.0, 0.0], 0.0);
+            let fill = build::shape_fill(ids, RED);
+            vec![build::shape_group(ids, "Group 1", vec![rect, fill]), op(ids, "merge", &[("mode", Value::Enum(mode))])]
+        });
+        let img = frame(&p, cid);
+        let c = img.get(100, 50);
+        assert!(c[0] > 0.99 && c[1] < 0.01 && c[3] > 0.99, "mode {mode}: group rectangle must still render, got {c:?}");
+        assert!((coverage(&img) - 40.0 * 40.0).abs() < 20.0, "mode {mode}: {}", coverage(&img));
+    }
+}
+
 #[test]
 fn merge_subtract_and_intersect() {
     let sub = |mode: u32| {
@@ -238,6 +256,24 @@ fn round_corners_clip_corner_pixels() {
     assert!(alpha(&img, 81, 31) < 0.01, "corner rounded off");
     assert!(alpha(&img, 100, 50) > 0.99);
     assert!((coverage(&img) - std::f32::consts::PI * 400.0).abs() < 15.0, "{}", coverage(&img));
+}
+
+/// Wiggle Paths' Spatial Phase changes the drawn shape; a whole turn draws it as at 0°.
+#[test]
+fn wiggle_paths_spatial_phase_renders() {
+    let render = |phase: f64| {
+        let (p, cid) = shape_comp(|ids| {
+            vec![
+                build::shape_ellipse(ids, [60.0, 60.0], [0.0, 0.0]),
+                op(ids, "wiggle", &[("size", Value::Scalar(8.0)), ("correlation", Value::Scalar(0.0)), ("spatialPhase", Value::Scalar(phase))]),
+                build::shape_fill(ids, RED),
+            ]
+        });
+        render_frame(&p, cid, Tick::from_seconds_f64(0.5), 1.0).data
+    };
+    let zero = render(0.0);
+    assert!(render(90.0) != zero, "Spatial Phase 90° draws the shape of 0°");
+    assert!(render(360.0) == zero, "Spatial Phase 360° draws another shape than 0°");
 }
 
 #[test]
