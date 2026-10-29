@@ -80,6 +80,7 @@ fn inverse_dct_n<const N: u32>(t: &mut [i32], r: u32) {
 }
 
 /// Rotate the high-frequency branches before the four-point core.
+#[inline(always)]
 fn inverse_dct_initial_stages(t: &mut [i32], n: u32, r: u32) {
     if n >= 5 {
         for i in 0..8 {
@@ -116,6 +117,7 @@ fn inverse_dct_initial_stages(t: &mut [i32], n: u32, r: u32) {
 }
 
 /// Evaluate the four-point core and merge progressively larger branches.
+#[inline(always)]
 fn inverse_dct_final_stages(t: &mut [i32], n: u32, r: u32) {
     for i in 0..2 {
         bf(t, 2 * i, 2 * i + 1, 32 + 16 * i as i32, i == 0);
