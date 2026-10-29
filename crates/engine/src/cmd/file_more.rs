@@ -1029,10 +1029,34 @@ fn replace_footage(s: &mut Session, p: &Value) -> Result<Value> {
     let path = str_p(p, "path").ok_or_else(|| bad("file.replaceFootage", "missing `path`"))?.to_string();
     let item = *items_p(s, p).first().ok_or_else(|| bad("file.replaceFootage", "select footage"))?;
     let importer = s.importer.clone().ok_or_else(|| EngineError::Other("media import is not available in this build".into()))?;
-    // A numbered still brings its image sequence, as on import (`sequence: false` for one frame).
-    let opts = SequenceOptions::from_params(p);
+    // Replacing a still keeps it a still; replacing a sequence keeps bringing the new file's run.
+    // `sequence`/`alphabetical` override that (#2073).
+    let previous = match s.project.item(item).map(|it| &it.kind) {
+        Some(ItemKind::Footage(f)) if f.kind == FootageKind::Sequence => (true, true, f.alphabetical),
+        _ => (false, false, false),
+    };
+    // Only `sequence` decides whether the item keeps its kind; `alphabetical` is a sequence
+    // modifier, not a request to make one.
+    let inherited = b_p(p, "sequence").is_none();
+    let mut opts = SequenceOptions::from_params(p);
+    if inherited {
+        (opts.sequence, opts.folders) = (previous.0, previous.1);
+        if previous.0 && b_p(p, "alphabetical").is_none() {
+            opts.alphabetical = previous.2;
+        }
+    }
     let src = crate::sequence::source_of(s.services.as_ref(), &path, opts);
-    let f = crate::sequence::probe(importer.as_ref(), &src, s.sequence_rate()).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
+    let mut f = crate::sequence::probe(importer.as_ref(), &src, s.sequence_rate()).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
+    // A single-file source comes back as a still; an inherited sequence kind keeps it a
+    // one-frame sequence, so a later default replacement still brings numbered runs (#2073).
+    if inherited && previous.0 && matches!(src, crate::sequence::Source::File(_)) && f.kind == FootageKind::Still {
+        f.kind = FootageKind::Sequence;
+        f.sequence = vec![f.path.clone()];
+        f.alphabetical = opts.alphabetical;
+        f.frame_rate = s.sequence_rate();
+        f.native_rate = None;
+        f.sync_sequence_duration();
+    }
     let name = src.name();
     // Replacing a missing file relinks the other missing files that moved with it (as After Effects
     // does when you locate one).
@@ -1217,7 +1241,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Main...",
             ["File", "Interpret Footage"],
             Some("Cmd+Alt+G"),
-            "{items?, frameRate?: fps|\"file\", alpha?: straight|premultiplied|ignore|guess, guessAlpha?, matteColor?, invertAlpha?, loop?, pixelAspect?, fields?: off|upper|lower, colorProfile?: srgb|rec709|rec2020|p3|auto, linearLight?, preserveRgb? (the file's values unconverted), overrideStart?: bool (false: Use Source File Timecode), startTimecode?: timecode|frame (Override Start), logConversion? (Cineon Settings of DPX and Cineon files), cineonUnits?: 10bit|8bit|float, convertedBlack?, convertedWhite?, pointUnits?: 10bit|8bit|float (the units of convertedBlack and convertedWhite; default cineonUnits, else the footage's Units), tenBitBlack?, tenBitWhite? (0..1023), currentGamma? (0.1..10), highlightRolloff? (0..100)}",
+            "{items?|item?, frameRate?: fps|\"file\", alpha?: straight|premultiplied|ignore|guess, guessAlpha?, matteColor?|premulColor?, invertAlpha?, loop?, pixelAspect?, fields?: off|upper|lower, colorProfile?: srgb|rec709|rec2020|p3|auto, linearLight?, preserveRgb? (the file's values unconverted), overrideStart?: bool (false: Use Source File Timecode), startTimecode?: timecode|frame (Override Start), logConversion? (Cineon Settings of DPX and Cineon files), cineonUnits?: 10bit|8bit|float, convertedBlack?, convertedWhite?, pointUnits?: 10bit|8bit|float (the units of convertedBlack and convertedWhite; default cineonUnits, else the footage's Units), tenBitBlack?, tenBitWhite? (0..1023), currentGamma? (0.1..10), highlightRolloff? (0..100)}",
             has_footage_selection,
             interpret
         ),
@@ -1235,7 +1259,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Apply Interpretation",
             ["File", "Interpret Footage"],
             Some("Cmd+Alt+V"),
-            "{items?}",
+            "{items?|item?}",
             has_interpretation,
             apply_interpretation
         ),
@@ -1244,7 +1268,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "File...",
             ["File", "Replace Footage"],
             Some("Cmd+H"),
-            "{path, item?, sequence?: bool (default true: a numbered still brings its image sequence), alphabetical?: bool}",
+            "{path, item?, sequence?: bool (a numbered still brings its image sequence; default: the item keeps its kind, so a still stays a still and a sequence stays a sequence), alphabetical?: bool}",
             has_footage_selection,
             replace_footage
         ),
@@ -1266,7 +1290,7 @@ pub fn specs() -> Vec<CommandSpec> {
             has_footage_selection,
             replace_with_solid
         ),
-        cmd!("file.reloadFootage", "Reload Footage", ["File"], Some("Cmd+Alt+L"), "{items?}", has_footage_selection, reload),
+        cmd!("file.reloadFootage", "Reload Footage", ["File"], Some("Cmd+Alt+L"), "{items?|item?}", has_footage_selection, reload),
         cmd!("file.revealInFinder", "Reveal in Finder", ["File"], None, "{item?}", has_footage_selection, reveal_in_finder),
     ]
 }
