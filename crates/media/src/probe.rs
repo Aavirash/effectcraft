@@ -25,7 +25,7 @@ pub fn probe(path: impl AsRef<Path>) -> Result<Footage> {
         correct_rate(&mut f, header.as_deref().and_then(video_rate));
         return Ok(f);
     }
-    let bytes = std::fs::read(path).map_err(|e| MediaError::Io(format!("{}: {e}", path.display())))?;
+    let bytes = crate::read_regular_file(path).map_err(|e| MediaError::Io(format!("{}: {e}", path.display())))?;
     if crate::MODEL_EXTENSIONS.contains(&ext_of(path).as_str()) {
         return probe_model(&path.to_string_lossy(), &bytes, &side_file_reader(path));
     }
@@ -38,7 +38,7 @@ fn side_file_reader(model: &Path) -> impl Fn(&str) -> Option<Vec<u8>> + use<> {
     let model = std::path::absolute(model).unwrap_or_else(|_| model.to_path_buf());
     move |uri| {
         let p = craft_docpath::resolve_absolute(uri, Some(&model)).ok()?;
-        std::fs::read(p).ok()
+        crate::read_regular_file(&p).ok()
     }
 }
 

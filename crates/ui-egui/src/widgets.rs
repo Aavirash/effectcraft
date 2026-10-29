@@ -22,6 +22,8 @@ struct TabOrder {
     pending: Option<(egui::Id, bool, u64)>,
 }
 
+/// The temp-data id of the [`TabOrder`] for the panel containing `ui` (unique per panel scope;
+/// `Id::NULL` outside a tagged panel).
 fn tab_order_id(ui: &Ui) -> egui::Id {
     let panel = ui.stack().iter().find(|s| s.tags().contains(PANEL_TAG)).map_or(egui::Id::NULL, |s| s.scope_id);
     egui::Id::unique(("hot-tab-order", panel))
@@ -49,20 +51,21 @@ fn tab_stop(ui: &Ui, id: egui::Id) -> bool {
     })
 }
 
+/// How a hot-text field scrubs and prints: `speed` value units per pointer pixel, clamped to
+/// `range`, shown with `decimals` places followed by `suffix`.
+#[derive(Clone, Copy)]
+pub struct HotSpec<'a> {
+    pub speed: f64,
+    pub range: (f64, f64),
+    pub decimals: usize,
+    pub suffix: &'a str,
+}
+
 /// "Hot text": a blue number you drag horizontally to scrub, click to type. Tab / Shift+Tab
 /// while typing commits and types in the panel's next / previous one, as in After Effects.
 /// Returns (response, Some(new value) when changed, drag finished).
-pub fn hot_number_at(
-    ui: &mut Ui,
-    rect_min: egui::Pos2,
-    id: egui::Id,
-    value: f64,
-    speed: f64,
-    range: (f64, f64),
-    decimals: usize,
-    suffix: &str,
-    t: &Tokens,
-) -> (Rect, Option<f64>, bool) {
+pub fn hot_number_at(ui: &mut Ui, rect_min: egui::Pos2, id: egui::Id, value: f64, spec: &HotSpec, t: &Tokens) -> (Rect, Option<f64>, bool) {
+    let HotSpec { speed, range, decimals, suffix } = *spec;
     let editing_id = id.with("editing");
     let mut editing: Option<String> = ui.data(|d| d.get_temp(editing_id));
     if tab_stop(ui, id) && editing.is_none() {
@@ -161,7 +164,7 @@ pub fn slider_scrub_speed(ui: &ParamUi) -> f64 {
 /// `1 / speed` pixels however slowly the pointer moves (the fractions add up between frames),
 /// and a typed value is truncated. Returns (rect, Some(new value) when changed, drag finished).
 pub fn hot_int_at(ui: &mut Ui, rect_min: egui::Pos2, id: egui::Id, value: i64, speed: f64, suffix: &str, t: &Tokens) -> (Rect, Option<i64>, bool) {
-    let (rect, nv, done) = hot_number_at(ui, rect_min, id, value as f64, speed, (-1e6, 1e6), 0, suffix, t);
+    let (rect, nv, done) = hot_number_at(ui, rect_min, id, value as f64, &HotSpec { speed, range: (-1e6, 1e6), decimals: 0, suffix }, t);
     let acc_id = id.with("acc");
     let acc = ui.data(|d| d.get_temp::<f64>(acc_id)).unwrap_or(0.0) + nv.map_or(0.0, |n| n - value as f64);
     // (Ten 0.1 steps add up to just under 1.)
@@ -326,6 +329,9 @@ pub fn text_field(ui: &mut Ui, rect: Rect, text: &mut String, hint: &str, t: &To
     field(ui, rect, text, hint, t, false)
 }
 
+/// The shared body of [`text_field`] and [`search_field`]: paints the rounded field (and, for
+/// `search`, a magnifier), places a single-line `TextEdit` on `text` filling the inner rect,
+/// and returns its response.
 fn field(ui: &mut Ui, rect: Rect, text: &mut String, hint: &str, t: &Tokens, search: bool) -> Response {
     let h = rect.height();
     ui.painter().rect_filled(rect, h / 2.0, t.field_bg);
@@ -509,6 +515,8 @@ pub fn check_label(on: bool, label: &str) -> String {
     if on { format!("✓ {label}") } else { format!("   {label}") }
 }
 
+/// The atom id of [`label_swatch`]'s slot inside a button, which [`paint_label_swatch`] looks
+/// up on the laid-out button.
 fn label_swatch_id() -> egui::IdSalt {
     egui::IdSalt::new("label-swatch")
 }

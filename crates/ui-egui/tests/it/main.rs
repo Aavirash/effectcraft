@@ -1,5 +1,6 @@
 //! The crate's integration tests, one binary (each module is a former `tests/<name>.rs`).
 
+mod native_menu_text_keys;
 mod render_queue_snapshot;
 mod shared_docking_ui;
 mod ui_3d;
@@ -7,6 +8,7 @@ mod ui_agent_audit;
 mod ui_angles;
 mod ui_audio_scrub;
 mod ui_azerty_shortcuts;
+mod ui_batch_links;
 mod ui_batch_switches;
 mod ui_blank_context_menus;
 mod ui_camera_tracker;
@@ -19,6 +21,7 @@ mod ui_drag_drop;
 mod ui_effect_controls;
 mod ui_effect_drop_highlight;
 mod ui_effect_names;
+mod ui_expression_values;
 mod ui_font_search;
 mod ui_form_fit;
 mod ui_frame_step;
@@ -38,6 +41,7 @@ mod ui_layer_source_picker;
 mod ui_light_settings;
 mod ui_live_preview;
 mod ui_locked_color;
+mod ui_marker_names;
 mod ui_media_browser_cache;
 mod ui_media_browser_copy_path;
 mod ui_menus;
@@ -78,6 +82,7 @@ mod ui_tracker;
 mod ui_unreadable_footage;
 mod ui_video_preview_off;
 mod ui_viewer;
+mod ui_viewer_trackpad;
 mod ui_viewers;
 mod ui_visual_review;
 mod ui_web_gpu_storage;

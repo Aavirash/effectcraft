@@ -13,6 +13,14 @@ cargo test --workspace
 cargo xtask ci                           # what every commit must pass
 ```
 
+The default `dev` profile keeps debug info to line tables: builds are fast and panics/backtraces
+still name the file and line, but a debugger cannot show local variables. For an interactive
+debugger session use the `dev-full` profile, which is the same build with full debug info:
+
+```sh
+cargo run --profile dev-full -p effectcraft -- --demo
+```
+
 ## Ground rules
 
 - **Clean room.** Work from After Effects' public documentation and its observable behaviour only.
