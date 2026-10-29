@@ -161,19 +161,33 @@ impl CineonSettings {
     /// A code value (0–1 of the 10-bit range) converted from log to the Current Gamma and the
     /// converted black and white levels (0–1; above 1 for over-range highlights).
     pub fn convert(&self, v: f32) -> f32 {
-        // Kodak printing density: 0.002 density per code value, negative gamma 0.6.
-        let exposure = |code: f32| 10f32.powf((code - self.white) * 0.002 / 0.6);
-        let offset = exposure(self.black);
-        let mut lin = ((exposure(v * Self::MAX) - offset) / (1.0 - offset).max(1e-6)).max(0.0);
-        lin = lin.powf(1.0 / self.gamma.max(0.01));
-        let knee = 1.0 - (self.rolloff / 100.0).clamp(0.0, 0.99);
-        if knee < 1.0 && lin > knee {
-            let w = 1.0 - knee;
-            lin = knee + w * (1.0 - (-(lin - knee) / w).exp());
-        }
+        let lin = cineon_log_to_lin(v, self.black, self.white, self.gamma, self.rolloff);
         let out = (self.converted_black + (self.converted_white - self.converted_black) * lin) / Self::MAX;
         if out.is_finite() { out } else { 0.0 }
     }
+}
+
+/// The smallest Gamma [`cineon_log_to_lin`] and the Cineon Converter's Linear to Log use.
+pub const CINEON_MIN_GAMMA: f32 = 0.01 / 1.7;
+
+/// Cineon log to linear, shared by Interpret Footage ▸ Cineon Settings and the Cineon Converter
+/// effect. `v` is a code value as 0–1 of the 10-bit range; `black` and `white` are the 10 Bit
+/// Black and White Points. The result is 0 at the black point and 1 at the white point, raised to
+/// `1 / gamma` (Gamma 1 gives linear light), with values above `1 - rolloff / 100` ramped off
+/// toward 1 (Highlight Rolloff 0–100; 0 keeps over-range values). A Gamma below
+/// [`CINEON_MIN_GAMMA`] is raised to it.
+pub fn cineon_log_to_lin(v: f32, black: f32, white: f32, gamma: f32, rolloff: f32) -> f32 {
+    // Kodak printing density: 0.002 density per code value, negative gamma 0.6.
+    let exposure = |code: f32| 10f32.powf((code - white) * 0.002 / 0.6);
+    let offset = exposure(black);
+    let mut lin = ((exposure(v * CineonSettings::MAX) - offset) / (1.0 - offset).max(1e-6)).max(0.0);
+    lin = lin.powf(1.0 / gamma.max(CINEON_MIN_GAMMA));
+    let knee = 1.0 - (rolloff / 100.0).clamp(0.0, 0.99);
+    if knee < 1.0 && lin > knee {
+        let w = 1.0 - knee;
+        lin = knee + w * (1.0 - (-(lin - knee) / w).exp());
+    }
+    lin
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

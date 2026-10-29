@@ -36,7 +36,7 @@ mod layer;
 mod settings;
 
 pub use comp::{Comp, Guide, Renderer, Resolution};
-pub use footage::{AlphaMode, CineonSettings, CineonUnits, FieldOrder, Footage, FootageKind, Proxy, Solid, SourceLayer};
+pub use footage::{AlphaMode, CINEON_MIN_GAMMA, CineonSettings, CineonUnits, FieldOrder, Footage, FootageKind, Proxy, Solid, SourceLayer, cineon_log_to_lin};
 pub use item::{Item, ItemId, ItemKind, LayerId};
 pub use layer::{AutoOrient, FrameBlend, Layer, LayerSource, LightKind, MatteKind, PrimitiveKind, Quality, Sampling, Switches, TrackMatte};
 pub use settings::{

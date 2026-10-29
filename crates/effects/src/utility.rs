@@ -100,17 +100,11 @@ impl Cineon {
     fn knee(&self) -> f32 {
         1.0 - (self.rolloff / 100.0).clamp(0.0, 0.99)
     }
-    /// Normalised code value (code / 1023) → linear.
+    /// Normalized code value (code / 1023) → linear, raised to `1 / gamma`
+    /// ([`effectcraft_project::cineon_log_to_lin`], which Interpret Footage ▸ Cineon Settings
+    /// also uses).
     pub fn log_to_lin(&self, v: f32) -> f32 {
-        let off = self.offset();
-        let code = v * 1023.0;
-        let mut lin = (10f32.powf((code - self.white) * 0.002 / 0.6) - off) / (1.0 - off).max(1e-6);
-        lin = lin.max(0.0).powf(1.7 / self.gamma.max(0.01));
-        let k = self.knee();
-        if k < 1.0 && lin > k {
-            let w = 1.0 - k;
-            lin = k + w * (1.0 - (-(lin - k) / w).exp());
-        }
+        let lin = effectcraft_project::cineon_log_to_lin(v, self.black, self.white, self.gamma, self.rolloff);
         self.ib + (self.iw - self.ib) * lin
     }
     /// Linear → normalised code value.
@@ -123,7 +117,7 @@ impl Cineon {
             let w = 1.0 - k;
             lin = k - w * (1.0 - (lin - k) / w).max(1e-6).ln();
         }
-        lin = lin.max(0.0).powf(self.gamma.max(0.01) / 1.7);
+        lin = lin.max(0.0).powf(self.gamma.max(effectcraft_project::CINEON_MIN_GAMMA));
         let code = self.white + (lin * (1.0 - off) + off).max(1e-9).log10() * 0.6 / 0.002;
         code / 1023.0
     }
@@ -138,7 +132,7 @@ fn cineon(ctx: &EffectCtx, mut b: Buf) -> Buf {
         gamma: ctx.params.f("gamma") as f32,
         rolloff: ctx.params.f("highlightRolloff") as f32,
     };
-    let std = Cineon { black: 95.0, white: 685.0, ib: 0.0, iw: 1.0, gamma: 1.7, rolloff: c.rolloff };
+    let std = Cineon { black: 95.0, white: 685.0, ib: 0.0, iw: 1.0, gamma: 1.0, rolloff: c.rolloff };
     let kind = ctx.params.e("conversionType");
     b.img.map_straight(|v| {
         v.map(|x| match kind {
@@ -493,6 +487,31 @@ mod tests {
             assert!((back - v).abs() < 1e-3, "{code}: {back}");
         }
         assert!(c.log_to_lin(95.0 / 1023.0).abs() < 1e-4);
+    }
+
+    /// Interpret Footage ▸ Cineon Settings and the Cineon Converter's Log to Linear give the same
+    /// values for the same points, Gamma and Highlight Rolloff: at the default Gamma (1.7) and at
+    /// Gamma 1, which gives linear light (code 400 is 0.10251).
+    #[test]
+    fn cineon_converter_matches_interpret_footage() {
+        let codes = [0.0f32, 95.0, 250.0, 400.0, 560.0, 685.0, 800.0, 1023.0];
+        for (gamma, rolloff) in [(1.7, 20.0), (1.0, 0.0), (2.4, 50.0)] {
+            let mut img = Image::new(codes.len() as u32, 1);
+            for (x, code) in codes.iter().enumerate() {
+                let v = code / 1023.0;
+                img.set(x as u32, 0, [v, v, v, 1.0]);
+            }
+            let vals = [("conversionType", Value::Enum(1)), ("gamma", num(gamma)), ("highlightRolloff", num(rolloff))];
+            let out = run("ec.utility.cineon", &vals, img);
+            let settings = effectcraft_project::CineonSettings { log_conversion: true, gamma: gamma as f32, rolloff: rolloff as f32, ..Default::default() };
+            for (x, code) in codes.iter().enumerate() {
+                let footage = settings.convert(code / 1023.0);
+                let effect = out.img.data[x][0];
+                assert!((footage - effect).abs() < 1e-6, "gamma {gamma}, rolloff {rolloff}, code {code}: {footage} vs {effect}");
+            }
+        }
+        let linear = effectcraft_project::CineonSettings { gamma: 1.0, rolloff: 0.0, ..Default::default() };
+        assert!((linear.convert(400.0 / 1023.0) - 0.10251).abs() < 1e-4);
     }
 
     #[test]
