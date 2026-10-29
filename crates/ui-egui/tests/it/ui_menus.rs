@@ -512,3 +512,4 @@ fn layer_order_shortcuts_match_after_effects() {
     assert_eq!(order(&h), ["B", "C", "A"], "already at the front");
     chord(&mut h, "Cmd+Alt+Shift+ArrowDown");
     assert_eq!(order(&h), ["C", "A", "B"], "and to the back");
+}
