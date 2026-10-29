@@ -2,6 +2,7 @@
 
 mod audio_sample_positions;
 mod banding;
+mod h264_gpu_yuv;
 mod hevc_av1_roundtrip;
 #[cfg(not(target_arch = "wasm32"))]
 mod mov_audio_sample_positions;
