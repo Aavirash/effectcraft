@@ -795,12 +795,11 @@ fn display_name(app: &EffectcraftApp, l: &Layer) -> String {
 /// layer whose names contain `q` (lowercase), each with its enclosing groups. A matching group
 /// brings its whole contents.
 fn search_rows(l: &Layer, q: &str) -> Vec<Row> {
-    /// The row for a group in search results: depth, its effect's enabled flag, and the eye
-    /// switch for layer-style groups (not Blending Options).
+    /// The row for a group in search results: depth, its effect's enabled flag, and its eye
+    /// switch ([`eye_of`]).
     fn group_row(l: &Layer, g: &PropGroup, depth: usize, parent: &PropGroup) -> Row {
         let fx = matches!(g.kind, GroupKind::Effect { .. }).then_some(g.enabled);
-        let eye =
-            (parent.match_id == effectcraft_engine::project::styles::GROUP && g.match_id != effectcraft_engine::project::styles::BLENDING).then_some(g.enabled);
+        let eye = eye_of(parent, g);
         Row { layer: l.id, depth, kind: RowKind::Group { uid: g.uid, name: g.name.clone(), open: true, has_children: !g.children.is_empty(), fx, eye } }
     }
     /// Every visible child of `g` at `depth`, groups recursed into whole — a matching group
@@ -1235,6 +1234,14 @@ fn collect_props(g: &PropGroup, out: &mut Vec<u64>, f: &dyn Fn(&Property) -> boo
 /// in `open`, text animators list their selectors and properties directly (as in AE), and a
 /// shape group's inner Contents (AE's elided `ADBE Vectors Group`) is skipped so its items
 /// list directly under the group.
+/// The eye switch of group `g` inside `parent`, as in After Effects: layer styles (not Blending
+/// Options) and every item in a shape layer's Contents (#959), which the renderer skips when off.
+fn eye_of(parent: &PropGroup, g: &PropGroup) -> Option<bool> {
+    let style = parent.match_id == effectcraft_engine::project::styles::GROUP && g.match_id != effectcraft_engine::project::styles::BLENDING;
+    let shape_item = parent.match_id == "contents" && g.match_id != "transform";
+    (style || shape_item).then_some(g.enabled)
+}
+
 fn push_group(rows: &mut Vec<Row>, l: &Layer, g: &PropGroup, depth: usize, open: &std::collections::BTreeSet<u64>) {
     for c in &g.children {
         match c {
@@ -1250,9 +1257,7 @@ fn push_group(rows: &mut Vec<Row>, l: &Layer, g: &PropGroup, depth: usize, open:
             Node::Group(sg) => {
                 let o = open.contains(&sg.uid);
                 let fx = matches!(sg.kind, GroupKind::Effect { .. }).then_some(sg.enabled);
-                // Layer style groups have eye switches (not Blending Options).
-                let eye = (g.match_id == effectcraft_engine::project::styles::GROUP && sg.match_id != effectcraft_engine::project::styles::BLENDING)
-                    .then_some(sg.enabled);
+                let eye = eye_of(g, sg);
                 rows.push(Row {
                     layer: l.id,
                     depth,
@@ -3400,11 +3405,16 @@ fn group_switches(app: &mut EffectcraftApp, ui: &mut egui::Ui, g: &mut Rw, rc: &
         app.auto.add(&format!("timeline.group.{uid}.fx"), fr_, name);
     }
     if let Some(en) = eye {
-        // Layer style eye switch in the A/V column, like AE.
+        // A layer style's or shape item's eye switch in the A/V column, like AE.
         let er = Rect::from_center_size(pos2(cw.av + 10.0, cy), vec2(15.0, 15.0));
         lp.rect_stroke(er.shrink(1.5), 2.0, Stroke::new(1.0, t.separator), StrokeKind::Inside);
         if widgets::icon_toggle(ui, er, Icon::Eye, *en, &t, egui::Id::unique(("geye", uid)), Sense::click()).clicked() {
-            actions.push(("layer.style.toggle".into(), json!({"layer": layer.id.0, "style": uid})));
+            let style = layer.props.sub(effectcraft_engine::project::styles::GROUP).is_some_and(|s| s.find_group(*uid).is_some());
+            actions.push(if style {
+                ("layer.style.toggle".into(), json!({"layer": layer.id.0, "style": uid}))
+            } else {
+                ("prop.setGroupEnabled".into(), json!({"layer": layer.id.0, "prop": uid, "value": !*en}))
+            });
         }
         app.auto.add(&format!("timeline.group.{uid}.eye"), er, name);
     }
