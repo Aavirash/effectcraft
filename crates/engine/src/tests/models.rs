@@ -239,6 +239,10 @@ fn reloading_for_a_stroke_does_not_block_or_retry_a_failed_load() {
     let st = s.models.status(Task::Mask);
     assert!(st.busy.is_none(), "a failed model is not loaded again by every stroke");
     assert_eq!(st.error, failed);
+    s.poll_models();
+    let st = s.models.status(Task::Mask);
+    assert_eq!(st.error, failed, "polling must keep the actionable error until an explicit retry");
+    assert!(st.busy.is_none(), "a failed load must not restart on every poll");
     // an unloaded, not failed model loads on the worker: the call returns with the load still pending or done
     s.execute_checked("roto.model.select", json!({"id": "classical"})).unwrap();
     crate::effects::roto::set_model(None);

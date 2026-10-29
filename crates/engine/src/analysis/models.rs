@@ -193,11 +193,18 @@ impl Session {
             Task::Mask => &mut self.prefs.roto.model,
             Task::Face => &mut self.prefs.face.model,
         };
-        if slot != id {
+        let changed = slot != id;
+        if changed {
             *slot = id.to_string();
-            // a load still running for the previous choice must not activate when it finishes
-            set(self.models.lane(task), |s| s.generation = s.generation.wrapping_add(1));
         }
+        set(self.models.lane(task), |s| {
+            // A load still running for the previous choice must not activate or report an error.
+            if changed {
+                s.generation = s.generation.wrapping_add(1);
+            }
+            // Selecting the same model explicitly retries a failed load.
+            s.error = None;
+        });
     }
 
     /// Load (or drop) the models Settings chooses; called whenever settings change.
@@ -219,7 +226,7 @@ impl Session {
             }
             return;
         };
-        if st.active.as_deref() == Some(info.id) || st.busy.is_some() {
+        if st.active.as_deref() == Some(info.id) || st.busy.is_some() || st.error.is_some() {
             return;
         }
         let Some(path) = self.model_path(info) else {
@@ -228,7 +235,7 @@ impl Session {
         };
         let (face_slot, label) = (self.models.face_model.clone(), kind(task).label);
         let generation = st.generation;
-        spawn(&lane, label, format!("Loading {}…", info.name), wait, move |status| {
+        spawn(&lane, label, format!("Loading {}…", info.name), wait, Some(generation), move |status| {
             let m = load_file(&path, info.id)?;
             // the choice changed while this loaded: drop the model, `poll_models` loads the new choice
             if !activate_if_current(status, &face_slot, task, m, generation) {
@@ -325,11 +332,11 @@ impl Session {
             self.apply_model(Task::Mask, wait);
         }
         let st = self.models.status(Task::Mask);
-        if let Some(e) = st.error {
-            return Err(format!("{} failed to load: {e}", info.name));
-        }
         if st.active.as_deref() == Some(info.id) {
             return Ok(());
+        }
+        if let Some(e) = st.error {
+            return Err(format!("{} failed to load: {e}", info.name));
         }
         Err(format!("{} is still loading: try again when it is ready, or pass wait: true", info.name))
     }
@@ -397,6 +404,7 @@ fn spawn(
     label: &'static str,
     what: String,
     wait: bool,
+    generation: Option<u64>,
     job: impl FnOnce(&Arc<Mutex<Status>>) -> std::result::Result<String, String> + Send + 'static,
 ) {
     if cfg!(target_arch = "wasm32") {
@@ -412,6 +420,11 @@ fn spawn(
         let r = job(&st);
         set(&st, |s| {
             s.busy = None;
+            if generation.is_some_and(|g| g != s.generation) {
+                // Keep a completion marker so polling starts the newly selected model.
+                s.done = Some((String::new(), false));
+                return;
+            }
             match r {
                 Ok(msg) => s.done = Some((msg, false)),
                 Err(e) => {
@@ -543,6 +556,8 @@ fn install(s: &mut Session, p: &Value, task: Task) -> Result<Value> {
     };
     let dest = install_bytes(&dir, m, &bytes).map_err(|e| bad(&cmd, e))?;
     let wait = b_p(p, "wait").unwrap_or(false);
+    // Installing verified weights is an explicit retry, like selecting the model again.
+    set(s.models.lane(task), |s| s.error = None);
     s.apply_model(task, wait);
     if wait {
         waited(s, task, &cmd)?;
@@ -560,7 +575,7 @@ fn download(s: &mut Session, p: &Value, task: Task) -> Result<Value> {
     }
     let size = if m.size >= 10_000_000 { format!("{} MB", m.size / 1_000_000) } else { format!("{:.1} MB", m.size as f64 / 1e6) };
     let wait = b_p(p, "wait").unwrap_or(false);
-    spawn(s.models.lane(task), k.label, format!("Downloading {} ({size})…", m.name), wait, move |_| {
+    spawn(s.models.lane(task), k.label, format!("Downloading {} ({size})…", m.name), wait, None, move |_| {
         std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
         let tmp = dir.join(format!("{}.part", m.file_name));
         let out = std::process::Command::new("curl")
@@ -666,6 +681,73 @@ pub fn specs() -> Vec<CommandSpec> {
 #[cfg(test)]
 mod availability_tests {
     use super::*;
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn stale_model_worker_completions_do_not_poison_the_current_choice() {
+        for failure in [false, true] {
+            let lane = Arc::new(Mutex::new(Status::default()));
+            spawn(&lane, "Roto Brush", "Loading old choice".into(), true, Some(0), move |status| {
+                set(status, |s| s.generation += 1);
+                if failure { Err("old choice failed".into()) } else { Ok("old choice loaded".into()) }
+            });
+            let status = lane.lock().unwrap();
+            assert!(status.busy.is_none());
+            assert!(status.error.is_none(), "an obsolete worker must not block the current model");
+            assert_eq!(status.done, Some((String::new(), false)), "polling must still retry the current choice");
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn current_load_and_download_failures_remain_actionable() {
+        for generation in [Some(0), None] {
+            let lane = Arc::new(Mutex::new(Status::default()));
+            spawn(&lane, "Roto Brush", "Working".into(), true, generation, move |status| {
+                if generation.is_none() {
+                    set(status, |s| s.generation += 1);
+                }
+                Err("current operation failed".into())
+            });
+            let status = lane.lock().unwrap();
+            assert!(status.busy.is_none());
+            assert_eq!(status.error.as_deref(), Some("current operation failed"));
+            assert_eq!(status.done, Some(("Roto Brush model: current operation failed".into(), true)));
+        }
+    }
+
+    #[test]
+    fn choosing_a_model_clears_its_previous_load_error_even_on_retry() {
+        let mut session = Session::default();
+        for id in ["mobilesam", "mobilesam", seg::CLASSICAL] {
+            let previous = session.chosen_model(Task::Mask).to_string();
+            let generation = session.models.status(Task::Mask).generation;
+            set(session.models.lane(Task::Mask), |s| s.error = Some("previous load failed".into()));
+            session.choose_model(Task::Mask, id);
+            let status = session.models.status(Task::Mask);
+            assert!(status.error.is_none());
+            assert_eq!(status.generation, generation + u64::from(previous != id));
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn selected_active_model_is_ready_despite_an_unrelated_download_error() {
+        let dir = std::env::temp_dir().join(format!("ec-model-ready-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let info = seg::info("mobilesam").unwrap();
+        let file = std::fs::File::create(dir.join(info.file_name)).unwrap();
+        file.set_len(info.size).unwrap();
+        drop(file);
+        let mut session = Session { models_dir: Some(dir.clone()), ..Default::default() };
+        session.choose_model(Task::Mask, info.id);
+        set(session.models.lane(Task::Mask), |s| {
+            s.active = Some(info.id.into());
+            s.error = Some("another model could not be downloaded".into());
+        });
+        assert_eq!(session.ensure_roto_model(false), Ok(()));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn browser_models_exclude_native_trackers_and_keep_portable_models() {
