@@ -15,6 +15,32 @@ fn session(tag: &str) -> (Session, std::path::PathBuf) {
     (Session { config: Some(store), ..Default::default() }, d)
 }
 
+#[test]
+fn model_list_and_direct_selection_agree_on_target_availability() {
+    super::roto::hold_roto_cache_test_lock();
+    let mut s = Session::default();
+    let list = s.execute_checked("roto.models", json!({})).unwrap();
+    let models = list["models"].as_array().unwrap();
+    for id in ["sam2.1-hiera-tiny", "sam2.1-hiera-small", "sam2.1-hiera-base-plus", "sam2.1-hiera-large"] {
+        let chosen = s.chosen_model(Task::Mask).to_string();
+        let generation = s.models.status(Task::Mask).generation;
+        let selected = s.execute_checked("roto.model.select", json!({"id": id}));
+        if cfg!(target_arch = "wasm32") {
+            assert!(!models.iter().any(|m| m["id"] == id));
+            assert!(selected.is_err());
+            assert_eq!(s.chosen_model(Task::Mask), chosen);
+            assert_eq!(s.models.status(Task::Mask).generation, generation, "rejection must not alter model state");
+        } else {
+            assert!(models.iter().any(|m| m["id"] == id));
+            selected.unwrap();
+            assert_eq!(s.chosen_model(Task::Mask), id);
+        }
+    }
+    s.execute_checked("roto.model.select", json!({"id": "classical"})).unwrap();
+    assert_eq!(s.chosen_model(Task::Mask), "classical");
+    assert!(models.iter().any(|m| m["id"] == "mobilesam"));
+}
+
 /// Poll until `task`'s model is in use (or a few seconds pass).
 fn wait_loaded(s: &mut Session, task: Task) {
     for _ in 0..400 {
@@ -37,7 +63,7 @@ fn models_are_listed_chosen_and_verified() {
         let list = s.execute_checked(&format!("{prefix}.models"), json!({})).unwrap();
         let ids: Vec<&str> = list["models"].as_array().unwrap().iter().map(|m| m["id"].as_str().unwrap()).collect();
         // Roto Brush also offers SAM 2.1 in four sizes (video trackers; see crates/sam2).
-        let expect: Vec<&str> = if task == Task::Mask {
+        let expect: Vec<&str> = if task == Task::Mask && !cfg!(target_arch = "wasm32") {
             vec!["classical", model, "sam2.1-hiera-tiny", "sam2.1-hiera-small", "sam2.1-hiera-base-plus", "sam2.1-hiera-large"]
         } else {
             vec!["classical", model]

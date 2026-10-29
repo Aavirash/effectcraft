@@ -449,9 +449,17 @@ fn install_bytes(dir: &Path, m: &ModelInfo, bytes: &[u8]) -> std::result::Result
     Ok(path)
 }
 
+fn models_for_platform(task: Task, wasm: bool) -> impl Iterator<Item = &'static ModelInfo> {
+    seg::models(task).filter(move |m| !wasm || !m.id.starts_with("sam2.1-hiera-"))
+}
+
+fn target_models(task: Task) -> impl Iterator<Item = &'static ModelInfo> {
+    models_for_platform(task, cfg!(target_arch = "wasm32"))
+}
+
 fn model_p(p: &Value, cmd: &str, task: Task) -> Result<&'static ModelInfo> {
     let id = str_p(p, "id").ok_or_else(|| bad(cmd, "missing `id`"))?;
-    seg::info(id).filter(|m| m.task == task).ok_or_else(|| bad(cmd, format!("unknown model `{id}` (see {}.models)", kind(task).prefix)))
+    target_models(task).find(|m| m.id == id).ok_or_else(|| bad(cmd, format!("unknown model `{id}` (see {}.models)", kind(task).prefix)))
 }
 
 fn list(s: &mut Session, task: Task) -> Result<Value> {
@@ -467,7 +475,7 @@ fn list(s: &mut Session, task: Task) -> Result<Value> {
         "selected": chosen == seg::CLASSICAL,
         "active": st.active.is_none(),
     })];
-    for m in seg::models(task) {
+    for m in target_models(task) {
         #[cfg(not(target_arch = "wasm32"))]
         let (recommended, hint) = (effectcraft_sam2::mask::recommended().id == m.id, effectcraft_sam2::mask::hint(m.id));
         #[cfg(target_arch = "wasm32")]
@@ -528,7 +536,9 @@ fn install(s: &mut Session, p: &Value, task: Task) -> Result<Value> {
         Some(_) => model_p(p, &cmd, task)?,
         None => {
             let h = seg::sha256::hex(&bytes);
-            seg::models(task).find(|m| m.sha256 == h).ok_or_else(|| bad(&cmd, "this file is not a published model in the registry (SHA-256 differs)"))?
+            target_models(task)
+                .find(|m| m.sha256 == h)
+                .ok_or_else(|| bad(&cmd, "this file is not a supported published model in the registry (SHA-256 differs)"))?
         }
     };
     let dest = install_bytes(&dir, m, &bytes).map_err(|e| bad(&cmd, e))?;
@@ -651,4 +661,20 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         cmd!("face.model.remove", "Remove Face Tracking Model", [], None, "{id}", always, |s, p| remove(s, p, Task::Face)),
     ]
+}
+
+#[cfg(test)]
+mod availability_tests {
+    use super::*;
+
+    #[test]
+    fn browser_models_exclude_native_trackers_and_keep_portable_models() {
+        let browser: Vec<_> = models_for_platform(Task::Mask, true).map(|m| m.id).collect();
+        assert_eq!(browser, ["mobilesam"]);
+        let desktop: Vec<_> = models_for_platform(Task::Mask, false).map(|m| m.id).collect();
+        assert_eq!(desktop, ["mobilesam", "sam2.1-hiera-tiny", "sam2.1-hiera-small", "sam2.1-hiera-base-plus", "sam2.1-hiera-large"]);
+        for wasm in [false, true] {
+            assert_eq!(models_for_platform(Task::Face, wasm).map(|m| m.id).collect::<Vec<_>>(), ["mediapipe-face"]);
+        }
+    }
 }
