@@ -260,25 +260,25 @@ fn clipboard_and_paste_formatting() {
 }
 
 #[test]
-fn type_tool_layers_point_box_and_empty_cleanup() {
+fn type_tool_layers_point_box_and_empty_layer_is_kept() {
     let mut s = Session::default();
     s.execute("comp.new", json!({"name": "C", "width": 640, "height": 360, "duration": 4})).unwrap();
     let t = s.execute("layer.newText", json!({"text": "", "position": [100, 200], "justify": "left", "edit": true})).unwrap()["layer"].as_u64().unwrap();
     assert_eq!(s.state.text_edit.as_ref().map(|e| e.layer.0), Some(t));
-    // Leaving an untouched Type-tool layer deletes it.
+    // Leaving an untouched Type-tool layer keeps it, as After Effects does.
     s.execute("text.endEdit", json!({})).unwrap();
-    assert!(s.active_comp().unwrap().layers.is_empty());
+    assert_eq!(s.active_comp().unwrap().layers.len(), 1, "an empty Type-tool layer is kept, as in AE");
     let b = s.execute("layer.newText", json!({"text": "", "box": [40, 50, 300, 120], "edit": true})).unwrap()["layer"].as_u64().unwrap();
     s.execute("text.insert", json!({"text": "Boxed"})).unwrap();
     let d = doc(&s, b);
     assert_eq!(d.box_size, Some([300.0, 120.0]));
     assert_eq!(d.box_pos, [-150.0, -60.0]);
-    let l = s.active_comp().unwrap().layers[0].clone();
+    let l = s.active_comp().unwrap().layers.iter().find(|l| l.id.0 == b).expect("the boxed layer").clone();
     assert_eq!(l.name, "Boxed", "named after its text");
     let pos = l.props.prop("transform/position").unwrap().value.as_vec3();
     assert_eq!([pos[0], pos[1]], [190.0, 110.0]);
     s.execute("text.endEdit", json!({})).unwrap();
-    assert_eq!(s.active_comp().unwrap().layers.len(), 1);
+    assert_eq!(s.active_comp().unwrap().layers.len(), 2, "both text layers stay, the empty one included");
     // Resizing the box (layer space) is an attribute too.
     s.execute("layer.setText", json!({"layer": b, "box": [-100, -60, 200, 120]})).unwrap();
     assert_eq!(doc(&s, b).box_size, Some([200.0, 120.0]));
@@ -1202,7 +1202,7 @@ fn deselect_all_ends_the_open_edit() {
 }
 
 #[test]
-fn deselect_all_discards_an_empty_type_tool_layer() {
+fn deselect_all_keeps_an_empty_type_tool_layer() {
     let (mut s, _keep) = session("Hello");
     let new = s.execute("layer.newText", json!({"text": "", "position": [80.0, 80.0], "edit": true})).unwrap()["layer"].as_u64().unwrap();
     assert!(
@@ -1214,7 +1214,5 @@ fn deselect_all_discards_an_empty_type_tool_layer() {
     s.execute("edit.deselectAll", json!({})).unwrap();
     assert!(s.state.text_edit.is_none());
     assert!(s.state.selected_layers.is_empty());
-    assert_eq!(count(&s), before - 1, "a Type-tool layer left empty is removed, as text.endEdit does");
-    s.execute("edit.undo", json!({})).unwrap();
-    assert_eq!(count(&s), before, "that removal is one undo step of its own, as on text.endEdit");
+    assert_eq!(count(&s), before, "an empty Type-tool layer is kept, as in After Effects");
 }

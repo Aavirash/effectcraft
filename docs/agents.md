@@ -540,7 +540,7 @@ indices): character attributes
 3. `layer.setText {"range":[6,11], "size":40, "fill":"#ff5500"}` styles the selection (the
    Character panel does the same); with an empty range it sets the style the next typed text takes.
 4. `edit.copy`, `edit.paste`, `edit.pasteTextMatchFormatting` and `edit.pasteTextFormattingOnly`
-   work on the selected text; `text.endEdit` commits (an empty Type-tool layer is removed).
+   work on the selected text; `text.endEdit` commits (an empty Type-tool layer is kept, as After Effects does).
 
 Fonts: `text.fonts` (MCP `list_fonts`) lists every family a text layer can use, bundled and installed, with its
 styles, origin (`bundled`, `system`, `user`), `variable` (it has variation axes) and own-language name
