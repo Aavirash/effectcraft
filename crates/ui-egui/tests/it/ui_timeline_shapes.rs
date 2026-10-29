@@ -1,7 +1,8 @@
 //! Timeline rows for shape layers, masks and keyframing: the Contents "Add:" menu and the Classic
 //! 3D "Change Renderer…" row (#206), Alt+Shift+P revealing the key it adds and clicks below the
-//! layers deselecting them (#205), Mask Feather's linked values (#203), and copying shape items
-//! between shape layers (#227), and Ctrl+V of SVG markup making a shape layer (#738).
+//! layers deselecting them (#205), Mask Feather's linked values (#203) and shape Size's chain link
+//! (#2489), copying shape items between shape layers (#227), and Ctrl+V of SVG markup making a shape
+//! layer (#738).
 
 use effectcraft_engine::Session;
 use effectcraft_engine::project::LayerId;
@@ -170,6 +171,52 @@ fn mask_feather_values_are_linked_and_not_negative() {
     click(&mut h, &format!("timeline.prop.{uid}.link"));
     type_value(&mut h, 1, "7");
     assert_eq!(feather(&h).1, vec![0.0, 7.0], "unlinked");
+}
+
+/// #2489: Rectangle and Ellipse Path Size get the Constrain Proportions chain, off by default:
+/// unlinked, W moves alone; linked, H follows W in proportion. Scale on the same layer still starts
+/// linked.
+#[test]
+fn shape_size_chain_starts_unlinked_and_keeps_the_ratio_when_linked() {
+    let mut s = session();
+    let l = s.execute("layer.newShape", json!({"kind": "rect", "size": [100, 50]})).unwrap()["layer"].as_u64().unwrap();
+    let o = s.execute("layer.newShape", json!({"kind": "ellipse", "size": [60, 30]})).unwrap()["layer"].as_u64().unwrap();
+    let uid = |s: &Session, l: u64, path: &str| s.active_comp().unwrap().layer(LayerId(l)).unwrap().props.prop(path).unwrap().uid;
+    let (size, oval, scale) =
+        (uid(&s, l, "contents/group/contents/rect/size"), uid(&s, o, "contents/group/contents/ellipse/size"), uid(&s, l, "transform/scale"));
+    let mut h = harness(s);
+    for (layer, props) in [(l, vec![size, scale]), (o, vec![oval])] {
+        h.state_mut().ui.timeline.open_layers.insert(layer);
+        h.state_mut().ui.timeline.layer_reveal.insert(layer, vec!["props".into()]);
+        h.state_mut().ui.timeline.reveal_props.extend(props);
+    }
+    h.run_steps(2);
+    let value = |h: &Harness<'_, EffectcraftApp>, l: u64, uid: u64| {
+        h.state().session.active_comp().unwrap().layer(LayerId(l)).unwrap().props.prop(&format!("@{uid}")).unwrap().value.components()
+    };
+    let type_value = |h: &mut Harness<'_, EffectcraftApp>, uid: u64, d: usize, v: &str| {
+        click(h, &format!("timeline.prop.{uid}.value.{d}"));
+        h.input_mut().events.push(Event::Text(v.into()));
+        h.step();
+        h.input_mut().events.push(Event::Key { key: Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
+        h.run_steps(3);
+    };
+    type_value(&mut h, size, 0, "80");
+    assert_eq!(value(&h, l, size), vec![80.0, 50.0], "a new rectangle's Size starts unlinked");
+    type_value(&mut h, oval, 1, "40");
+    assert_eq!(value(&h, o, oval), vec![60.0, 40.0], "a new ellipse's Size starts unlinked");
+    click(&mut h, &format!("timeline.prop.{size}.link"));
+    type_value(&mut h, size, 0, "160");
+    assert_eq!(value(&h, l, size), vec![160.0, 100.0], "linked, H follows W in proportion");
+    click(&mut h, &format!("timeline.prop.{size}.link"));
+    type_value(&mut h, size, 0, "40");
+    assert_eq!(value(&h, l, size), vec![40.0, 100.0], "unlinked again, H stays");
+    // The ellipse's Size links the same way: 60x40 linked, W to 90 makes H 60.
+    click(&mut h, &format!("timeline.prop.{oval}.link"));
+    type_value(&mut h, oval, 0, "90");
+    assert_eq!(value(&h, o, oval), vec![90.0, 60.0], "linked, the ellipse keeps its ratio too");
+    type_value(&mut h, scale, 0, "50");
+    assert_eq!(value(&h, l, scale)[..2], [50.0, 50.0], "Scale still starts linked");
 }
 
 /// Two shape layers, "Rect" (Rectangle 1) and "Oval" (Ellipse 1, selected): (harness with Rect's

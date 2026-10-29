@@ -87,6 +87,8 @@ pub fn uri_decode(s: &str) -> String {
     while i < b.len() {
         if b[i] == b'%'
             && i + 2 < b.len()
+            && b[i + 1].is_ascii_hexdigit()
+            && b[i + 2].is_ascii_hexdigit()
             && let Ok(v) = u8::from_str_radix(std::str::from_utf8(&b[i + 1..i + 3]).unwrap_or("zz"), 16)
         {
             out.push(v);
@@ -611,4 +613,16 @@ fn primitive(d: &Doc, p: &Value, materials: &[Material]) -> Result<Option<Primit
         prim.compute_tangents();
     }
     Ok(Some(prim))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::uri_decode;
+
+    #[test]
+    fn uri_decode_rejects_signed_hex_pair() {
+        assert_eq!(uri_decode("a%+1b"), "a%+1b");
+        assert_eq!(uri_decode("a%-1b"), "a%-1b");
+        assert_eq!(uri_decode("a%41b"), "aAb");
+    }
 }
