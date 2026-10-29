@@ -296,6 +296,9 @@ fn set_key(s: &mut Session, p: &Value) -> Result<Value> {
     let base = KeyTimeBase::from_params(p, "keys.set")?;
     let comp = s.project.comp(cid).ok_or(EngineError::NoComp)?;
     let layer = comp.layer(lid).ok_or(EngineError::NoComp)?;
+    if layer.switches.locked {
+        return Err(bad("keys.set", "the layer is locked"));
+    }
     let t = key_time(layer, comp.frame_rate, p, "time", base, "keys.set", false)?.ok_or_else(|| bad("keys.set", "missing `time` (layer time by default)"))?;
     let new_t = key_time(layer, comp.frame_rate, p, "newTime", base, "keys.set", true)?;
     let value = p.get("value").cloned();

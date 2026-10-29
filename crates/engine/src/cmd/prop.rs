@@ -1046,6 +1046,10 @@ fn delete_keys(s: &mut Session, _: &Value) -> Result<Value> {
         let comp = proj.comp_mut(cid).ok_or(EngineError::NoComp)?;
         let mut removed = 0usize;
         for k in &sel {
+            // A layer locked after its keys were selected keeps them (the selection stays too).
+            if comp.layer(k.layer).is_some_and(|l| l.switches.locked) {
+                continue;
+            }
             if let Some(pr) = comp.layer_mut(k.layer).and_then(|l| l.props.find_mut(k.prop))
                 && let Some(i) = key_at(&pr.keys, k.time)
             {
@@ -1056,7 +1060,7 @@ fn delete_keys(s: &mut Session, _: &Value) -> Result<Value> {
                 removed += 1;
             }
         }
-        st.selected_keys.clear();
+        st.selected_keys.retain(|k| comp.layer(k.layer).is_some_and(|l| l.switches.locked));
         // The keys actually removed: a selected key that is gone (or listed twice) isn't counted,
         // so a caller can tell that a delete changed nothing.
         Ok(json!(removed))

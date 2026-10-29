@@ -43,3 +43,24 @@ fn delete_keys_reports_zero_when_no_selected_key_exists() {
     assert_eq!(removed, json!(0));
     assert_eq!(keys_of(&s, layer, prop), keys);
 }
+
+/// A layer locked after its keys were selected keeps them: Delete and Edit Value leave them alone.
+#[test]
+fn a_locked_layers_keys_cannot_be_deleted_or_edited() {
+    let (mut s, layer, prop) = setup();
+    let keys = keys_of(&s, layer, prop);
+    s.state.selected_keys = keys.clone();
+    s.execute_checked("layer.setSwitch", json!({"layers": [layer], "switch": "locked", "value": true})).unwrap();
+    let removed = s.execute_checked("keys.delete", json!({})).unwrap();
+    assert_eq!(removed, json!(0));
+    assert_eq!(keys_of(&s, layer, prop), keys);
+    assert_eq!(s.state.selected_keys, keys, "the selection stays");
+    let e = s.execute("keys.set", json!({"layer": layer, "prop": prop, "time": 0, "value": 90})).unwrap_err().to_string();
+    assert!(e.contains("locked"), "{e}");
+    let value = s.active_comp().unwrap().layer(LayerId(layer)).unwrap().props.find(prop).unwrap().keys[0].value.as_f64();
+    assert_eq!(value, 0.0);
+    // Unlocked again, both work.
+    s.execute_checked("layer.setSwitch", json!({"layers": [layer], "switch": "locked", "value": false})).unwrap();
+    s.execute_checked("keys.set", json!({"layer": layer, "prop": prop, "time": 0, "value": 90})).unwrap();
+    assert_eq!(s.execute_checked("keys.delete", json!({})).unwrap(), json!(3));
+}

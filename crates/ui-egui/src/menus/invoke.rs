@@ -218,6 +218,10 @@ pub fn invoke(app: &mut EffectcraftApp, ctx: &egui::Context, id: &str, params: V
     // leaves the active composition open (it used to close the composition next to it).
     if id == "file.close" && params.as_object().is_some_and(|p| p.is_empty()) && app.ui.focused == PanelKind::RenderQueue {
         app.close_panel(PanelKind::RenderQueue);
+        // The focus goes to a panel that is still there, so the next Close acts on the composition
+        // instead of on the queue that is gone.
+        app.ui.focused =
+            [PanelKind::Timeline, PanelKind::Composition, PanelKind::Project].into_iter().find(|p| app.ui.dock.is_visible(*p)).unwrap_or(PanelKind::Project);
         return Ok(Value::Null);
     }
     // Edit ▸ Paste with SVG markup on the system clipboard pastes it as a shape layer (After

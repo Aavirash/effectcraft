@@ -57,6 +57,22 @@ fn brand_and_home(app: &mut EffectcraftApp, ui: &mut egui::Ui, p: &egui::Painter
     x + 6.0
 }
 
+/// The `shape.newShape` parameters for a shape that fills a `w` × `h` composition with `tool`: a new
+/// layer, painted with the Tools bar's Fill and Stroke. A polygon or star is round, so it takes the
+/// shorter side; the other kinds take the whole frame.
+pub(crate) fn comp_sized_shape_params(tool: Tool, w: u32, h: u32) -> serde_json::Value {
+    let kind = crate::panels::viewer::shape_kind(tool);
+    let (w, h) = (f64::from(w), f64::from(h));
+    let size = if matches!(kind, "polygon" | "star") { [w.min(h); 2] } else { [w, h] };
+    json!({"kind": kind, "size": size, "position": [w / 2.0, h / 2.0], "newLayer": true})
+}
+
+/// Make the shape layer that fills the composition for a double-clicked shape `tool`.
+fn comp_sized_shape(app: &mut EffectcraftApp, ctx: &egui::Context, tool: Tool) -> Result<serde_json::Value, String> {
+    let (w, h) = app.session.active_comp().map(|c| (c.width, c.height)).ok_or("no composition is open")?;
+    crate::menus::invoke(app, ctx, "shape.newShape", comp_sized_shape_params(tool, w, h))
+}
+
 /// The tool slots (with group separators after camera tools and pan-behind); returns the x after them.
 fn tool_slots(app: &mut EffectcraftApp, ui: &mut egui::Ui, p: &egui::Painter, mut x: f32, cy: f32) -> f32 {
     let t = app.tokens;
@@ -114,8 +130,7 @@ fn tool_slot(app: &mut EffectcraftApp, ui: &mut egui::Ui, p: &egui::Painter, si:
     // backgrounds, mattes and overlays (as After Effects does).
     if cur.is_shape()
         && resp.double_clicked()
-        && let Some((w, h)) = app.session.active_comp().map(|c| (c.width, c.height))
-        && let Err(e) = crate::menus::invoke(app, ui.ctx(), "layer.newShape", json!({"kind": crate::panels::viewer::shape_kind(cur), "size": [w, h]}))
+        && let Err(e) = comp_sized_shape(app, ui.ctx(), cur)
     {
         app.ui.status = e;
     }
@@ -842,5 +857,47 @@ mod tests {
         assert_eq!(app.ui.slot_tools[10], Tool::TypeVertical);
         frame(&mut app, &ctx, 2.1, vec![]);
         assert!(!app.auto.elements.iter().any(|w| w.id == "tools.select.TypeVertical"));
+    }
+
+    /// A polygon or star fills the shorter side; the other kinds fill the frame; all make a new layer.
+    #[test]
+    fn a_comp_sized_shape_fits_the_frame_for_every_kind() {
+        for (tool, size) in [
+            (Tool::Rectangle, [1920.0, 1080.0]),
+            (Tool::RoundedRect, [1920.0, 1080.0]),
+            (Tool::Ellipse, [1920.0, 1080.0]),
+            (Tool::Polygon, [1080.0, 1080.0]),
+            (Tool::Star, [1080.0, 1080.0]),
+        ] {
+            let p = comp_sized_shape_params(tool, 1920, 1080);
+            assert_eq!(p["size"], json!(size), "{tool:?}");
+            assert_eq!(p["position"], json!([960.0, 540.0]));
+            assert_eq!(p["newLayer"], json!(true));
+        }
+    }
+
+    /// The double-click shape takes the Tools bar's Fill, and is a new layer even with a shape layer
+    /// selected (not a group in that layer).
+    #[test]
+    fn the_double_clicked_shape_uses_the_toolbar_paint_on_a_new_layer() {
+        let mut s = effectcraft_engine::Session::default();
+        s.execute("comp.new", json!({"width": 400, "height": 300, "duration": 2})).unwrap();
+        let first = s.execute("layer.newShape", json!({"kind": "rect"})).unwrap()["layer"].as_u64().unwrap();
+        s.execute("shape.toolOptions", json!({"fill": "#00ff00", "stroke": false})).unwrap();
+        let mut app = EffectcraftApp::new(s);
+        let ctx = egui::Context::default();
+        assert_eq!(app.session.state.selected_layers.first().map(|l| l.0), Some(first), "a shape layer is selected");
+        comp_sized_shape(&mut app, &ctx, Tool::Star).unwrap();
+        let comp = app.session.active_comp().unwrap();
+        assert_eq!(comp.layers.len(), 2, "a new layer, not a group in the selected one");
+        let layer = comp.layers.iter().find(|l| l.id.0 != first).unwrap();
+        let mut fill = None;
+        layer.props.walk("", &mut |_, pr| {
+            if fill.is_none() && matches!(pr.value, effectcraft_engine::keyframe::Value::Color(_)) {
+                fill = Some(pr.value.clone());
+            }
+        });
+        let fill = fill.expect("a fill colour");
+        assert_eq!(fill, effectcraft_engine::keyframe::Value::Color([0.0, 1.0, 0.0, 1.0]), "the Tools bar's Fill, not the default blue");
     }
 }

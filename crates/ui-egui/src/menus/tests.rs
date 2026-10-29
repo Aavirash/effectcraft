@@ -431,6 +431,10 @@ fn cmd_w_in_the_render_queue_closes_the_queue_not_the_comp() {
     assert!(!app.ui.dock.is_visible(PanelKind::RenderQueue));
     assert_eq!(app.session.state.active_comp.map(|c| c.0), a);
     assert_eq!(app.session.state.open_comps.len(), 1);
+    // The focus left the closed queue: the next Close closes the composition.
+    assert_ne!(app.ui.focused, PanelKind::RenderQueue);
+    invoke(&mut app, &ctx, "file.close", json!({})).unwrap();
+    assert_eq!(app.session.state.open_comps.len(), 0, "a second Close acts on the composition");
 }
 
 #[test]

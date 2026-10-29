@@ -318,7 +318,9 @@ fn new_shape(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let pos = position_p(p, c)?.unwrap_or([comp.width as f64 / 2.0, comp.height as f64 / 2.0]);
     let paint = paint_p(p, &s.state.shape_tool, c)?;
-    let target = draw_target(s, &comp, p, c)?;
+    // `newLayer` makes a layer of its own even with a shape layer selected (a shape that fills the
+    // comp for a background or matte, whatever is selected).
+    let target = if b_p(p, "newLayer") == Some(true) { None } else { draw_target(s, &comp, p, c)? };
     // In the target layer's space: the centre maps through the layer's transform, the size by
     // its scale.
     let (centre, size) = match target.and_then(|l| comp.layer(l)) {
@@ -374,7 +376,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Shape Tool",
             [],
             None,
-            "{layer?, kind?: rect|rounded|ellipse|polygon|star, size? [w,h], position? [x,y] (the centre), space?: comp|layer, name? (a new layer's), fill?, fillType?, fillBlend?, fillOpacity?, stroke?, strokeType?, strokeBlend?, strokeOpacity?, strokeWidth? (default the Tools bar's, shape.toolOptions)} → {layer, group}",
+            "{layer?, newLayer? (a new shape layer even with a shape layer selected), kind?: rect|rounded|ellipse|polygon|star, size? [w,h], position? [x,y] (the centre), space?: comp|layer, name? (a new layer's), fill?, fillType?, fillBlend?, fillOpacity?, stroke?, strokeType?, strokeBlend?, strokeOpacity?, strokeWidth? (default the Tools bar's, shape.toolOptions)} → {layer, group}",
             has_comp,
             new_shape
         ),

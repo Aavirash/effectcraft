@@ -573,48 +573,8 @@ pub(crate) fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, p: &egui::Painte
                 ctx.data_mut(|dd| dd.insert_temp(drag_id, false));
                 actions.push(("__endMerge".into(), json!({})));
             }
-            // Right-click: the Timeline's key menu, for the commands that apply from the Graph Editor.
-            kresp.context_menu(|ui| {
-                let editable_value = matches!(key.value, Value::Scalar(_) | Value::Vec2(_) | Value::Vec3(_));
-                for (lbl, cmd, params) in [
-                    ("Edit Value…", "keys.set", kjson.clone()),
-                    ("-", "", json!({})),
-                    ("Copy", "keys.copy", json!({})),
-                    ("Paste", "keys.paste", json!({})),
-                    ("-", "", json!({})),
-                    ("Select Equal Keyframes", "keys.selectEqual", json!({})),
-                    ("Select Previous Keyframes", "keys.selectPrevious", json!({})),
-                    ("Select Following Keyframes", "keys.selectFollowing", json!({})),
-                    ("-", "", json!({})),
-                    ("Toggle Hold Keyframe", "keys.toggleHold", json!({})),
-                    ("Rove Across Time", "keys.interpolation", json!({"roving": !key.roving})),
-                    ("-", "", json!({})),
-                    ("Easy Ease", "keys.easyEase", json!({})),
-                    ("Easy Ease In", "keys.easyEaseIn", json!({})),
-                    ("Easy Ease Out", "keys.easyEaseOut", json!({})),
-                    ("-", "", json!({})),
-                    ("Linear", "keys.interpolation", json!({"interpolation": "linear"})),
-                    ("Bezier", "keys.interpolation", json!({"interpolation": "bezier"})),
-                    ("Auto Bezier", "keys.interpolation", json!({"interpolation": "autoBezier"})),
-                    ("-", "", json!({})),
-                    ("Delete", "keys.delete", json!({})),
-                ] {
-                    if lbl == "-" {
-                        ui.separator();
-                        continue;
-                    }
-                    if lbl == "Rove Across Time" && !c.prop.spatial {
-                        continue;
-                    }
-                    if lbl == "Edit Value…" && !editable_value {
-                        continue;
-                    }
-                    if ui.button(lbl).clicked() {
-                        actions.push((cmd.into(), params));
-                        ui.close();
-                    }
-                }
-            });
+            // Right-click: the Timeline's key menu, with the same commands.
+            crate::widgets::context_menu(&kresp, |ui| super::timeline::key_menu(ui, app, c.layer, c.prop, key, k.sel, actions));
         }
     }
 
