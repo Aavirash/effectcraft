@@ -389,7 +389,7 @@ impl<'a> Cx<'a> {
             return None;
         }
         let om = self.job.output;
-        let scale = self.job.settings.resolution.clamp(0.01, 4.0);
+        let scale = self.job.settings.effective_scale(comp);
         let size = |n: u32| ((n as f64 * scale).round() as u32).max(1);
         if om.resize.enabled || (size(comp.width), size(comp.height)) != (w, h) || om.crop.edges(w, h, scale) != (0, 0, 0, 0) {
             return None;
