@@ -760,10 +760,6 @@ pub struct Crop {
     pub right: i32,
 }
 
-/// Bound for a converted ROI coordinate in pixels: well above any valid edge (30 000 px at scale 4.0
-/// is 120 000) yet small enough that `frame size - edge` never comes near the i64 or i32 limits.
-const ROI_EDGE_LIMIT: f64 = 1_000_000.0;
-
 impl Crop {
     /// Edges `(top, left, bottom, right)` in pixels of a `w`×`h` frame rendered at `scale`.
     pub fn edges(&self, w: u32, h: u32, scale: f64) -> (i32, i32, i32, i32) {
@@ -773,18 +769,18 @@ impl Crop {
         if self.use_roi
             && let Some([x, y, rw, rh]) = self.roi
         {
-            // The quad arrives unvalidated (control channel or a hand-edited project). Valid
-            // coordinates reach about 120 000 px (a 30 000 px side at render scale 4.0), so
-            // clamp each converted edge to a bound far above that (plus/minus 1 000 000, which
-            // also maps inf to a finite value; NaN converts to 0), do the subtraction in i64
-            // so it cannot overflow, and only then narrow to i32 with saturation.
-            let conv = |v: f64| v.round().clamp(-ROI_EDGE_LIMIT, ROI_EDGE_LIMIT) as i64;
-            let narrow = |v: i64| v.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
-            let l = conv(x * scale);
-            let t = conv(y * scale);
-            let r = i64::from(w) - conv((x + rw) * scale);
-            let b = i64::from(h) - conv((y + rh) * scale);
-            return (narrow(t), narrow(l), narrow(b), narrow(r));
+            // The quad arrives unvalidated (control channel or a hand-edited project). As in
+            // After Effects, the region of interest lies inside the frame: each converted edge
+            // is clamped to [0, w] / [0, h] (inf clamps to a side, NaN converts to 0), and the
+            // far edge never passes the near one. Every edge then lies inside the frame, so the
+            // crop can't be larger than the frame and no subtraction can overflow.
+            let (wi, hi) = (i32::try_from(w).unwrap_or(i32::MAX), i32::try_from(h).unwrap_or(i32::MAX));
+            let conv = |v: f64, side: i32| v.round().clamp(0.0, f64::from(side)) as i32;
+            let l = conv(x * scale, wi);
+            let t = conv(y * scale, hi);
+            let r = conv((x + rw) * scale, wi).max(l);
+            let b = conv((y + rh) * scale, hi).max(t);
+            return (t, l, hi - b, wi - r);
         }
         (self.top, self.left, self.bottom, self.right)
     }
@@ -1105,9 +1101,8 @@ impl OutputModule {
     /// scale `scale`: after Crop and Resize (before codec rounding).
     pub fn frame_size(&self, w: u32, h: u32, scale: f64) -> (u32, u32) {
         let (t, l, b, r) = self.crop.edges(w, h, scale);
-        // i64 so that hostile edge fields (any i32) cannot overflow; a degenerate crop stays 1 px.
-        let side = |full: u32, a: i32, b: i32| u32::try_from((i64::from(full) - i64::from(a) - i64::from(b)).max(1)).unwrap_or(u32::MAX);
-        let (cw, ch) = (side(w, l, r), side(h, t, b));
+        let cw = (w as i32).saturating_sub(l).saturating_sub(r).max(1) as u32;
+        let ch = (h as i32).saturating_sub(t).saturating_sub(b).max(1) as u32;
         if !self.resize.enabled {
             return (cw, ch);
         }
@@ -1657,8 +1652,8 @@ mod tests {
 
     #[test]
     fn hostile_roi_cannot_overflow_crop_math() {
-        // `-1e12` is clamped on conversion and the frame-size subtraction is widened: it must
-        // not overflow and must still yield a usable (degenerate) frame size.
+        // `-1e12` is clamped into the frame on conversion: it must not overflow and must still
+        // yield a usable (degenerate) frame size.
         let c = Comp::new(1920, 1080, FrameRate::new(30, 1), Tick::from_seconds_f64(1.0));
         let rs = RenderSettings::default();
         let mut m = OutputModule::for_format(OutputFormat::PngSequence);
@@ -1685,13 +1680,28 @@ mod tests {
         // right edge 120 000 are both beyond 20 000 and must survive.
         assert_eq!(m.crop.edges(120_000, 400, 4.0), (0, 40_000, 0, 0));
         assert_eq!(m.frame_size(120_000, 400, 4.0), (80_000, 400));
-        // The cap still refuses overflow: hostile coordinates stay degenerate-but-valid.
-        m.crop.roi = Some([1e300, 1e300, 1e300, 1e300]);
-        let (w, h) = m.frame_size(30_000, 100, 1.0);
-        assert!(w >= 1 && h >= 1, "degenerate but valid: {w}x{h}");
-        m.crop.roi = Some([f64::NAN, f64::INFINITY, f64::NEG_INFINITY, f64::NAN]);
-        let (w, h) = m.frame_size(30_000, 100, 1.0);
-        assert!(w >= 1 && h >= 1, "degenerate but valid: {w}x{h}");
+        // Hostile quads stay inside the frame: never empty, never larger than the frame, so the
+        // export can't be asked for an unbounded crop (an ROI reaching far outside the comp
+        // used to pad the frame instead).
+        let (fw, fh) = (1920, 1080);
+        let hostile = [
+            [1e300, 1e300, 1e300, 1e300],
+            [-1e300, -1e300, 1e300, 1e300],
+            [-1e6, -1e6, 2e6 + 1920.0, 2e6 + 1080.0],
+            [-1e12, -1e12, -1e12, -1e12],
+            [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, f64::NAN],
+            [f64::NEG_INFINITY, f64::NEG_INFINITY, f64::INFINITY, f64::INFINITY],
+        ];
+        for roi in hostile {
+            m.crop.roi = Some(roi);
+            let (t, l, b, r) = m.crop.edges(fw, fh, 1.0);
+            assert!([t, l, b, r].iter().all(|e| *e >= 0), "{roi:?}: an edge pads the frame: {:?}", (t, l, b, r));
+            let (w, h) = m.frame_size(fw, fh, 1.0);
+            assert!((1..=fw).contains(&w) && (1..=fh).contains(&h), "{roi:?}: {w}x{h} is outside 1x1..={fw}x{fh}");
+        }
+        // An ROI covering more than the frame is the whole frame.
+        m.crop.roi = Some([-1e6, -1e6, 2e6 + 1920.0, 2e6 + 1080.0]);
+        assert_eq!(m.frame_size(fw, fh, 1.0), (fw, fh));
     }
 
     #[test]
