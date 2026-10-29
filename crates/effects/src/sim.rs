@@ -38,7 +38,7 @@ use particle_fx::{PW_RATE, mercury_phys, ps2_phys, pw_phys};
 pub use registry::{specs, sprite_plan};
 pub use sprites::{Acc, Post, Shape, Sprite, SpritePlan, Tint};
 pub(crate) use sprites::{combine, raster, splat};
-pub use weather::{Bubble, bubble_list, drizzle_drops};
+pub use weather::{Bubble, bubble_list, bubble_sample_bounds, drizzle_drops};
 
 #[cfg(test)]
 mod tests;
