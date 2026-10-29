@@ -80,6 +80,7 @@ mod ui_tracker;
 mod ui_unreadable_footage;
 mod ui_video_preview_off;
 mod ui_viewer;
+mod ui_viewer_trackpad;
 mod ui_viewers;
 mod ui_visual_review;
 mod ui_web_gpu_storage;
