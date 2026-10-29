@@ -294,8 +294,10 @@ fn dof_radii(cam: &CameraState, dof: &super::camera::Dof, world: Mat4, buf: &Buf
 }
 
 /// Pixels a padded blur buffer may have: the ~16 million layer buffers are held to
-/// ([`crate::Renderer::raster_scale`]), so a blur never needs more memory than a large layer;
-/// twice the buffer when that is larger, so a big buffer can still be blurred.
+/// ([`crate::Renderer::raster_scale`]), or twice the buffer when that is larger, so a big buffer
+/// can still be blurred. The blur holds a few images of this size at once whatever its level
+/// count ([`super::bokeh::progressive_blur`]), so blurring a small plane costs no more memory than
+/// blurring a large layer.
 const DOF_PAD_BUDGET: f64 = 16.0e6;
 
 /// Comp pixels per buffer pixel below which a plane isn't blurred. Such a plane covers almost no
