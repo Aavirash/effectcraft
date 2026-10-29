@@ -17,6 +17,7 @@ use crate::{EffectcraftApp, widgets};
 
 const ROW_H: f32 = 21.0;
 const RECENT_MAX: usize = 8;
+pub(crate) const REVEAL_PRESETS_ID: &str = "fx-reveal-presets";
 
 /// A user animation preset file.
 #[derive(Clone, Debug, PartialEq)]
@@ -397,7 +398,7 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
     // Favorites and Recently Used.
     let favs: Vec<_> = app.session.prefs.effects_favorites.iter().filter_map(|id| lookup(id)).filter(|e| keep(e)).collect();
     let recent: Vec<_> = app.ui.effects_recent.iter().filter_map(|id| lookup(id)).filter(|e| keep(e)).collect();
-    let reveal_presets = ctx.data_mut(|data| data.remove_temp::<bool>(egui::Id::unique("fx-reveal-presets"))).unwrap_or(false);
+    let reveal_presets = ctx.data_mut(|data| data.remove_temp::<bool>(egui::Id::unique(REVEAL_PRESETS_ID))).unwrap_or(false);
     if reveal_presets {
         // These rows come before Animation Presets. Scroll past expanded lists so the section is
         // visible even when Favorites or Recently Used is long.
