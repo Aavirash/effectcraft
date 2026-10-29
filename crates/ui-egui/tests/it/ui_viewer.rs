@@ -831,6 +831,48 @@ fn shift_drag_keeps_a_mask_vertex_to_one_axis() {
     assert!(free[0] > shifted[0] && free[1] > shifted[1], "without Shift both axes move: {shifted:?} -> {free:?}");
 }
 
+/// #999: a mask vertex dragged against the edge of the Composition panel pans the view, and the
+/// vertex keeps moving while the pointer is held there, as in After Effects.
+#[test]
+fn a_vertex_held_at_the_viewer_edge_pans_the_view() {
+    let mut h = harness();
+    let plate = layer_id(&h, "Plate");
+    let corners = [[100.0, 60.0], [500.0, 60.0], [500.0, 300.0], [100.0, 300.0]];
+    let mask = {
+        let s = &mut h.state_mut().session;
+        s.execute("layer.select", json!({"layers": [plate]})).unwrap();
+        let m = s.execute("mask.new", json!({"layer": plate, "vertices": corners, "closed": true})).unwrap()["mask"].as_u64().unwrap();
+        s.execute("mask.selectVertices", json!({"vertices": [{"layer": plate, "mask": m, "index": 0}]})).unwrap();
+        m
+    };
+    h.run_steps(2);
+    let pan0 = h.state().ui.viewer.pan;
+    let from = rect(&h, &format!("viewer.mask.{mask}.vertex.0")).center();
+    let edge = pos2(2.0, from.y);
+    h.input_mut().events.push(Event::PointerMoved(from));
+    h.input_mut().events.push(Event::PointerButton { pos: from, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
+    h.step();
+    for i in 1..=6 {
+        h.input_mut().events.push(Event::PointerMoved(from + (edge - from) * (i as f32 / 6.0)));
+        h.step();
+    }
+    let reached = mask_path(&h, "Plate").vertices[0];
+    for _ in 0..20 {
+        h.step();
+    }
+    h.input_mut().events.push(Event::PointerButton { pos: edge, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
+    h.run_steps(2);
+    let pan = h.state().ui.viewer.pan;
+    assert!(pan[0] > pan0[0] && pan[1] == pan0[1], "the view panned right to show more on the left: {pan0:?} -> {pan:?}");
+    let after = mask_path(&h, "Plate").vertices[0];
+    assert!(after[0] < reached[0], "the vertex kept moving left with the view: {reached:?} -> {after:?}");
+    // Back inside the view, nothing pans.
+    let still = h.state().ui.viewer.pan;
+    let mid = rect(&h, "viewer.comp").center();
+    drag(&mut h, mid, mid + vec2(5.0, 0.0));
+    assert_eq!(h.state().ui.viewer.pan, still);
+}
+
 /// #1769: a hidden masked layer keeps its mask path and vertices, and they remain editable.
 #[test]
 fn hidden_masked_layer_keeps_its_mask_path_editable() {
