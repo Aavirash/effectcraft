@@ -260,12 +260,12 @@ fn clipboard_and_paste_formatting() {
 }
 
 #[test]
-fn type_tool_layers_point_box_and_empty_cleanup() {
+fn type_tool_layers_point_box_and_empty_layer_is_kept() {
     let mut s = Session::default();
     s.execute("comp.new", json!({"name": "C", "width": 640, "height": 360, "duration": 4})).unwrap();
     let t = s.execute("layer.newText", json!({"text": "", "position": [100, 200], "justify": "left", "edit": true})).unwrap()["layer"].as_u64().unwrap();
     assert_eq!(s.state.text_edit.as_ref().map(|e| e.layer.0), Some(t));
-    // Leaving an untouched Type-tool layer deletes it.
+    // Leaving an untouched Type-tool layer keeps it, as After Effects does.
     s.execute("text.endEdit", json!({})).unwrap();
     assert_eq!(s.active_comp().unwrap().layers.len(), 1, "an empty Type-tool layer is kept, as in AE");
     let b = s.execute("layer.newText", json!({"text": "", "box": [40, 50, 300, 120], "edit": true})).unwrap()["layer"].as_u64().unwrap();

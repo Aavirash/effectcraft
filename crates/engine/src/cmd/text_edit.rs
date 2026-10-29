@@ -71,7 +71,8 @@ pub struct TextEdit {
     /// Character panel changes made with only a caret: the style the next typed text takes.
     #[serde(default)]
     pub pending: Option<CharStyle>,
-    /// The layer was made by a Type tool click; leaving it empty deletes it.
+    /// The layer was made by a Type tool click. Kept when left empty, as After Effects does, so this
+    /// only records how the edit began.
     #[serde(default)]
     pub created: bool,
     /// Line position kept by repeated up / down moves (layout space).
