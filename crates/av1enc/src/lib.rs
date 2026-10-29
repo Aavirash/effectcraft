@@ -24,6 +24,7 @@ use bitw::{BitWriter, obu};
 use decide::{Decider, FrameGeom, RefFrame};
 use loopfilter::{LfInfo, loop_filter};
 use pred::Plane;
+use tables::AC_QLOOKUP;
 use writer::TileWriter;
 
 /// Rate control.
@@ -136,8 +137,107 @@ struct RateState {
     frame_bits: f64,
     /// Quantizer index for inter frames (continuous).
     q: f64,
+    /// Key frame quantizer index minus the inter frame one.
+    key_off: f64,
+    /// Quantizer index steps per halving of the frame size, measured from consecutive inter
+    /// frames (the size/quantizer curve is much steeper than the default on noisy content).
+    slope: f64,
+    /// Quantizer index and size (in bits) of the previous inter frame.
+    prev_inter: Option<(f64, f64)>,
     /// Accumulated (spent - budget) bits.
     debt: f64,
+}
+
+/// Quantizer index steps per halving of the frame size before any measurement.
+const RC_SLOPE: f64 = 28.0;
+/// Fraction of the quantizer step the size error asks for that is applied per frame.
+const RC_GAIN: f64 = 0.8;
+/// Frames over which an accumulated deviation from the budget is paid back.
+const RC_PAYBACK: f64 = 16.0;
+
+impl RateState {
+    /// The nominal bit budget and the starting quantizer index of a key or inter frame. A key
+    /// frame gets a larger share, and the inter frames of the group get the rest, so that a whole
+    /// group of `keyint` frames adds up to `keyint * frame_bits`.
+    fn frame_budget(&self, keyint: u32, key: bool) -> (f64, f64) {
+        let keyint = keyint.max(1) as f64;
+        let boost = (1.0 + (keyint.clamp(1.0, 60.0) - 1.0).sqrt() * 0.75).min(0.5 * keyint + 0.5);
+        if key {
+            (self.frame_bits * boost, (self.q + self.key_off).clamp(1.0, 255.0))
+        } else if keyint > 1.0 {
+            (self.frame_bits * (keyint - boost) / (keyint - 1.0), self.q)
+        } else {
+            (self.frame_bits, self.q)
+        }
+    }
+
+    /// Adapts the quantizers to the size of the frame just coded at `q_used` against `target`.
+    fn update(&mut self, key: bool, first: bool, q_used: f64, bits: f64, target: f64) {
+        let err = (bits / target).log2().clamp(-1.5, 1.5);
+        if first && key {
+            // four passes ran: the key frame quantizer is known, the inter one follows from the offset
+            self.q = (q_used - self.key_off).clamp(1.0, 255.0);
+        } else if key {
+            self.key_off = q_used - self.q + RC_GAIN * self.slope * err;
+        } else {
+            if let Some((pq, pbits)) = self.prev_inter {
+                let (dq, dr) = (q_used - pq, (pbits / bits).log2());
+                if dq.abs() >= 3.0 && dr.abs() >= 0.15 && dq * dr > 0.0 {
+                    self.slope = (0.6 * self.slope + 0.4 * (dq / dr)).clamp(3.0, 45.0);
+                }
+            }
+            self.prev_inter = Some((q_used, bits));
+            self.q = (q_used + RC_GAIN * self.slope * err).clamp(1.0, 255.0);
+        }
+    }
+}
+
+/// A key frame after the first is coded again when its size is more than this many octaves off
+/// the target (19 %).
+const RC_KEY_TOLERANCE: f64 = 0.25;
+/// Octaves of frame size per octave of quantizer step assumed for the first correction of a frame.
+const RC_PROBE_SLOPE: f64 = 1.0;
+/// Largest change of the quantizer step (octaves) between two passes on one frame.
+const RC_PROBE_MAX_STEP: f64 = 2.0;
+
+/// The quantizer index whose step size is closest to `2^x`.
+fn q_for_step(bit_depth: u8, x: f64) -> u8 {
+    let table = &AC_QLOOKUP[((bit_depth - 8) / 2) as usize];
+    let mut best = 1;
+    for q in 1..=255usize {
+        if ((table[q] as f64).log2() - x).abs() < ((table[best] as f64).log2() - x).abs() {
+            best = q;
+        }
+    }
+    best as u8
+}
+
+/// The next quantizer to try for a frame, from the `(quantizer, log2(size / target))`
+/// pairs coded so far. The size follows the quantizer step (not the index, which is linear in the
+/// step only below about 60) in a near log-log line: false position between the closest pair of
+/// passes that enclose the target, otherwise a step from the latest one with the slope of the
+/// last two. `None` when no untried quantizer lies between the enclosing passes.
+fn next_probe_q(bit_depth: u8, tried: &[(u8, f64)]) -> Option<u8> {
+    let table = &AC_QLOOKUP[((bit_depth - 8) / 2) as usize];
+    let x = |q: u8| (table[q as usize] as f64).log2();
+    let over = tried.iter().filter(|t| t.1 > 0.0).max_by_key(|t| t.0);
+    let under = tried.iter().filter(|t| t.1 <= 0.0).min_by_key(|t| t.0);
+    if let (Some(&(q_lo, e_lo)), Some(&(q_hi, e_hi))) = (over, under) {
+        if q_hi - q_lo < 2 {
+            return None;
+        }
+        let next = x(q_lo) + (x(q_hi) - x(q_lo)) * e_lo / (e_lo - e_hi);
+        return Some(q_for_step(bit_depth, next).clamp(q_lo + 1, q_hi - 1));
+    }
+    let &(q, err) = tried.last()?;
+    let mut slope = RC_PROBE_SLOPE;
+    if let [.., (q0, e0), (q1, e1)] = tried
+        && (x(*q1) - x(*q0)).abs() > 0.05
+        && (e0 - e1) / (x(*q1) - x(*q0)) > 0.0
+    {
+        slope = ((e0 - e1) / (x(*q1) - x(*q0))).clamp(0.25, 3.0);
+    }
+    Some(q_for_step(bit_depth, x(q) + (err / slope).clamp(-RC_PROBE_MAX_STEP, RC_PROBE_MAX_STEP)))
 }
 
 /// AV1 encoder. Frames come out in input order (no hidden/reordered frames).
@@ -185,7 +285,7 @@ impl Encoder {
                 // initial guess from the bits per sample
                 let bpp = frame_bits / (cfg.width as f64 * cfg.height as f64);
                 let q = (110.0 - 40.0 * (bpp / 0.1).log2()).clamp(20.0, 230.0);
-                Some(RateState { frame_bits, q, debt: 0.0 })
+                Some(RateState { frame_bits, q, key_off: -24.0, slope: RC_SLOPE, prev_inter: None, debt: 0.0 })
             }
         };
         let mut enc = Encoder { cfg, geom, level, seq_obu: Vec::new(), frame_num: 0, refr: None, rc };
@@ -471,38 +571,52 @@ impl Encoder {
 
     fn encode_rate_controlled(&mut self, src: &[Plane; 3], key: bool, rc: &mut RateState) -> (Vec<u8>, RefFrame) {
         let first = self.frame_num == 0;
-        let (frame_bits, debt, q_inter) = (rc.frame_bits, rc.debt, rc.q);
-        // key frames get a lower quantizer and a larger share of the budget
-        let key_boost = 1.0 + (self.cfg.keyint.clamp(1, 60) as f64 - 1.0).sqrt() * 0.75;
-        let budget = if key { frame_bits * key_boost } else { frame_bits };
-        // pay back a fraction of the accumulated deviation
-        let target = (budget - debt * 0.25).max(budget * 0.25);
-        let mut q = if key { q_inter - 24.0 } else { q_inter };
-        let mut best: Option<(Vec<u8>, RefFrame, f64)> = None;
-        let passes = if first { 4 } else { 1 };
-        for pass in 0..passes {
+        let (budget, q_start) = rc.frame_budget(self.cfg.keyint, key);
+        // pay back the accumulated deviation over the next RC_PAYBACK frames
+        let target = (budget - rc.debt / RC_PAYBACK).clamp(budget * 0.35, budget * 2.0);
+        let mut q = q_start;
+        let mut best: Option<(Vec<u8>, RefFrame, f64, f64)> = None;
+        // The first frame is coded four times to find its quantizer. A later key frame is coded
+        // again (up to twice) if its size is far off, since a key frame is a large part of the
+        // budget of its group.
+        let (max_passes, tolerance) = if first {
+            (4, 0.0)
+        } else if key {
+            (3, RC_KEY_TOLERANCE)
+        } else {
+            (1, 0.0)
+        };
+        let mut tried: Vec<(u8, f64)> = Vec::new();
+        for pass in 0..max_passes {
             let qi = q.round().clamp(1.0, 255.0) as u8;
+            if !first && tried.iter().any(|t| t.0 == qi) {
+                break;
+            }
             let (obu, rf) = self.encode_frame(src, key, qi);
             let bits = obu.len() as f64 * 8.0;
             let err = (bits / target).log2();
-            let better = best.as_ref().is_none_or(|b| err.abs() < (b.2 / target).log2().abs());
-            if better {
-                best = Some((obu, rf, bits));
+            tried.push((qi, err));
+            if best.as_ref().is_none_or(|b| err.abs() < (b.2 / target).log2().abs()) {
+                best = Some((obu, rf, bits, qi as f64));
             }
-            if pass + 1 < passes {
-                q = (q + 30.0 * err).clamp(1.0, 255.0);
+            if err.abs() <= tolerance {
+                break;
+            }
+            if first {
+                if pass + 1 < max_passes {
+                    q = (q + 30.0 * err).clamp(1.0, 255.0);
+                }
+            } else {
+                match next_probe_q(self.cfg.bit_depth, &tried) {
+                    Some(next) => q = next as f64,
+                    None => break,
+                }
             }
         }
         // At least one pass ran, so `best` is set.
-        let Some((obu, rf, bits)) = best else { return self.encode_frame(src, key, q.round().clamp(1.0, 255.0) as u8) };
+        let Some((obu, rf, bits, q_used)) = best else { return self.encode_frame(src, key, q.round().clamp(1.0, 255.0) as u8) };
         rc.debt += bits - budget;
-        // adapt the inter quantizer: about 30 index steps per doubling of the rate
-        let err = (bits / target).log2().clamp(-1.0, 1.0);
-        if first && key {
-            rc.q = (q + 24.0).clamp(1.0, 255.0);
-        } else {
-            rc.q = (rc.q + 12.0 * err).clamp(1.0, 255.0);
-        }
+        rc.update(key, first, q_used, bits, target);
         (obu, rf)
     }
 
