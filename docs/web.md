@@ -255,7 +255,7 @@ By default the page opens the last visit's project, and the demo project on a fi
 |---|---|
 | `"last"` (or no key) | the last visit's project; the demo project on a first visit |
 | `"empty"` | the last visit's project; a blank project on a first visit, never the demo |
-| `"demo"` | the demo project, whatever the last visit left |
+| `"demo"` | the demo project, whatever the last visit left; the session is not saved, so the last visit's project stays as it was |
 
 The `?empty` and `?demo` URL flags still win. A missing, invalid or non-JSON file, or an unknown
 value, is the default. The file is fetched once per page load; serve it with

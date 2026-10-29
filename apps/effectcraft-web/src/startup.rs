@@ -42,6 +42,12 @@ impl Startup {
         self != Startup::Demo
     }
 
+    /// Whether the session snapshot keeps being saved (off for the demo, so it never replaces the
+    /// project the last visit left).
+    pub fn keeps_session(self) -> bool {
+        self != Startup::Demo
+    }
+
     /// Whether the demo project opens when nothing was restored (off for a blank start).
     pub fn demo_when_nothing_restored(self) -> bool {
         self != Startup::Empty

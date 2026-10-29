@@ -2,6 +2,7 @@
 
 use effectcraft_web::startup::{CONFIG_MAX, Startup, parse};
 
+/// The three accepted values parse.
 #[test]
 fn the_three_values() {
     assert_eq!(parse(br#"{"startup":"empty"}"#), Startup::Empty);
@@ -9,6 +10,7 @@ fn the_three_values() {
     assert_eq!(parse(br#"{"startup":"last"}"#), Startup::Last);
 }
 
+/// A missing key, a wrong type, an unknown value or a non-object file gives `Last`.
 #[test]
 fn absent_or_invalid_is_the_default() {
     for bytes in
@@ -18,12 +20,14 @@ fn absent_or_invalid_is_the_default() {
     }
 }
 
+/// Other keys do not hide `startup`.
 #[test]
 fn a_config_with_other_keys_still_has_its_startup() {
     assert_eq!(parse(br#"{"remote":{"mounts":[]},"startup":"empty"}"#), Startup::Empty);
     assert_eq!(parse(br#"{"startup":"demo","unknown":{"a":1}}"#), Startup::Demo);
 }
 
+/// A file over `CONFIG_MAX` is ignored.
 #[test]
 fn an_oversized_file_is_the_default() {
     let mut big = br#"{"startup":"empty","pad":""#.to_vec();
@@ -32,9 +36,17 @@ fn an_oversized_file_is_the_default() {
     assert_eq!(parse(&big), Startup::Last);
 }
 
+/// Which project each value restores or opens.
 #[test]
 fn what_each_value_does_on_load() {
     assert!(Startup::Last.restores() && Startup::Last.demo_when_nothing_restored());
     assert!(Startup::Empty.restores() && !Startup::Empty.demo_when_nothing_restored());
     assert!(!Startup::Demo.restores() && Startup::Demo.demo_when_nothing_restored());
+}
+
+/// Only the explicit demo start stops saving the session.
+#[test]
+fn only_the_demo_start_leaves_the_saved_session_alone() {
+    assert!(Startup::Last.keeps_session() && Startup::Empty.keeps_session());
+    assert!(!Startup::Demo.keeps_session());
 }
