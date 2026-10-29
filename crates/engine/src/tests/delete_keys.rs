@@ -84,3 +84,42 @@ fn selection_based_key_edits_skip_a_locked_layer() {
     s.execute_checked("keys.easyEase", json!({})).unwrap();
     assert_ne!(stored(&s), before, "unlocked, Easy Ease changes the keys");
 }
+
+#[test]
+fn key_transform_preserves_locked_keys_in_a_mixed_selection() {
+    let (mut s, locked, locked_prop) = setup();
+    let unlocked = s.execute("layer.newSolid", json!({"name": "Unlocked", "color": "#fff"})).unwrap()["layer"].as_u64().unwrap();
+    for t in 0..3 {
+        s.execute("prop.addKey", json!({"layer": unlocked, "path": "transform/opacity", "time": t, "value": t * 25})).unwrap();
+    }
+    let unlocked_prop = s.active_comp().unwrap().layer(LayerId(unlocked)).unwrap().props.prop("transform/opacity").unwrap().uid;
+    let locked_keys = keys_of(&s, locked, locked_prop);
+    s.state.selected_keys = locked_keys.iter().chain(keys_of(&s, unlocked, unlocked_prop).iter()).copied().collect();
+    s.execute("layer.setSwitch", json!({"layers": [locked], "switch": "locked", "value": true})).unwrap();
+    let stored = |s: &Session, layer, prop| s.active_comp().unwrap().layer(LayerId(layer)).unwrap().props.find(prop).unwrap().keys.clone();
+    let before = stored(&s, locked, locked_prop);
+    let undo = s.history.undo.len();
+    for offset in [0.5, 1.0] {
+        s.execute("keys.transform", json!({"timeOffset": offset, "valueOffset": offset * 10.0, "merge": "mixed-transform", "fromStart": true})).unwrap();
+        assert_eq!(stored(&s, locked, locked_prop), before);
+        assert_eq!(s.state.selected_keys.len(), 6);
+        assert!(locked_keys.iter().all(|k| s.state.selected_keys.contains(k)), "locked selections stay at their original times");
+        assert!(keys_of(&s, unlocked, unlocked_prop).iter().all(|k| s.state.selected_keys.contains(k)), "unlocked selections follow the keys");
+        let moved = stored(&s, unlocked, unlocked_prop);
+        for (i, key) in moved.iter().enumerate() {
+            assert_eq!(key.time.seconds(), i as f64 + offset);
+            assert_eq!(key.value.as_f64(), i as f64 * 25.0 + offset * 10.0);
+        }
+    }
+    assert_eq!(s.history.undo.len(), undo + 1, "one merged drag");
+    let after = stored(&s, unlocked, unlocked_prop);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(stored(&s, locked, locked_prop), before);
+    assert_eq!(stored(&s, unlocked, unlocked_prop), before);
+    s.execute("edit.redo", json!({})).unwrap();
+    assert_eq!(stored(&s, locked, locked_prop), before);
+    assert_eq!(stored(&s, unlocked, unlocked_prop), after);
+    s.execute("layer.setSwitch", json!({"layers": [locked], "switch": "locked", "value": false})).unwrap();
+    s.execute("keys.transform", json!({"timeOffset": 0.5, "valueOffset": 10})).unwrap();
+    assert_ne!(stored(&s, locked, locked_prop), before, "unlocking makes the keys editable again");
+}

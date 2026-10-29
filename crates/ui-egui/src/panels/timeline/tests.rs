@@ -552,29 +552,34 @@ fn the_key_menu_is_translated_and_cannot_edit_a_locked_layers_keys() {
     let layer = app.session.active_comp().unwrap().layer(LayerId(id)).unwrap().clone();
     let prop = layer.props.prop("transform/opacity").unwrap().clone();
     let key = prop.keys[0].clone();
-    let enabled = |locked: bool, label: &str| {
+    let enabled = |locked: bool, selected: bool, label: &str| {
         let mut layer = layer.clone();
         layer.switches.locked = locked;
         let mut actions = vec![];
-        let mut h = Harness::new_ui(|ui| key_menu(ui, &app, &layer, &prop, &key, true, &mut actions));
+        let mut h = Harness::new_ui(|ui| key_menu(ui, &app, &layer, &prop, &key, selected, &mut actions));
         h.run();
         !h.get_by_label(label).accesskit_node().is_disabled()
     };
     for label in
         ["Copy", "Select Equal Keyframes", "Select All Keyframes", "Delete", "Edit Value…", "Easy Ease", "Time-Reverse Keyframes", "Keyframe Velocity…"]
     {
-        assert!(enabled(false, label), "{label} on an unlocked layer");
+        assert!(enabled(false, true, label), "{label} on an unlocked layer");
     }
     for label in ["Copy", "Select Equal Keyframes", "Select All Keyframes"] {
-        assert!(enabled(true, label), "{label} is still available on a locked layer");
+        assert!(enabled(true, true, label), "{label} is still available on a locked layer");
     }
     for label in ["Delete", "Edit Value…", "Easy Ease", "Time-Reverse Keyframes", "Keyframe Velocity…", "Linear"] {
-        assert!(!enabled(true, label), "{label} is off on a locked layer");
+        assert!(!enabled(true, true, label), "{label} is off on a locked layer");
+        assert!(!enabled(true, false, label), "{label} is off on an unselected locked key");
     }
+    for label in ["Copy", "Select Equal Keyframes", "Select Previous Keyframes", "Select Following Keyframes"] {
+        assert!(!enabled(true, false, label), "{label} requires selecting the clicked key");
+    }
+    assert!(enabled(true, false, "Select All Keyframes"));
     // The labels follow the interface language.
     crate::i18n::set_current("es");
     let copy = crate::i18n::context_item("keys.copy", &json!({}), "Copy");
     assert_ne!(copy, "Copy", "the catalog translates Copy");
-    assert!(enabled(false, &copy));
+    assert!(enabled(false, true, &copy));
     crate::i18n::set_current("en");
 }
