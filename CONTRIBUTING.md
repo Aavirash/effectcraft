@@ -7,9 +7,11 @@ work apply to everyone, people and AI agents alike, and they are not negotiable.
 
 You need [Rust](https://rustup.rs/) 1.95 or newer.
 
-On Linux the desktop app plays preview sound through `cpal`, so the build also needs the ALSA
-development headers. Without them `alsa-sys` fails at link time with an unrelated-looking error;
-`cargo xtask ci` checks for them up front and names the package:
+On Linux the desktop app plays preview sound through `cpal`, so the build needs a usable ALSA
+pkg-config package: an `alsa.pc` that pkg-config can find, naming the linkable ALSA runtime
+library (usually `libasound.so.2`). `alsa-sys` runs pkg-config at build time; it does not compile
+ALSA's headers. Without a usable package the build fails at link time with an unrelated-looking
+error; `cargo xtask ci` probes pkg-config up front and names the package:
 
 ```sh
 sudo dnf install alsa-lib-devel        # Fedora
