@@ -9,8 +9,8 @@ use std::io;
 use filmcraft_aac::AudioSpecificConfig;
 use filmcraft_media::ByteReader;
 
-/// How far into an MPEG TS / PS file its first LATM frame is looked for: the stream is indexed
-/// as far as this, not through the whole file.
+/// How far into an MPEG TS / PS file the audio streams are looked for: the stream is indexed as
+/// far as this, not through the whole file.
 const MPEG_HEAD: u64 = 8 << 20;
 
 /// The configuration of the audio track FilmCraft plays, if it is AAC: from an MP4 / MOV `header`
@@ -57,12 +57,23 @@ fn matroska(file: &dyn ByteReader) -> Option<Vec<u8>> {
     }
 }
 
+/// The configuration of the stream FilmCraft's MPEG source plays: the first audio stream whose
+/// first unit it can read. Only AAC is asked about, so the streams before that one were refused
+/// whatever their codec, and an ADTS stream played has no configuration outside its frames.
 fn latm(file: &dyn ByteReader) -> Option<Vec<u8>> {
+    use filmcraft_mpegts::Codec;
     let head = Head(file, file.len().min(MPEG_HEAD));
     let mpeg = filmcraft_mpegts::open(&head).ok()?;
-    let stream = mpeg.find(filmcraft_mpegts::Kind::Audio, |c| *c == filmcraft_mpegts::Codec::AacLatm)?;
-    let frame = mpeg.read_unit(&head, stream, 0).ok()?;
-    Some(filmcraft_codecs::audio::latm_config(&frame)?.asc)
+    let audio = mpeg.streams.iter().enumerate().filter(|(_, s)| s.kind() == filmcraft_mpegts::Kind::Audio && !s.units.is_empty());
+    let played = audio.take(filmcraft_media::MAX_AUDIO_STREAMS).find_map(|(i, s)| {
+        let first = mpeg.read_unit(&head, i, 0).ok()?;
+        match s.codec {
+            Codec::AacAdts => filmcraft_mpegts::frame_info(&s.codec, &first).map(|_| None),
+            Codec::AacLatm => filmcraft_codecs::audio::latm_config(&first).map(|c| Some(c.asc)),
+            _ => None,
+        }
+    });
+    played?
 }
 
 /// The first `.1` bytes of a file, as the byte source FilmCraft's demuxers read.

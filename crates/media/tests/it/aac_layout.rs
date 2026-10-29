@@ -260,3 +260,163 @@ fn an_empty_audio_track_lends_its_configuration_to_no_other() {
         check(&format!("{name} Matroska"), case.content, &mix(&MediaPool::new(), &probe(&p).expect("probe")));
     }
 }
+
+/// A transport stream plays its first audio stream and mixes by that stream's configuration,
+/// whatever follows it. ADTS of configuration 7 decodes in element order, LATM of configuration
+/// 12 reordered to WAVE / SMPTE; LATM of configuration 7 names 7 channels, which mix as
+/// configuration 7's rather than as 7 channels by count. (FilmCraft decodes LATM of configuration
+/// 12 as 12 channels, so it isn't played here.)
+#[test]
+fn mpeg_aac_mixes_by_the_stream_played() {
+    let case = cases().into_iter().find(|c| c.name == "config7").expect("case");
+    let (_, adts) = encode(case.content, true);
+    let (_, raw) = encode(case.content, false);
+    for (label, latm_first, latm_config) in [("ADTS before LATM", false, 12), ("LATM before ADTS", true, 7)] {
+        let (adts_pid, latm_pid) = if latm_first { (0x102, 0x101) } else { (0x101, 0x102) };
+        let mut ts = Ts::default();
+        let mut streams = [(0x0F, adts_pid), (0x11, latm_pid)];
+        streams.sort_by_key(|s| s.1);
+        ts.psi(&streams);
+        for (i, (a, r)) in adts.iter().zip(&raw).enumerate() {
+            let pts = 1920 * i as i64;
+            let mut units = [(adts_pid, pes(pts, a)), (latm_pid, pes(pts, &loas(latm_config, r)))];
+            units.sort_by_key(|u| u.0);
+            for (pid, unit) in units {
+                ts.pes(pid, &unit);
+            }
+        }
+        let p = write(&format!("latm-first-{latm_first}.ts"), &ts.out);
+        check(label, case.content, &mix(&MediaPool::new(), &probe(&p).expect("probe")));
+    }
+}
+
+/// A LOAS frame of `payload` with its StreamMuxConfig: AAC LC, 48 kHz, channel configuration
+/// `config`.
+fn loas(config: u32, payload: &[u8]) -> Vec<u8> {
+    let mut bits = Bits::default();
+    // useSameStreamMux, audioMuxVersion, allStreamsSameTimeFraming, numSubFrames, numProgram, numLayer
+    bits.put(0b001, 3);
+    bits.put(0, 13);
+    // AudioSpecificConfig and GASpecificConfig
+    bits.put(2, 5);
+    bits.put(3, 4);
+    bits.put(config, 4);
+    bits.put(0, 3);
+    // frameLengthType, latmBufferFullness, otherDataPresent, crcCheckPresent
+    bits.put(0, 3);
+    bits.put(0xFF, 8);
+    bits.put(0, 2);
+    let mut len = payload.len();
+    while len >= 255 {
+        bits.put(255, 8);
+        len -= 255;
+    }
+    bits.put(len as u32, 8);
+    for &b in payload {
+        bits.put(u32::from(b), 8);
+    }
+    let body = bits.finish();
+    let mut v = vec![0x56, 0xE0 | (body.len() >> 8) as u8, body.len() as u8];
+    v.extend(body);
+    v
+}
+
+/// A big-endian bit writer.
+#[derive(Default)]
+struct Bits {
+    out: Vec<u8>,
+    acc: u64,
+    n: u32,
+}
+
+impl Bits {
+    fn put(&mut self, v: u32, n: u32) {
+        self.acc = self.acc << n | u64::from(v);
+        self.n += n;
+        while self.n >= 8 {
+            self.n -= 8;
+            self.out.push((self.acc >> self.n) as u8);
+        }
+    }
+    fn finish(mut self) -> Vec<u8> {
+        if self.n > 0 {
+            self.put(0, 8 - self.n);
+        }
+        self.out
+    }
+}
+
+/// An audio PES packet (stream id 0xC0) presented at `pts` (90 kHz).
+fn pes(pts: i64, payload: &[u8]) -> Vec<u8> {
+    let t = [0x21 | ((pts >> 29) & 0x0E) as u8, (pts >> 22) as u8, ((pts >> 14) & 0xFE) as u8 | 1, (pts >> 7) as u8, ((pts << 1) & 0xFE) as u8 | 1];
+    let len = 8 + payload.len();
+    let mut v = vec![0, 0, 1, 0xC0, (len >> 8) as u8, len as u8, 0x80, 0x80, 5];
+    v.extend(t);
+    v.extend_from_slice(payload);
+    v
+}
+
+/// A transport stream of one program (its PMT on PID 0x100), PES cut into 188-byte packets.
+#[derive(Default)]
+struct Ts {
+    out: Vec<u8>,
+    cc: std::collections::HashMap<u16, u8>,
+}
+
+impl Ts {
+    fn packet(&mut self, pid: u16, start: bool, payload: &[u8]) -> usize {
+        let cc = self.cc.entry(pid).or_insert(0);
+        let mut p = vec![0x47, u8::from(start) << 6 | (pid >> 8) as u8, pid as u8];
+        let n = payload.len().min(184);
+        if n < 184 {
+            let stuffing = 183 - n;
+            p.extend([0x30 | *cc, stuffing as u8]);
+            if stuffing > 0 {
+                p.push(0);
+                p.extend(std::iter::repeat_n(0xFF, stuffing - 1));
+            }
+        } else {
+            p.push(0x10 | *cc);
+        }
+        *cc = (*cc + 1) & 15;
+        p.extend_from_slice(&payload[..n]);
+        self.out.extend(p);
+        n
+    }
+    fn section(&mut self, pid: u16, body: &[u8]) {
+        let mut s = vec![0];
+        s.extend_from_slice(body);
+        s.extend(crc32_mpeg(body).to_be_bytes());
+        self.packet(pid, true, &s);
+    }
+    /// The PAT and a PMT of `streams` (stream type, PID).
+    fn psi(&mut self, streams: &[(u8, u16)]) {
+        self.section(0, &[0x00, 0xB0, 13, 0, 1, 0xC1, 0, 0, 0, 1, 0xE1, 0x00]);
+        let mut pmt = vec![0x02, 0xB0, 0, 0, 1, 0xC1, 0, 0, 0xE1, 0x01, 0xF0, 0];
+        for &(kind, pid) in streams {
+            pmt.extend([kind, 0xE0 | (pid >> 8) as u8, pid as u8, 0xF0, 0]);
+        }
+        pmt[2] = (pmt.len() + 1) as u8;
+        self.section(0x100, &pmt);
+    }
+    fn pes(&mut self, pid: u16, data: &[u8]) {
+        let (mut rest, mut start) = (data, true);
+        while !rest.is_empty() {
+            let n = self.packet(pid, start, rest);
+            rest = &rest[n..];
+            start = false;
+        }
+    }
+}
+
+/// CRC-32 of PSI sections (MSB first, polynomial 0x04C11DB7, initial value all ones).
+fn crc32_mpeg(data: &[u8]) -> u32 {
+    let mut crc = u32::MAX;
+    for &b in data {
+        crc ^= u32::from(b) << 24;
+        for _ in 0..8 {
+            crc = if crc & 0x8000_0000 != 0 { crc << 1 ^ 0x04C1_1DB7 } else { crc << 1 };
+        }
+    }
+    crc
+}
