@@ -1,6 +1,6 @@
 use super::engine::{MERCURY, PS2, PState, PW_EFFECT_CAMERA, Phys, norm3, particle_look, pw_state, type_sprite};
 use super::sprites::{Acc, Post, Sprite, SpritePlan, raster, splat};
-use super::{Buf, EffectCtx, Image, IntoParallelRefIterator, ParallelIterator, SimCache, Value, params_key, unpremul};
+use super::{Buf, EffectCtx, Image, IntoParallelRefIterator, ParallelIterator, SimCache, Value, unpremul};
 
 // ------------------------------------------------------------------ CC Particle World
 
