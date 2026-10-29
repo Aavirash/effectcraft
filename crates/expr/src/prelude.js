@@ -435,7 +435,7 @@ function __ancestor(c, l, path, countUp) {
   if (typeof n !== 'number' || !(n >= 1) || !isFinite(n)) __err('propertyGroup(' + countUp + '): the count must be a number of 1 or more');
   n = Math.floor(n);
   var info = __h(__ANCESTOR, c, l, path, n);
-  if (info === 'layer') return new Layer(c, l);
+  if (info === 'layer') return __layer(c, l);
   if (info === null) __err('propertyGroup(' + n + ') goes above the layer');
   return __mkGroup(c, l, info);
 }
