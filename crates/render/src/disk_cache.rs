@@ -841,7 +841,7 @@ fn decode_layer(p: &[u8]) -> Option<Buf> {
 // ---------------------------------------------------------------- content keys
 
 /// Bump when rendering changes in a way that makes old disk entries wrong.
-const RENDER_VERSION: &str = "effectcraft-render-2";
+const RENDER_VERSION: &str = "effectcraft-render-3";
 
 fn hash_debug(h: &mut Hash128, v: &impl std::fmt::Debug) {
     h.write(format!("{v:?}").as_bytes());
@@ -910,9 +910,18 @@ pub fn comp_content_key(project: &effectcraft_project::Project, comp: effectcraf
 
 /// [`comp_content_key`] with [`VirtualFileId`] for paths `std::fs::metadata` cannot describe.
 pub fn comp_content_key_with(project: &effectcraft_project::Project, comp: effectcraft_project::ItemId, virtual_id: Option<VirtualFileId<'_>>) -> u128 {
+    comp_content_key_for_renderer(project, comp, virtual_id, RENDER_VERSION)
+}
+
+fn comp_content_key_for_renderer(
+    project: &effectcraft_project::Project,
+    comp: effectcraft_project::ItemId,
+    virtual_id: Option<VirtualFileId<'_>>,
+    renderer: &str,
+) -> u128 {
     use effectcraft_project::{ItemKind, LayerSource};
     let mut h = Hash128::default();
-    h.write(RENDER_VERSION.as_bytes());
+    h.write(renderer.as_bytes());
     hash_debug(&mut h, &project.settings);
     let mut seen = std::collections::BTreeSet::new();
     let mut stack = vec![comp];
@@ -1068,6 +1077,28 @@ mod tests {
         assert_eq!((st.entries, st.hits, st.misses, st.writes), (2, 2, 1, 2));
         // Wrong kind is a miss.
         assert!(dc.get_frame(42).is_none());
+    }
+
+    #[test]
+    fn previous_renderer_frames_are_not_reused() {
+        use effectcraft_project::{Comp, ItemKind, Project};
+        use effectcraft_time::{FrameRate, Tick};
+
+        let mut project = Project::default();
+        let comp = Comp::new(2, 2, FrameRate::FPS_30, Tick::from_seconds_f64(1.0));
+        let id = project.add_item("Cached composition", effectcraft_color::Label::None, None, ItemKind::Comp(comp.into()));
+        let key = frame_key(comp_content_key(&project, id), 0, 1000, 0);
+        let previous_key = frame_key(comp_content_key_for_renderer(&project, id, None, "effectcraft-render-2"), 0, 1000, 0);
+        let dir = tmpdir("previous-renderer");
+        {
+            let cache = DiskCache::open(&dir, 1 << 30).unwrap();
+            cache.put_frame_now(previous_key, 2, 2, &[9; 16]);
+        }
+        let cache = DiskCache::open(&dir, 1 << 30).unwrap();
+        assert_eq!(cache.get_frame(previous_key).unwrap().rgba, vec![9; 16]);
+        assert!(cache.get_frame(key).is_none());
+        cache.put_frame_now(key, 2, 2, &[17; 16]);
+        assert_eq!(cache.get_frame(key).unwrap().rgba, vec![17; 16]);
     }
 
     #[test]
