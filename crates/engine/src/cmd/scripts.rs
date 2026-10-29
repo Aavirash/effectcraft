@@ -613,7 +613,16 @@ mod tests {
         for name in ["Tools/Hello.jsx", "Rename Layers.jsx"] {
             assert!(bad_params(&s.execute("window.scriptPanel", json!({"name": name}))), "{name}");
         }
-        for name in ["../x.jsx", "a/b/c.jsx", "a\\b.jsx", "Motion Kit/sub/Deep.jsx", "ScriptUI Panels/Top.jsx", "Startup/Run.jsx", "shutdown/Run.jsx", "Tools/../../../outside.jsx"] {
+        for name in [
+            "../x.jsx",
+            "a/b/c.jsx",
+            "a\\b.jsx",
+            "Motion Kit/sub/Deep.jsx",
+            "ScriptUI Panels/Top.jsx",
+            "Startup/Run.jsx",
+            "shutdown/Run.jsx",
+            "Tools/../../../outside.jsx",
+        ] {
             assert_eq!(script_code(&s, name, None), None, "{name:?}");
             for c in ["file.runScript", "window.scriptPanel", "file.uninstallScript"] {
                 let r = s.execute(c, json!({"name": name}));
