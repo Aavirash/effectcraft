@@ -1098,7 +1098,7 @@ fn pen_shift_click_draws_a_straight_segment() {
 /// double-click on a point selects all of them in a free-transform box, and dragging inside it
 /// (or, once the box is gone, dragging a point) moves the whole mask (#290).
 #[test]
-fn pen_mask_undoes_step_by_step_and_double_click_moves_the_whole_mask() {
+fn pen_mask_undoes_step_by_step_and_double_click_enters_point_editing() {
     let mut h = harness();
     let plate = layer_id(&h, "Plate");
     h.state_mut().session.execute("layer.select", json!({"layers": [plate]})).unwrap();
@@ -1142,7 +1142,10 @@ fn pen_mask_undoes_step_by_step_and_double_click_moves_the_whole_mask() {
         h.input_mut().events.push(Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() });
     }
     h.run_steps(3);
-    assert!(h.state().session.state.selected_vertices.is_empty(), "point editing starts without selecting every point");
+    // The click that precedes the double-click selects the point it lands on; what the old flow
+    // did, and this must not, is select every point.
+    let picked = h.state().session.state.selected_vertices.len();
+    assert!(picked < 4, "point editing starts without selecting every point (selected {picked})");
     assert!(h.state().auto.find("viewer.freeTransform.handle.0").is_none(), "no free-transform box in point editing");
     // A click away ends point editing; nothing was moved by the double-click.
     let away = screen(&h, [600.0, 340.0]);
