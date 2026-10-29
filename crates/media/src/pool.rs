@@ -581,7 +581,7 @@ impl Inner {
         if let Some(b) = lock(&self.files).get(path) {
             return Ok(b.clone());
         }
-        std::fs::read(path).map(Into::into).map_err(|e| MediaError::Io(format!("{path}: {e}")))
+        crate::read_regular_file(std::path::Path::new(path)).map(Into::into).map_err(|e| MediaError::Io(format!("{path}: {e}")))
     }
 
     /// The opened movie/audio source for `path`. The first caller opens it, outside the map's
