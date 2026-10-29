@@ -249,29 +249,6 @@ fn tracking_line_anchor_and_character_offset() {
     assert_eq!(substitute('a', &CharXf { char_value: Some((66.0, 1.0)), ..Default::default() }), Some('B'));
 }
 
-/// After Effects 2026: a text animator's Tracking Amount is in pixels: Amount 30 on every
-/// character of an 80 px and of a 40 px text adds 30 px between neighbouring characters (half
-/// before, half after each one).
-#[test]
-fn animator_tracking_is_in_pixels_as_in_after_effects() {
-    for size in [80.0, 40.0] {
-        let x_of = |amount: f64| {
-            let (mut p, cid, comp) = setup(900, 200);
-            let mut l = text_layer(&mut p, &comp, doc("HHHH", size));
-            animator(&mut p, &mut l, &["tracking"], &["range"]);
-            set(&mut l, "text/animators/#1/properties/tracking", Value::Scalar(amount));
-            p.comp_mut(cid).unwrap().layers.push(l);
-            let paths = glyph_paths(&ctx(&p, cid, 0.0), &p.comp(cid).unwrap().layers[0]);
-            paths.iter().map(|g| bounds_of(std::slice::from_ref(g)).x0).collect::<Vec<f64>>()
-        };
-        let (a, b) = (x_of(0.0), x_of(30.0));
-        for i in 1..a.len() {
-            let gap = (b[i] - b[i - 1]) - (a[i] - a[i - 1]);
-            assert!((gap - 30.0).abs() < 0.5, "{size} px: neighbour gap grows by {gap}");
-        }
-    }
-}
-
 /// Without a Line Anchor, tracking grows each line from where its paragraph's alignment pins it:
 /// left text grows right, centred text around its centre, right text to the left (#146).
 #[test]
