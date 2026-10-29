@@ -371,12 +371,12 @@ Playground cannons without interacting forces evolve every particle independentl
 backend (reached through `EffectHost::particles` when the GPU compositor is active) simulates one
 particle per invocation from the CPU's birth schedule and keeps per-key state checkpoints on the
 GPU, like `SimCache`; the CPU simulation stays the oracle (tests compare ids and positions).
-CC Particle World samples its Birth Rate at every step (`EffectHost::param_at`, #1373), so a
-keyed rate only decides the births of its own time; the rate is left out of the simulation key,
-and a checkpoint is resumed only with the same rate history (the CPU state's `hist`, the GPU
+CC Particle World, CC Particle Systems II and CC Mr. Mercury sample their Birth Rate at every
+step (`EffectHost::param_at`, #1373), so a keyed rate only decides the births of its own time;
+the rate is left out of the simulation key, and a checkpoint is resumed only with the same rate history (the CPU state's `hist`, the GPU
 checkpoint's births). The rate's keyframes are read at the step's exact layer time
 (`EvalCtx::value_at_layer_time`; mapping it to comp time and back rounds under a fractional
-stretch), a rate without keyframes or an expression isn't sampled, and a Particle World layer with
+stretch), a rate without keyframes or an expression isn't sampled, and a layer of one of them with
 expressions isn't layer cached (its key can't see what an expression returned at earlier times).
 `effectcraft-cli bench --gpu` reports CPU vs GPU ms/frame, speed-up, Auto's ms/frame, pixel
 agreement and the steady-state upload / readback MB per frame for every comp plus an
@@ -401,7 +401,10 @@ hierarchical block-matching optical flow and a bidirectional warp (Pixel Motion,
 its nested layers straight into the parent with concatenated transforms (one resample), so
 nested blend modes and adjustment layers act on the parent's layers; nested 3D layers use the
 parent's camera and lights and, when the precomp layer is 3D, are depth-sorted with the parent's
-3D run. Masks, effects or styles force a flattened render. Text layers are always rasterised at
+3D run. Essential Properties overrides (properties, Font and Media Replacement) travel with the
+collapsed context and are applied while the nested layers are evaluated, so they do not force a
+flattened render or clip at the precomp's frame. Masks, effects or styles force a flattened
+render. Text layers are always rasterised at
 their on-screen scale, as text is vector in After Effects; on shape layers and vector footage the
 switch is Continuously Rasterize and does the same. Quality: Draft samples
 nearest-neighbour, Wireframe draws the layer bounds. Slip edit (`layer.slip`, Alt+PageUp/Down,
@@ -468,8 +471,10 @@ effects crate, hence the `effects → track` edge.
 `essential` field lists its exposed controls (properties, Media Replacement, groups, comments).
 Every precomp layer of such a comp gets an Essential Properties group (`GroupKind::Essential`,
 children `eg<control id>`), kept in step by `Session::edit`; editing a child overrides it for
-that instance. The renderer draws an instance with overrides from a copy of the project with the
-overridden source properties set (`essential::with_overrides`). Templates are `.ectemplate`
+that instance. A collapsed instance carries its property, Font and Media Replacement overrides
+into the nested render context (`Collapsed`, `EvalCtx::{property_overrides, media_overrides}`);
+other instances are drawn from a copy of the project with the overridden source properties set
+(`essential::with_overrides`). Templates are `.ectemplate`
 ZIPs: `manifest.json` (controls), `project.ecproj` (the comp and its dependencies), `media/…` and
 `poster.png`; importing offsets every id past the project's (`essential::offset_ids`).
 **Responsive Design — Time**: a time-stretched precomp maps time piecewise so its protected

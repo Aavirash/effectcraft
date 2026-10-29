@@ -1038,7 +1038,7 @@ fn flac_audio_of_any_shape_reads_in_device_blocks() {
         // ffmpeg's sine source has an amplitude of 1/8 (mono is duplicated). The fixture carries
         // channels 0 and 1 at full level and the others at half, so a multichannel file sounds as
         // its stereo downmix (tests/it/downmix.rs checks that matrix channel by channel).
-        let gains = effectcraft_media::downmix::stereo_gains(channels as usize, false);
+        let gains = effectcraft_media::downmix::stereo_gains(channels as usize);
         let side = |s: usize| gains.iter().enumerate().map(|(c, g)| f64::from(g[s]) * if c < 2 { 1.0 } else { 0.5 }).sum::<f64>();
         let want = 0.125 * ((side(0).powi(2) + side(1).powi(2)) / 2.0).sqrt() / 2f64.sqrt();
         let rms = (sum / n.max(1) as f64).sqrt();
