@@ -320,6 +320,7 @@ pub fn frontend(app: &mut EffectcraftApp, ctx: &egui::Context, id: &str, p: Valu
             Value::Null
         }
         "window.saveWorkspace" => {
+            crate::workspace_state::ensure_positions_ready(&app.ui)?;
             let name = app.ui.workspace.clone();
             app.ui.saved_workspaces.insert(name.clone(), app.ui.dock.clone());
             app.store_saved_workspaces()?;
@@ -336,6 +337,7 @@ pub fn frontend(app: &mut EffectcraftApp, ctx: &egui::Context, id: &str, p: Valu
                 );
                 return Ok(Value::Null);
             };
+            crate::workspace_state::ensure_positions_ready(&app.ui)?;
             app.ui.saved_workspaces.insert(name.clone(), app.ui.dock.clone());
             app.ui.workspace = name.clone();
             app.store_saved_workspaces()?;
@@ -359,6 +361,7 @@ pub fn frontend(app: &mut EffectcraftApp, ctx: &egui::Context, id: &str, p: Valu
             };
             let builtin = crate::dock::WORKSPACES.contains(&name.as_str());
             if p.get("delete").and_then(Value::as_bool) == Some(true) {
+                crate::workspace_state::ensure_positions_ready(&app.ui)?;
                 if app.ui.saved_workspaces.remove(&name).is_none() && !builtin {
                     return Err(format!("no workspace `{name}`"));
                 }
@@ -373,6 +376,7 @@ pub fn frontend(app: &mut EffectcraftApp, ctx: &egui::Context, id: &str, p: Valu
                 if builtin {
                     return Err(format!("`{name}` is a built-in workspace: save it as a new workspace instead"));
                 }
+                crate::workspace_state::ensure_positions_ready(&app.ui)?;
                 let dock = app.ui.saved_workspaces.remove(&name).ok_or_else(|| format!("no workspace `{name}`"))?;
                 app.ui.saved_workspaces.insert(new.to_string(), dock);
                 if app.ui.workspace == name {
