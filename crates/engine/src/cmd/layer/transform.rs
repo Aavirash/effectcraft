@@ -89,7 +89,7 @@ pub(super) fn transform_op(s: &mut Session, p: &Value) -> Result<Value> {
         .map(|l| {
             let (w, h) = effectcraft_render::source_size(&s.project, l);
             if fitting && (w == 0 || h == 0) {
-                match effectcraft_render::content_bounds(&ectx, l).filter(|b| b[2] > b[0] && b[3] > b[1]) {
+                match effectcraft_render::content_bounds(&ectx, l).filter(|b| b.iter().all(|v| v.is_finite()) && b[2] > b[0] && b[3] > b[1]) {
                     Some(b) => (l.id, [b[2] - b[0], b[3] - b[1]], [(b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0]),
                     None => (l.id, [0.0; 2], [0.0; 2]),
                 }
@@ -127,6 +127,10 @@ pub(super) fn transform_op(s: &mut Session, p: &Value) -> Result<Value> {
                         "fitHeight" => (ch / h, ch / h),
                         _ => (cw / w, ch / h),
                     };
+                    // A tiny shape's bounds can overflow the scale; refuse rather than write infinity.
+                    if !(sx * 100.0).is_finite() || !(sy * 100.0).is_finite() {
+                        return Err(EngineError::Other(format!("layer {} is too small to fit to the composition", lid.0)));
+                    }
                     let z = |m: &str, d: f64| tr.get(m).map(|p| p.value_at(lt).as_vec3()[2]).unwrap_or(d);
                     let (sz, az) = (z("scale", 100.0), z("anchor", 0.0));
                     set(tr, "scale", KV::Vec3([sx * 100.0, sy * 100.0, sz]));

@@ -1155,6 +1155,15 @@ fn fit_to_comp_fills_the_comp_with_shape_and_text_bounds() {
 }
 
 #[test]
+fn fit_to_comp_refuses_a_scale_that_overflows() {
+    let mut s = comp();
+    let a = s.execute("layer.newShape", json!({"kind": "rect", "size": [1e-305, 80]})).unwrap()["layer"].as_u64().unwrap();
+    let before = s.project.clone();
+    assert!(s.execute("layer.transform", json!({"layers": [a], "op": "fit"})).is_err(), "an infinite scale is refused");
+    assert_eq!(s.project, before, "nothing was written");
+}
+
+#[test]
 fn duplicated_and_pasted_layers_keep_their_links() {
     let mut s = comp();
     let parent = solid(&mut s, "#ff0000");
