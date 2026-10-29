@@ -928,17 +928,19 @@ fn fonts_lists_bundled_and_installed_families() {
     let r = s.execute("text.fonts", json!({"query": "noto ser", "rescan": true})).unwrap();
     assert_eq!(r["families"][0]["family"], "Noto Serif");
     // The bundled face is Regular; the OS can also provide Bold, Italic, or other faces.
-    // Compare against the faces the font database retained after the rescan: a system face
-    // whose family and primary style duplicate a bundled one is skipped.
-    let mut expected_styles = std::collections::BTreeSet::from(["Regular".to_string()]);
-    expected_styles.extend(
-        effectcraft_text::fonts::all_faces()
-            .iter()
-            .filter(|face| face.info.family.eq_ignore_ascii_case("Noto Serif"))
-            .flat_map(|face| std::iter::once(face.info.style.clone()).chain(face.info.instances.iter().map(|i| i.style.clone()))),
-    );
+    // Model `add_source()` on the independent directory inventory: a system face whose family
+    // and primary style duplicate an earlier face is skipped, with its named instances.
+    let mut expected_styles = std::collections::BTreeSet::from(["regular".to_string()]);
+    let mut retained = std::collections::BTreeSet::from([("noto serif".to_string(), "regular".to_string())]);
+    for face in installed.iter().filter(|face| face.family.eq_ignore_ascii_case("Noto Serif")) {
+        if retained.insert((face.family.to_ascii_lowercase(), face.style.to_ascii_lowercase())) {
+            expected_styles.insert(face.style.to_ascii_lowercase());
+            expected_styles.extend(face.instances.iter().map(|i| i.style.to_ascii_lowercase()));
+        }
+    }
     let styles: Vec<String> = r["families"][0]["styles"].as_array().unwrap().iter().map(|style| style.as_str().unwrap().to_string()).collect();
-    assert_eq!(styles.iter().cloned().collect::<std::collections::BTreeSet<_>>(), expected_styles);
+    // `families()` keeps the first spelling of a style that differs only in case.
+    assert_eq!(styles.iter().map(|style| style.to_ascii_lowercase()).collect::<std::collections::BTreeSet<_>>(), expected_styles);
     assert_eq!(styles.len(), expected_styles.len(), "style menu has no duplicates");
     assert!(r["families"].as_array().unwrap().iter().all(|f| f["family"].as_str().unwrap().to_lowercase().contains("noto ser")));
     // The style menus offer a family's own styles.

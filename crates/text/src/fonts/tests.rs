@@ -108,14 +108,32 @@ fn bundled_families_and_resolution() {
             .or_else(|| candidates.iter().find(|f| f.info.instances.iter().any(|i| i.style.eq_ignore_ascii_case("Bold Italic"))));
         if let Some(exact) = exact {
             assert_eq!(resolved.face, exact.id, "real style wins for {family}");
+            let expected_instance = if exact.info.style.eq_ignore_ascii_case("Bold Italic") {
+                None
+            } else {
+                exact.info.instances.iter().position(|i| i.style.eq_ignore_ascii_case("Bold Italic")).and_then(|i| u16::try_from(i).ok())
+            };
+            assert_eq!(resolved.instance, expected_instance, "exact style instance for {family}");
             assert!(!resolved.synth_bold && !resolved.synth_italic);
         } else {
-            // Italic mismatch dominates any supported font weight distance.
-            let distance = |f: &Face| u32::from(f.info.weight.abs_diff(700)) + if f.info.italic { 0 } else { 1_000 };
-            let nearest = candidates.iter().map(|f| distance(f)).min().unwrap();
-            assert_eq!(distance(&selected), nearest, "closest available style for {family}");
-            assert_eq!(resolved.synth_bold, selected.info.weight <= 500);
-            assert_eq!(resolved.synth_italic, !selected.info.italic);
+            // Italic mismatch dominates any supported font weight distance. Named instances
+            // resolve at their effective weight and slant, not the face's defaults.
+            let selected_instance = resolved.instance.and_then(|i| selected.info.instances.get(usize::from(i)));
+            let selected_weight = selected_instance.map_or(selected.info.weight, |i| i.weight(selected.info.weight));
+            let selected_italic = selected_instance.map_or(selected.info.italic, |i| i.italic(selected.info.italic));
+            let distance = |weight: u16, italic: bool| u32::from(weight.abs_diff(700)) + if italic { 0 } else { 1_000 };
+            let nearest = candidates
+                .iter()
+                .flat_map(|f| {
+                    std::iter::once((f.info.weight, f.info.italic))
+                        .chain(f.info.instances.iter().map(move |i| (i.weight(f.info.weight), i.italic(f.info.italic))))
+                })
+                .map(|(weight, italic)| distance(weight, italic))
+                .min()
+                .unwrap();
+            assert_eq!(distance(selected_weight, selected_italic), nearest, "closest available style for {family}");
+            assert_eq!(resolved.synth_bold, selected_weight <= 500);
+            assert_eq!(resolved.synth_italic, !selected_italic);
         }
     }
 }
@@ -169,6 +187,7 @@ fn variable_named_instances_resolve_and_list() {
         ("Regular", 400.0, Some("EffectCraftInstanceTest-Regular")),
         ("Black", 900.0, Some("EffectCraftInstanceTest-Black")),
         ("Extra Bold", 800.0, None),
+        ("Bold Italic", 700.0, Some("EffectCraftInstanceTest-BoldItalic")),
     ];
     assert_eq!(add_font_data(crate::sfnt::test_font::variable(FAMILY, &instances, true)).len(), 1);
     let wght = |r: &Resolved| instance_variations(r);
@@ -190,10 +209,15 @@ fn variable_named_instances_resolve_and_list() {
     assert_eq!(wght(&ps), vec![("wght".to_string(), 900.0)]);
     assert_eq!(wght(&resolve("EffectCraftInstanceTest-ExtraBold", "")), vec![("wght".to_string(), 800.0)]);
     assert_eq!(wght(&resolve("effectcraft instance test extra bold", "")), vec![("wght".to_string(), 800.0)]);
+    // A named instance keeps its own index, so layout applies its axis values.
+    let bold_italic = resolve(FAMILY, "Bold Italic");
+    assert!(!bold_italic.missing && !bold_italic.synth_bold && !bold_italic.synth_italic);
+    assert_eq!((bold_italic.face, bold_italic.instance), (black.face, Some(4)));
+    assert_eq!(wght(&bold_italic), vec![("wght".to_string(), 700.0)]);
     // The font menu lists every instance, in weight order.
     let fams = families();
     let styles = &fams.iter().find(|(f, _)| f == FAMILY).unwrap().1;
-    assert_eq!(styles, &["Light", "Regular", "Extra Bold", "Black"]);
+    assert_eq!(styles, &["Light", "Regular", "Extra Bold", "Black", "Bold Italic"]);
     // Static fonts are untouched.
     assert_eq!(resolve("Inter", "Bold").instance, None);
 }
