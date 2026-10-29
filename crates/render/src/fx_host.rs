@@ -98,12 +98,13 @@ impl EffectHost for FxHost<'_, '_, '_> {
     fn audio(&self, id: u64, start: f64, frames: usize, rate: u32) -> Option<Vec<f32>> {
         let other = self.ctx.layer(effectcraft_project::LayerId(id))?;
         let LayerSource::Footage { item } = &other.source else { return None };
-        let ItemKind::Footage(f) = &self.r.project.item(*item)?.kind else { return None };
+        let item = self.ctx.media_item(other, *item);
+        let ItemKind::Footage(f) = &self.r.project.item(item)?.kind else { return None };
         if !f.has_audio {
             return None;
         }
         let st = other.layer_time(Tick::from_seconds_f64(start));
-        self.r.footage.audio(*item, f, st, frames, rate)
+        self.r.footage.audio(item, f, st, frames, rate)
     }
 
     fn self_at(&self, layer_time: f64, effects: usize) -> Option<Buf> {
