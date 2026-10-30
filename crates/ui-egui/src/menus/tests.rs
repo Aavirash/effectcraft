@@ -473,6 +473,30 @@ fn closing_the_render_queue_reveals_the_panel_receiving_focus() {
     }
 }
 
+/// Closing a floating queue must focus the viewer that is actually shown, retaining maximization.
+#[test]
+fn closing_a_floating_queue_preserves_the_maximized_composition() {
+    let mut session = effectcraft_engine::Session::default();
+    session.execute("comp.new", json!({"name": "A", "width": 32, "height": 32, "duration": 2})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(|_| EffectcraftApp::new(session));
+    h.run_steps(3);
+    let ctx = h.ctx.clone();
+    let app = h.state_mut();
+    app.show_panel(PanelKind::Composition);
+    app.show_panel(PanelKind::RenderQueue);
+    app.apply_dock(craft_ui::docking::Action::Float { panel: PanelKind::RenderQueue, rect: [50.0, 60.0, 400.0, 200.0] }).unwrap();
+    app.toggle_maximize(PanelKind::Composition);
+    app.ui.focused = PanelKind::RenderQueue;
+    assert!(app.ui.dock.is_visible(PanelKind::Timeline), "the hidden underlying tab triggers the regression");
+    assert!(!panel_shown(app, PanelKind::Timeline));
+    invoke(app, &ctx, "file.close", json!({})).unwrap();
+    h.run_steps(3);
+    assert_eq!(h.state().ui.focused, PanelKind::Composition);
+    assert_eq!(h.state().ui.maximized, Some(PanelKind::Composition));
+    assert!(!h.state().ui.dock.is_open(PanelKind::RenderQueue));
+    assert_eq!(h.state().session.state.open_comps.len(), 1);
+}
+
 #[test]
 fn queue_close_preserves_state_when_workspace_is_locked() {
     let ctx = egui::Context::default();

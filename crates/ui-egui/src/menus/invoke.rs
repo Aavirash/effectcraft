@@ -229,8 +229,7 @@ pub fn invoke(app: &mut EffectcraftApp, ctx: &egui::Context, id: &str, params: V
         app.apply_dock(craft_ui::docking::Action::Close { panel: PanelKind::RenderQueue })?;
         // The focus goes to a panel that is still there, so the next Close acts on the composition
         // instead of on the queue that is gone.
-        let next =
-            [PanelKind::Timeline, PanelKind::Composition, PanelKind::Project].into_iter().find(|p| app.ui.dock.is_visible(*p)).unwrap_or(PanelKind::Project);
+        let next = [PanelKind::Timeline, PanelKind::Composition, PanelKind::Project].into_iter().find(|p| panel_shown(app, *p)).unwrap_or(PanelKind::Project);
         app.show_panel(next);
         app.focus_panel(ctx, next);
         // Activating a passive viewer emits OpenComp, which raises Timeline. Finish that routing
