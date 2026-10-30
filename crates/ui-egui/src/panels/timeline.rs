@@ -1324,6 +1324,20 @@ fn layer_drag_id() -> egui::Id {
     egui::Id::unique("tl-layer-drag")
 }
 
+/// An effect, mask, shape item or text animator being dragged to a new place among its
+/// siblings (#2210).
+#[derive(Clone)]
+struct GroupDrag {
+    comp: ItemId,
+    owner: egui::Id,
+    layer: LayerId,
+    uid: u64,
+}
+
+fn group_drag_id() -> egui::Id {
+    egui::Id::unique("tl-group-drag")
+}
+
 /// A keyframe drag in progress: where the pointer started, the grabbed key's comp time
 /// (seconds), how many frames the selected keys have moved so far and, for a Quick Offset
 /// (Ctrl/Cmd+Alt), how many layers it staggers.
@@ -1514,15 +1528,15 @@ fn shift_range(ctx: &egui::Context, cid: ItemId, comp: &Comp, rows: &[Row], sele
     let anchor = ctx.data(|d| d.get_temp::<LayerId>(anchor_id(cid))).or_else(|| selected.first().copied())?;
     let a = comp.layers.iter().position(|l| l.id == anchor)?;
     let b = comp.layers.iter().position(|l| l.id == layer)?;
-    let span = comp.layers.get(a.min(b)..=a.max(b))?;
-    Some(span.iter().filter(|l| !l.switches.locked && rows.iter().any(|r| r.layer == l.id)).map(|l| l.id.0).collect())
+    let span = comp.layers.iter().skip(a.min(b)).take(a.max(b) - a.min(b) + 1);
+    Some(span.filter(|l| !l.switches.locked && rows.iter().any(|r| r.layer == l.id)).map(|l| l.id.0).collect())
 }
 
 /// Set on the frame the reorder drag is released.
 /// Where layers dropped at height `py` land among the visible layer rows: above the first row
 /// whose middle is below it (its index in `layer_rows`), else below the last row. Returns that
 /// and the y of the line that shows it (`top` without rows).
-fn insertion(layer_rows: &[(Rect, LayerId)], py: f32, top: f32) -> (Option<usize>, f32) {
+fn insertion<T>(layer_rows: &[(Rect, T)], py: f32, top: f32) -> (Option<usize>, f32) {
     let at = layer_rows.iter().position(|(r, _)| py < r.center().y);
     let y = match at {
         Some(i) => layer_rows.get(i).map_or(top, |(r, _)| r.min.y),
@@ -1758,7 +1772,7 @@ fn layout(app: &mut EffectcraftApp, ui: &egui::Ui, rect: Rect, cid: ItemId, comp
 fn empty_timeline(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
     let t = app.tokens;
     let ctx = ui.ctx().clone();
-    ui.painter().text(rect.center(), Align2::CENTER_CENTER, "(no composition)", Tokens::ui(12.0), t.text_faint);
+    ui.painter().text(rect.center(), Align2::CENTER_CENTER, crate::i18n::tr("(no composition)"), Tokens::ui(12.0), t.text_faint);
     // Dropping footage into an empty Timeline should create its first composition,
     // just like dropping onto the Project panel's New Composition button (#649).
     if let Some(crate::panels::DragPayload::Item(dragged)) = egui::DragAndDrop::payload::<crate::panels::DragPayload>(&ctx).as_deref()
@@ -1885,6 +1899,7 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
     alt_scale_and_graph(app, ui, g, &ectx);
     graph_empty_area(ui, g);
     layer_reorder_drag(ui, g);
+    group_reorder_drag(ui, g);
     quick_offset_follow(g);
     key_drag_follow(app, g);
     key_box_select(app, ui, g);
@@ -2198,7 +2213,7 @@ fn header_search_and_switches(app: &mut EffectcraftApp, ui: &mut egui::Ui, g: &T
     let comp = g.comp.clone();
     let sr = Rect::from_min_size(pos2(tc_rect.max.x + 14.0, top + 12.0), vec2((left_w - 420.0).clamp(120.0, 220.0), 22.0));
     let mut search = app.ui.timeline.search.clone();
-    widgets::search_field(ui, sr, &mut search, "Search", &t);
+    widgets::search_field(ui, sr, &mut search, crate::i18n::tr("Search"), &t);
     app.ui.timeline.search = search;
     app.auto.add("timeline.search", sr, "Search");
     let mut bx = rect.min.x + left_w - 10.0;
@@ -3559,6 +3574,7 @@ fn group_mask_mode(ui: &mut egui::Ui, g: &mut Rw, rc: &RowCtx<'_>) {
 
 /// Group row click and double-click.
 fn group_row_click(app: &mut EffectcraftApp, ui: &mut egui::Ui, g: &mut Rw, rc: &RowCtx<'_>) {
+    let cid = g.tl.cid;
     let cw = &g.tl.cw;
     let actions = &mut g.tl.actions;
     let ui_actions = &mut g.ui_actions;
@@ -3567,7 +3583,12 @@ fn group_row_click(app: &mut EffectcraftApp, ui: &mut egui::Ui, g: &mut Rw, rc: 
     let indent = rc.indent;
     let RowKind::Group { uid, name, fx, .. } = &rc.row.kind else { return };
     let gr_rect = Rect::from_min_max(pos2(indent + 8.0, r.min.y), pos2(cw.switches, r.max.y));
-    let gr = ui.interact(gr_rect, egui::Id::unique(("grow", uid)), Sense::click());
+    // Effects, masks, shape items and animators drag to a new place among their siblings.
+    let movable = !layer.switches.locked && layer.props.find_group(*uid).is_some_and(PropGroup::is_instance);
+    let gr = ui.interact(gr_rect, egui::Id::unique(("grow", uid)), if movable { Sense::click_and_drag() } else { Sense::click() });
+    if movable && gr.drag_started_by(egui::PointerButton::Primary) {
+        ui.ctx().data_mut(|d| d.insert_temp(group_drag_id(), GroupDrag { comp: cid, owner: gr.id, layer: layer.id, uid: *uid }));
+    }
     app.auto.add(&format!("timeline.group.{uid}.name"), gr_rect, name);
     if gr.clicked() && uid & (WAVE_BIT | GEOM_BIT) == 0 {
         actions.push(("prop.select".into(), json!({"layer": layer.id.0, "prop": uid, "selectKeys": false})));
@@ -3601,7 +3622,7 @@ fn waveform_row(app: &mut EffectcraftApp, g: &Rw, rc: &RowCtx<'_>) {
     let RowKind::Waveform { item, .. } = &rc.row.kind else { return };
     lp.rect_filled(left, 0.0, if ri.is_multiple_of(2) { t.row } else { t.row_alt });
     let indent = cw.name + 6.0 + 14.0 * row.depth as f32;
-    lp.text(pos2(indent + 10.0, cy), Align2::LEFT_CENTER, "Waveform", Tokens::ui(12.0), t.text);
+    lp.text(pos2(indent + 10.0, cy), Align2::LEFT_CENTER, crate::i18n::tr("Waveform"), Tokens::ui(12.0), t.text);
     let wr = Rect::from_min_max(pos2(graph_x0, r.min.y), r.max);
     gp.rect_filled(wr, 0.0, t.tl_bg);
     app.auto.add(&format!("timeline.layer.{}.waveform", layer.id.0), wr, "Waveform");
@@ -3611,7 +3632,7 @@ fn waveform_row(app: &mut EffectcraftApp, g: &Rw, rc: &RowCtx<'_>) {
             gp.text(
                 pos2(tm.x(layer.in_point.seconds()).max(wr.min.x) + 6.0, wr.center().y),
                 Align2::LEFT_CENTER,
-                "Building waveform…",
+                crate::i18n::tr("Building waveform…"),
                 Tokens::ui(11.0),
                 t.text_faint,
             );
@@ -4090,6 +4111,7 @@ fn key_context_menu(app: &mut EffectcraftApp, g: &mut Rw, rc: &RowCtx<'_>, prop:
             ("Keyframe Interpolation…", "keys.interpolation", json!({})),
             ("Keyframe Velocity…", "keys.velocity", json!({})),
             ("Toggle Hold Keyframe", "keys.toggleHold", json!({})),
+            (if k.muted { "Unmute Keyframes" } else { "Mute Keyframes" }, "keys.setMuted", json!({"muted": !k.muted})),
             ("Rove Across Time", "keys.interpolation", json!({"roving": !k.roving})),
             ("-", "", json!({})),
             ("Easy Ease", "keys.easyEase", json!({})),
@@ -4182,6 +4204,8 @@ fn key_paint(g: &Rw, rc: &RowCtx<'_>, k: &effectcraft_engine::keyframe::Keyframe
         None if ks => t.keyframe_selected,
         None => t.keyframe,
     };
+    // Muted keys stay visible and editable but no longer drive the value.
+    let kcol = if k.muted { kcol.gamma_multiply(0.35) } else { kcol };
     if k.roving {
         // Roving keys: a small dot (their time follows their neighbours).
         gp.circle_filled(c, 2.5, kcol);
@@ -4479,6 +4503,50 @@ fn layer_reorder_drag(ui: &mut egui::Ui, g: &mut Rw) {
         }
     }
     // Quick Offset of layer bars: the last selected layer moves by whole frames with the pointer
+}
+
+/// Group reorder drag (#2210): a line where the dragged effect, mask or shape item lands among
+/// its siblings; the drop moves it there (`prop.moveGroup`). Escape cancels.
+fn group_reorder_drag(ui: &mut egui::Ui, g: &mut Rw) {
+    let ctx = g.tl.ctx.clone();
+    let comp = g.tl.comp.clone();
+    let Some(drag) = ctx.data(|d| d.get_temp::<GroupDrag>(group_drag_id())) else { return };
+    let (down, released, escape) =
+        ctx.input(|i| (i.pointer.primary_down(), i.pointer.button_released(egui::PointerButton::Primary), i.key_pressed(egui::Key::Escape)));
+    let dropped = ctx.drag_stopped_id() == Some(drag.owner) && released;
+    let parent = comp.layer(drag.layer).and_then(|l| l.props.parent_of(drag.uid));
+    let valid = ui.is_enabled() && drag.comp == g.tl.cid && parent.is_some() && !escape && (dropped || (down && ctx.dragged_id() == Some(drag.owner)));
+    if dropped || !valid {
+        ctx.data_mut(|d| d.remove::<GroupDrag>(group_drag_id()));
+    }
+    let Some(parent) = parent.filter(|_| valid) else { return };
+    let siblings: Vec<u64> = parent.children.iter().map(Node::uid).collect();
+    let rows: Vec<(Rect, u64)> = g
+        .hit_rows
+        .iter()
+        .filter_map(|(r, row)| match &row.kind {
+            RowKind::Group { uid, .. } if row.layer == drag.layer && siblings.contains(uid) => Some((*r, *uid)),
+            _ => None,
+        })
+        .collect();
+    let Some(py) = ui.input(|i| i.pointer.interact_pos().or(i.pointer.latest_pos())).map(|p| p.y) else { return };
+    if rows.is_empty() {
+        return;
+    }
+    let (at, line_y) = insertion(&rows, py, g.tl.rows_rect.min.y);
+    if !dropped {
+        ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
+        g.tl.p.with_clip_rect(g.tl.rows_rect).line_segment([pos2(g.tl.rect.min.x, line_y), pos2(g.tl.graph_x0, line_y)], Stroke::new(2.0, g.tl.t.accent));
+        return;
+    }
+    // The sibling the drop lands before (or after, below the last visible one).
+    let Some(&(_, anchor)) = at.map_or(rows.last(), |i| rows.get(i)) else { return };
+    let from = siblings.iter().position(|u| *u == drag.uid);
+    let rest: Vec<u64> = siblings.iter().copied().filter(|u| *u != drag.uid).collect();
+    let to = if anchor == drag.uid { from } else { rest.iter().position(|u| *u == anchor).map(|i| i + usize::from(at.is_none())) };
+    if let Some(to) = to.filter(|to| Some(*to) != from) {
+        g.tl.actions.push(("prop.moveGroup".into(), json!({"layer": drag.layer.0, "prop": drag.uid, "index": to + 1})));
+    }
 }
 
 /// Quick Offset of layer bars follows the pointer.
@@ -5063,6 +5131,7 @@ const SHAPE_ADD_ITEMS: &[(&str, &str)] = &[
     ("trim", "Trim Paths"),
     ("twist", "Twist"),
     ("wiggle", "Wiggle Paths"),
+    ("wiggler", "Wiggle Transform"),
     ("zigzag", "Zig Zag"),
 ];
 
