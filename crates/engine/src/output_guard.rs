@@ -312,6 +312,7 @@ struct Clash<'a> {
 #[derive(Default)]
 struct Writes {
     all: Vec<Write>,
+    path_bytes: usize,
     /// The first output to write a file, by name.
     files: HashMap<String, usize>,
     /// ... and by what the file is on its volume.
@@ -374,7 +375,12 @@ impl Writes {
         }
     }
 
-    fn push(&mut self, write: Write) {
+    fn push(&mut self, write: Write) -> Result<(), String> {
+        let path_bytes = self.path_bytes.saturating_add(write.path.len());
+        if self.all.len() >= 65_536 || path_bytes > 16 * 1024 * 1024 {
+            return Err("render output plan exceeds 65536 paths or 16 MiB of path names; split the queue".into());
+        }
+        self.path_bytes = path_bytes;
         let at = self.all.len();
         match &write.target {
             Target::File { key, identity } => {
@@ -386,6 +392,7 @@ impl Writes {
             Target::Frames { .. } => {}
         }
         self.all.push(write);
+        Ok(())
     }
 }
 
@@ -459,8 +466,11 @@ impl Session {
             if seen.contains(&item.id) {
                 continue;
             }
-            let reason = match self.check_output(&protected, item, path) {
-                Ok(reason) => reason,
+            let reason = match self.write_paths(item, path) {
+                Ok(paths) => paths.iter().find_map(|path| match self.check_output(&protected, item, path) {
+                    Ok(reason) => reason,
+                    Err(reason) => Some(reason),
+                }),
                 Err(reason) => Some(reason),
             };
             if let Some(reason) = reason {
@@ -472,18 +482,55 @@ impl Session {
     }
 
     /// What the job writes more than once. An item in `refused` writes nothing, so it takes no part.
-    pub(crate) fn duplicate_outputs(&self, items: &[Vec<(RenderQueueItem, String)>], refused: &[Refused]) -> Vec<DuplicateOutput> {
+    pub(crate) fn duplicate_outputs(&self, items: &[Vec<(RenderQueueItem, String)>], refused: &[Refused]) -> Result<Vec<DuplicateOutput>, String> {
         let skip: HashSet<u64> = refused.iter().map(|r| r.item).collect();
         let mut writes = Writes::default();
         let mut duplicates = Vec::new();
         for (m, path) in items.iter().flatten().filter(|(m, _)| !skip.contains(&m.id)) {
-            let write = self.write_of(m, path, true);
-            if let Some(clash) = writes.clash(&write) {
-                duplicates.push(self.duplicate_of(&write, &clash));
+            let paths = self.write_paths(m, path)?;
+            // Alternative destinations of one output cannot collide with themselves.
+            for path in &paths {
+                let write = self.write_of(m, path, true);
+                if let Some(clash) = writes.clash(&write) {
+                    duplicates.push(self.duplicate_of(&write, &clash));
+                    break;
+                }
             }
-            writes.push(write);
+            for path in paths {
+                writes.push(self.write_of(m, &path, true))?;
+            }
         }
-        duplicates
+        Ok(duplicates)
+    }
+
+    /// Every possible destination, since quota decisions can change during rendering.
+    fn write_paths<'a>(&self, item: &RenderQueueItem, path: &'a str) -> Result<Vec<std::borrow::Cow<'a, str>>, String> {
+        let overflow = &self.project.render_prefs.overflow_folders;
+        const PATH_BYTES: usize = 1024 * 1024;
+        if path.len() > PATH_BYTES {
+            return Err("render output destinations exceed 1 MiB of path names".into());
+        }
+        let mut paths = vec![std::borrow::Cow::Borrowed(path)];
+        let mut bytes = path.len();
+        if item.settings.storage_overflow && self.storage_quota.is_some() {
+            if overflow.len() > 256 {
+                return Err("render output planning supports at most 256 storage overflow folders".into());
+            }
+            if let Some(name) = Path::new(path).file_name() {
+                for folder in overflow {
+                    if bytes.saturating_add(folder.len()).saturating_add(name.len()).saturating_add(1) > PATH_BYTES {
+                        return Err("render output destinations exceed 1 MiB of path names".into());
+                    }
+                    let destination = Path::new(folder).join(name).to_string_lossy().into_owned();
+                    bytes = bytes.saturating_add(destination.len());
+                    if bytes > PATH_BYTES {
+                        return Err("render output destinations exceed 1 MiB of path names".into());
+                    }
+                    paths.push(std::borrow::Cow::Owned(destination));
+                }
+            }
+        }
+        Ok(paths)
     }
 
     /// What `path`, an output of `m`, writes. `by_identity`: see [`Target::file`].
@@ -494,7 +541,7 @@ impl Session {
         } else {
             Target::file(Path::new(path), by_identity)
         };
-        let skips = m.settings.skip_existing && self.exporter.as_ref().is_some_and(|exporter| exporter.supports_skip_existing());
+        let skips = m.settings.skip_existing && self.exporter.as_ref().is_some_and(|exporter| exporter.supports_skip_existing(&m.settings));
         Write { item: m.id, path: path.to_string(), target, skips }
     }
 
@@ -548,7 +595,7 @@ impl Session {
         // Native source protection stays with its filesystem guard; virtual web outputs still
         // need distinct queue names because the browser stores completed files by path.
         let protected = if cfg!(target_arch = "wasm32") { Protected::default() } else { self.protected_files() };
-        let queue = self.queue_writes();
+        let Ok(queue) = self.queue_writes() else { return };
         if protected.is_empty() && queue.is_empty() {
             return;
         }
@@ -566,7 +613,11 @@ impl Session {
                     }
                     Ok(None) => {}
                 }
-                in_the_way |= queue.clash(&self.write_of(module, path, false)).is_some();
+                let Ok(paths) = self.write_paths(module, path) else {
+                    item.output.output = template;
+                    return;
+                };
+                in_the_way |= paths.iter().any(|path| queue.clash(&self.write_of(module, path, false)).is_some());
             }
             if !in_the_way {
                 return;
@@ -577,14 +628,16 @@ impl Session {
 
     /// What the items of the queue write (by name: a new item is not compared with what is on
     /// disk).
-    fn queue_writes(&self) -> Writes {
+    fn queue_writes(&self) -> Result<Writes, String> {
         let mut writes = Writes::default();
         for outputs in self.project.render_queue.iter().filter_map(|it| self.outputs_of(it, None).ok()) {
             for (m, path) in &outputs {
-                writes.push(self.write_of(m, path, false));
+                for path in self.write_paths(m, path)? {
+                    writes.push(self.write_of(m, &path, false))?;
+                }
             }
         }
-        writes
+        Ok(writes)
     }
 }
 
@@ -602,11 +655,11 @@ mod tests {
             s.execute("renderQueue.add", json!({"format": "h264", "output": "/virtual/shared.mp4"})).unwrap();
         }
         let (outputs, _) = s.queued_outputs(&effectcraft_project::render_queue::OutputFormat::ALL);
-        let duplicates = s.duplicate_outputs(&outputs, &[]);
+        let duplicates = s.duplicate_outputs(&outputs, &[]).unwrap();
         assert_eq!(duplicates.len(), 1);
         assert!(duplicates[0].path.ends_with("shared.mp4"));
         let refused = [Refused { item: duplicates[0].item, reason: "already refused".into() }];
-        assert!(s.duplicate_outputs(&outputs, &refused).is_empty());
+        assert!(s.duplicate_outputs(&outputs, &refused).unwrap().is_empty());
     }
 
     /// An output of queue item `item` that is a file, known by its name alone.
@@ -622,9 +675,20 @@ mod tests {
     fn job_of(writes: impl IntoIterator<Item = Write>) -> Writes {
         let mut job = Writes::default();
         for write in writes {
-            job.push(write);
+            job.push(write).unwrap();
         }
         job
+    }
+
+    #[test]
+    fn output_plan_path_budget_returns_an_error() {
+        let mut job = Writes::default();
+        let path = "x".repeat(1024 * 1024);
+        for _ in 0..16 {
+            job.push(movie(1, &path)).unwrap();
+        }
+        assert!(job.push(movie(2, "one-too-many")).is_err());
+        assert_eq!(job.all.len(), 16);
     }
 
     /// The item an output replaces a file of, how many files, and the first.

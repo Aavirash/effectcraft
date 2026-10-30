@@ -28,7 +28,7 @@ impl Exporter for Writer {
     fn formats(&self) -> Vec<OutputFormat> {
         OutputFormat::ALL.to_vec()
     }
-    fn supports_skip_existing(&self) -> bool {
+    fn supports_skip_existing(&self, _: &effectcraft_project::render_queue::RenderSettings) -> bool {
         true
     }
     fn export(&self, job: &ExportJob, _: &mut dyn FnMut(u64, u64) -> bool) -> Result<ExportResult, String> {
@@ -633,6 +633,7 @@ impl Fixture {
         let duplicates: Vec<Value> = self
             .s
             .duplicate_outputs(&items, &refused)
+            .unwrap()
             .iter()
             .map(|d| {
                 json!({
@@ -656,6 +657,42 @@ impl Fixture {
 /// A PNG sequence of `pattern` for the composition's seconds `start..end`.
 fn span(pattern: &str, start: f64, end: f64) -> Value {
     json!({"format": "png", "output": pattern, "timeSpan": "custom", "start": start, "end": end})
+}
+
+fn with_overflow(f: &mut Fixture) {
+    struct Room;
+    impl effectcraft_project::render_queue::StorageQuota for Room {
+        fn has_room(&self, _: &str, _: u64) -> bool {
+            true
+        }
+    }
+    f.s.storage_quota = Some(Arc::new(Room));
+    std::fs::create_dir_all(f.path("overflow")).unwrap();
+    Arc::make_mut(&mut f.s.project).render_prefs.overflow_folders = vec![f.text("overflow")];
+}
+
+#[test]
+fn default_names_avoid_possible_storage_overflow_collisions() {
+    let mut f = Fixture::new("overflow-default");
+    f.comp("Main");
+    with_overflow(&mut f);
+    f.add(json!({"output": f.text("other/Main.mp4"), "storageOverflow": true}));
+    f.add(json!({"storageOverflow": true}));
+    assert_eq!(f.output(1), f.path("Main_1.mp4"));
+    assert!(f.clashes().is_empty());
+}
+
+#[test]
+fn possible_storage_overflow_destinations_cannot_replace_footage() {
+    let mut f = Fixture::new("overflow-footage");
+    f.comp("Main");
+    with_overflow(&mut f);
+    f.footage("overflow/Main.mp4");
+    f.add(json!({"output": f.text("other/Main.mp4"), "storageOverflow": true}));
+    let error = f.render(json!({})).unwrap_err().to_string();
+    assert!(error.contains("footage") && error.contains("Main.mp4"), "{error}");
+    assert!(f.exported().is_empty());
+    assert_eq!(f.read("overflow/Main.mp4"), SOURCE);
 }
 
 /// After Effects numbers the second item of one composition (`Comp 1_1.mov`). A default output

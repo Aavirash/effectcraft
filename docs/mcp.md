@@ -59,8 +59,9 @@ Two outputs of one job that write the same file (two items with one Output To, a
 output modules or segments that meet) refuse the whole `renderQueue.render` before anything is
 written: the reply is `isError: true`, naming both items, and the queue is left as it was.
 Sequences clash only on the frames both write. Skip Existing Files leaves earlier frames alone
-only when the exporter can check existing files; browser and other memory sinks still report
-collisions. A new item's default output name is numbered (`Main.mp4`,
+only when the exporter can check the final destination; browser/memory sinks and storage-overflow
+renders still report collisions. Preflight checks every configured overflow destination, since free
+space can change during a render. A new item's default output name is numbered (`Main.mp4`,
 `Main_1.mp4`) when another item of the queue writes it.
 
 ## Progress and cancellation

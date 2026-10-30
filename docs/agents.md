@@ -323,7 +323,8 @@ build real projects through these interfaces; they are worked examples of everyt
   `renderQueue.duplicate` copy, output modules, segments) name the same file, the whole render is
   refused before anything is written, naming both items. Sequences clash only on frames both
   write. A later item with Skip Existing Files leaves the earlier one's frames alone only when
-  the exporter can check existing files; browser and other memory sinks still report collisions. Default
+  the exporter can check the final destination. Browser/memory sinks and storage-overflow renders still report collisions.
+  Preflight compares every configured overflow destination, since available space can change during a render. Default
   names are numbered like footage collisions when another queue item writes them
   (`renderQueue.add`, `render.preRender`, `comp.saveFrameAs {queue}`, `file.createProxy`: a second
   `Main` renders to `Main_1.mp4`); a name you give is kept, and `renderQueue.duplicate` copies the
