@@ -4111,6 +4111,7 @@ fn key_context_menu(app: &mut EffectcraftApp, g: &mut Rw, rc: &RowCtx<'_>, prop:
             ("Keyframe Interpolation…", "keys.interpolation", json!({})),
             ("Keyframe Velocity…", "keys.velocity", json!({})),
             ("Toggle Hold Keyframe", "keys.toggleHold", json!({})),
+            (if k.muted { "Unmute Keyframes" } else { "Mute Keyframes" }, "keys.setMuted", json!({"muted": !k.muted})),
             ("Rove Across Time", "keys.interpolation", json!({"roving": !k.roving})),
             ("-", "", json!({})),
             ("Easy Ease", "keys.easyEase", json!({})),
@@ -4203,6 +4204,8 @@ fn key_paint(g: &Rw, rc: &RowCtx<'_>, k: &effectcraft_engine::keyframe::Keyframe
         None if ks => t.keyframe_selected,
         None => t.keyframe,
     };
+    // Muted keys stay visible and editable but no longer drive the value.
+    let kcol = if k.muted { kcol.gamma_multiply(0.35) } else { kcol };
     if k.roving {
         // Roving keys: a small dot (their time follows their neighbours).
         gp.circle_filled(c, 2.5, kcol);
