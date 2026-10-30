@@ -16,6 +16,7 @@ mod ui_character_eyedropper;
 mod ui_color_hex;
 mod ui_comp_presets;
 mod ui_control_modifiers;
+mod ui_dialog_preview;
 mod ui_dock_resize;
 mod ui_drag_drop;
 mod ui_effect_controls;

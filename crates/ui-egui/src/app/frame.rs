@@ -387,6 +387,11 @@ impl EffectcraftApp {
         let full = ui.max_rect();
         if self.dialog.is_some() {
             ui.disable();
+            // A dialog that edits what is behind it live (Preview) leaves the window at full
+            // brightness: clicks still don't reach it, but the canvas is not greyed out.
+            if self.dialog == Some(Dialog::GradientEditor) || panels::live_preview::active(self) {
+                ui.set_opacity(1.0);
+            }
         }
         ui.painter().rect_filled(full, 0.0, t.app_bg);
         let mut top = full.min.y;
