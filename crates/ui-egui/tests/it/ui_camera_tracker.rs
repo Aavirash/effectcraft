@@ -3,6 +3,7 @@
 //! The solve is a synthetic one written into the effect (the analysis itself is tested in the
 //! engine and track crates).
 
+use crate::gpu_test::RenderSerial;
 use effectcraft_engine::Session;
 use effectcraft_engine::effects::camera_tracker as ct;
 use effectcraft_engine::track::camtrack::{CameraSolve, ShotType, SolveMethod, SolvedFrame, SolvedPoint};
@@ -186,6 +187,7 @@ fn blender_export_button_opens_python_dialog_and_writes_scene() {
     let shot = std::env::var("EFFECTCRAFT_BLENDER_UI_SNAPSHOT").ok();
     let builder = Harness::builder().with_size(egui::vec2(1600.0, 1000.0));
     let builder = if shot.is_some() { builder.wgpu() } else { builder };
+    let _device = shot.is_some().then(crate::gpu_test::lock);
     let mut h = builder.build_eframe(|_| a);
     h.state_mut().show_panel(PanelKind::EffectControls);
     h.run_steps(5);
@@ -272,6 +274,7 @@ fn settle(h: &mut Harness<'_, EffectcraftApp>) {
 #[test]
 #[ignore = "analyses the demo's 3D Showcase and renders with wgpu; run with --ignored (set EC_SNAPSHOT_DIR to keep PNGs)"]
 fn snapshot_showcase_track() {
+    let _device = crate::gpu_test::lock();
     let dir = std::env::var("EC_SNAPSHOT_DIR").ok();
     let mut s = Session::default();
     s.execute("file.openDemoProject", json!({})).unwrap();
@@ -290,7 +293,7 @@ fn snapshot_showcase_track() {
     h.input_mut().events.push(egui::Event::PointerMoved(r.center() + egui::vec2(12.0, 12.0)));
     h.run_steps(2);
     if let Some(d) = &dir {
-        h.render().expect("render").save(format!("{d}/camera_tracker_hover.png")).unwrap();
+        h.render_serialized().expect("render").save(format!("{d}/camera_tracker_hover.png")).unwrap();
     }
     let sel: Vec<u64> = pts.iter().take(5).filter_map(|i| i.rsplit('.').next()?.parse().ok()).collect();
     h.state_mut().session.execute("camera.selectPoints", json!({"points": sel})).unwrap();
@@ -298,6 +301,6 @@ fn snapshot_showcase_track() {
     h.state_mut().session.execute("layer.select", json!({"layers": ["#3"]})).unwrap();
     settle(&mut h);
     if let Some(d) = &dir {
-        h.render().expect("render").save(format!("{d}/camera_tracker_solid.png")).unwrap();
+        h.render_serialized().expect("render").save(format!("{d}/camera_tracker_solid.png")).unwrap();
     }
 }
