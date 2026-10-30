@@ -176,11 +176,9 @@ fn convert_to_bezier(s: &mut Session, p: &Value) -> Result<Value> {
     // Read the geometry before editing, with the same expression-aware context the renderer
     // uses: an expression-driven corner radius, size or position must convert to what is on
     // screen, not to the property's underlying value.
-    let expr = s.expr.clone();
     let prepared = {
         let comp = s.project.comp(cid).ok_or(EngineError::NoComp)?;
-        let ctx =
-            EvalCtx { project: &s.project, comp_id: cid, comp, time: t, expr: expr.as_deref(), footage: None, property_overrides: &[], media_overrides: &[] };
+        let ctx = EvalCtx { expr: s.expr.as_deref(), ..EvalCtx::new(&s.project, cid, comp, t) };
         let mut prepared = Vec::new();
         for (lid, uid) in &shapes {
             let Some(l) = comp.layer(*lid) else { continue };
