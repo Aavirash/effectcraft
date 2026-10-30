@@ -236,6 +236,7 @@ fn install(s: &mut Session, p: &Value, panel: bool) -> Result<Value> {
     let cfg = s.config.clone().ok_or_else(|| EngineError::Other("this session has no settings folder to install scripts into".into()))?;
     let dir = if panel { PANELS_DIR } else { SCRIPTS_DIR };
     cfg.write(&format!("{dir}/{name}"), &code).map_err(|e| EngineError::Other(format!("cannot install {name}: {e}")))?;
+    s.scripts_changed();
     // After Effects asks for a restart; our menus pick it up at once.
     s.toast(if panel {
         format!("Installed ScriptUI panel {name}: find it at the bottom of the Window menu")
@@ -271,6 +272,7 @@ fn uninstall(s: &mut Session, p: &Value) -> Result<Value> {
             removed = true;
         }
     }
+    s.scripts_changed();
     if removed { Ok(json!({"removed": name})) } else { Err(bad(c, format!("`{name}` is not installed"))) }
 }
 
@@ -1058,6 +1060,66 @@ mod tests {
         s.execute("file.uninstallScript", json!({"name": "Hello.jsx"})).unwrap();
         assert!(installed.iter().all(|p| !p.exists()));
         assert!(bad_params(&s.execute("file.uninstallScript", json!({"name": "Hello.jsx"}))), "no longer installed");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Edit ▸ Keyboard Shortcuts lists the scripts File ▸ Scripts lists (not ScriptUI panels),
+    /// as soon as one is installed and until it is uninstalled; a key given to one is saved with
+    /// the preset.
+    #[test]
+    fn file_scripts_entries_take_keyboard_shortcuts() {
+        use crate::shortcuts::{Keymaps, SHORTCUTS_FILE, binding_key};
+        let (mut s, root) = session_in_tmp("shortcuts");
+        let (script, panel) = (root.join("Hello.jsx"), root.join("Hello Panel.jsx"));
+        std::fs::write(&script, "hello").unwrap();
+        std::fs::write(&panel, "panel").unwrap();
+        let listed = |s: &Session, name: &str| {
+            s.shortcuts().find(&binding_key("file.runScript", &json!({"name": name}))).map(|b| (b.label.clone(), b.path.join(" ▸ "), b.defaults.clone()))
+        };
+        assert_eq!(listed(&s, "Rename Layers.jsx"), Some(("Rename Layers.jsx".into(), "File ▸ Scripts".into(), vec![])), "the bundled samples");
+        assert_eq!(listed(&s, "Hello.jsx"), None);
+        s.execute("file.installScript", json!({"path": script.to_string_lossy()})).unwrap();
+        s.execute("file.installScriptUIPanel", json!({"path": panel.to_string_lossy()})).unwrap();
+        assert_eq!(listed(&s, "Hello.jsx"), Some(("Hello.jsx".into(), "File ▸ Scripts".into(), vec![])));
+        assert_eq!(listed(&s, "Hello Panel.jsx"), None, "panels are in the Window menu");
+        let r = s.execute("shortcuts.set", json!({"command": "file.runScript", "params": {"name": "Hello.jsx"}, "keys": "Cmd+Alt+Shift+F7"})).unwrap();
+        let key = binding_key("file.runScript", &json!({"name": "Hello.jsx"}));
+        assert_eq!((&r["command"], &r["keys"]), (&json!(key), &json!(["Cmd+Alt+Shift+F7"])), "{r}");
+        assert_eq!(s.shortcuts().shortcut_of("file.runScript", &json!({"name": "Hello.jsx"})), Some("Cmd+Alt+Shift+F7"));
+        let saved = Keymaps::from_json(&std::fs::read_to_string(root.join("settings").join(SHORTCUTS_FILE)).unwrap());
+        assert_eq!(saved.active_preset().and_then(|p| p.overrides.get(&key)), Some(&vec!["Cmd+Alt+Shift+F7".to_string()]));
+        s.execute("file.uninstallScript", json!({"name": "Hello.jsx"})).unwrap();
+        assert_eq!(listed(&s, "Hello.jsx"), None);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// `shortcuts.list` and `shortcuts.set` see a script copied into the Scripts folder by hand
+    /// after the shortcut table was built; a script the folder doesn't hold (never there, or
+    /// removed by hand) can't take a key, and Run Script File… keeps its own keys.
+    #[test]
+    fn shortcut_commands_find_scripts_copied_into_the_folder() {
+        let (mut s, root) = session_in_tmp("copied");
+        assert!(s.shortcuts().find("file.runScript").is_some(), "the table is built");
+        std::fs::create_dir_all(root.join("settings").join(SCRIPTS_DIR)).unwrap();
+        std::fs::write(root.join("settings").join(SCRIPTS_DIR).join("Copied.jsx"), "copied").unwrap();
+        let list = s.execute("shortcuts.list", json!({"query": "copied.jsx"})).unwrap();
+        assert_eq!(list["count"], 1, "{list}");
+        let r = s.execute("shortcuts.set", json!({"command": "file.runScript", "params": {"name": "Copied.jsx"}, "keys": "Cmd+Alt+Shift+F7"})).unwrap();
+        assert_eq!(r["command"], r#"file.runScript {"name":"Copied.jsx"}"#, "{r}");
+        let r = s.execute("shortcuts.set", json!({"command": "file.runScript", "params": {"name": "Missing.jsx"}, "keys": "Cmd+Alt+Shift+F8"}));
+        assert!(bad_params(&r), "{r:?}");
+        // The binding-key form finds a script copied in since the last lookup, too.
+        std::fs::write(root.join("settings").join(SCRIPTS_DIR).join("Second.jsx"), "second").unwrap();
+        let r = s.execute("shortcuts.set", json!({"command": r#"file.runScript {"name":"Second.jsx"}"#, "keys": "Cmd+Alt+Shift+F10"})).unwrap();
+        assert_eq!(r["command"], r#"file.runScript {"name":"Second.jsx"}"#, "{r}");
+        // Removed by hand: no longer in the folder.
+        std::fs::remove_file(root.join("settings").join(SCRIPTS_DIR).join("Copied.jsx")).unwrap();
+        std::fs::remove_file(root.join("settings").join(SCRIPTS_DIR).join("Second.jsx")).unwrap();
+        let r = s.execute("shortcuts.set", json!({"command": r#"file.runScript {"name":"Second.jsx"}"#, "keys": "Cmd+Alt+Shift+F11"}));
+        assert!(bad_params(&r), "{r:?}");
+        let r = s.execute("shortcuts.set", json!({"command": "file.runScript", "params": {"name": "Copied.jsx"}, "keys": "Cmd+Alt+Shift+F9"}));
+        assert!(bad_params(&r), "{r:?}");
+        assert_eq!(s.shortcuts().shortcut_of("file.runScript", &Value::Null), None, "Run Script File… has no key");
         let _ = std::fs::remove_dir_all(&root);
     }
 }
