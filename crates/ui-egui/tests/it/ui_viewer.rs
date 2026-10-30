@@ -54,7 +54,6 @@ fn drag(h: &mut Harness<'_, EffectcraftApp>, from: Pos2, to: Pos2) {
     h.run_steps(2);
 }
 
-/// Comp pixel → screen point.
 /// #1218: frame stepping is optional, and consumes the whole wheel gesture including its
 /// smoothed tail. Ctrl/Cmd+wheel still zooms.
 #[test]
@@ -114,6 +113,7 @@ fn mouse_wheel_zooms_by_default_without_stepping_frames() {
     assert_ne!(h.state().ui.viewer.zoom, z0);
 }
 
+/// Comp pixel → screen point.
 fn screen(h: &Harness<'_, EffectcraftApp>, p: [f32; 2]) -> Pos2 {
     let c = rect(h, "viewer.comp");
     let z = c.width() / 640.0;
