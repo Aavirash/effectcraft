@@ -13,7 +13,7 @@ use wgpu::util::DeviceExt;
 
 use crate::{Error, Result};
 
-const SHADER: &str = concat!(include_str!("kernels.wgsl"), include_str!("kernels_ops.wgsl"));
+const SHADER: &str = concat!(include_str!("gpu/kernels.wgsl"), include_str!("gpu/kernels_ops.wgsl"));
 /// Words in a kernel's parameter block.
 const PARAM_WORDS: usize = 24;
 

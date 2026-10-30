@@ -112,7 +112,7 @@ impl PromptEncoder {
         self.point_embed.get(i * DIM..(i + 1) * DIM).unwrap_or(&[])
     }
 
-    /// Sparse tokens `[1, n, 256]` for a prompt (a click-only prompt gets one padding token).
+    /// Sparse tokens `[1, n, 256]`; the pinned reference pads both click-only and box prompts.
     pub fn sparse(&self, p: &Prompt) -> Result<Tensor> {
         p.validate()?;
         let norm = |c: [f32; 2]| [(c[0] + 0.5) / INPUT_SIZE as f32, (c[1] + 0.5) / INPUT_SIZE as f32];
@@ -140,6 +140,8 @@ impl PromptEncoder {
                     let v: Vec<f32> = e.iter().zip(self.point_row(row)).map(|(a, b)| a + b).collect();
                     push(&v);
                 }
+                // _embed_boxes adds its own no-point token, separately from _embed_points.
+                push(&self.not_a_point.clone());
             }
         }
         Ok(Tensor::from_vec(tokens, (1, n, DIM), &Device::Cpu)?)
@@ -200,15 +202,16 @@ mod tests {
         PromptEncoder::load(&Weights::from_map(map).unwrap()).unwrap()
     }
 
-    /// The reference pads only point-only prompts; box corners are already complete tokens.
+    /// Transformers 5.19.0 pads click-only prompts in _embed_points and boxes in _embed_boxes.
     #[test]
-    fn boxes_do_not_add_point_padding_and_click_only_prompts_still_do() {
+    fn box_and_click_tokens_match_the_pinned_reference_padding() {
         let encoder = encoder();
         let points = vec![([10.0, 20.0], false), ([30.0, 40.0], true)];
         for points in [vec![], points.clone()] {
             let sparse = encoder.sparse(&Prompt { points: points.clone(), bbox: Some([0.0, 0.0, 100.0, 100.0]) }).unwrap();
-            assert_eq!(sparse.dims(), &[1, points.len() + 2, DIM]);
+            assert_eq!(sparse.dims(), &[1, points.len() + 3, DIM]);
             let rows = sparse.to_vec3::<f32>().unwrap();
+            assert!(rows[0].last().unwrap().iter().all(|value| *value == -1000.0));
             for (token, label) in rows[0].iter().zip(if points.is_empty() { vec![30.0, 40.0] } else { vec![10.0, 20.0, 30.0, 40.0] }) {
                 assert!(token[..DIM / 2].iter().all(|value| *value == label));
                 assert!(token[DIM / 2..].iter().all(|value| *value == label + 1.0));
