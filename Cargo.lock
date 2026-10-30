@@ -1623,6 +1623,7 @@ name = "effectcraft-media"
 version = "0.18.0"
 dependencies = [
  "craft-docpath",
+ "effectcraft-color",
  "effectcraft-model",
  "effectcraft-pdf",
  "effectcraft-project",
@@ -7199,6 +7200,7 @@ name = "xtask"
 version = "0.18.0"
 dependencies = [
  "chrono",
+ "pkg-config",
  "serde_json",
  "tempfile",
 ]

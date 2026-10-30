@@ -3,7 +3,7 @@
 //! otherwise they apply to the whole selected text layer.
 
 use crate::i18n::tr;
-use effectcraft_engine::keyframe::{BaselineOption, Composer, Direction, FigureStyle, FigureWidth, Justify, Kerning, TextDoc};
+use effectcraft_engine::keyframe::{BaselineOption, Composer, Direction, FigureStyle, FigureWidth, Justify, Kerning, LineJoin, TextDoc};
 use effectcraft_engine::render::EvalCtx;
 use egui::{Align2, Rect, Sense, pos2, vec2};
 use serde_json::json;
@@ -57,7 +57,16 @@ pub fn text_target(app: &EffectcraftApp) -> Option<TextTarget> {
         .iter()
         .filter_map(|id| comp.layer(*id))
         .find(|l| matches!(l.source, effectcraft_engine::project::LayerSource::Text))?;
-    let ectx = EvalCtx { project: &app.session.project, comp_id: cid, comp, time: app.session.time(), expr: app.session.expr.as_deref(), footage: None };
+    let ectx = EvalCtx {
+        project: &app.session.project,
+        comp_id: cid,
+        comp,
+        time: app.session.time(),
+        expr: app.session.expr.as_deref(),
+        footage: None,
+        property_overrides: &[],
+        media_overrides: &[],
+    };
     effectcraft_engine::render::text::source_text(&ectx, layer).map(|d| TextTarget { layer: layer.id.0, doc: d, range: None })
 }
 
@@ -182,6 +191,20 @@ fn stroke_order_field(app: &mut EffectcraftApp, ui: &mut egui::Ui, g: Grid, doc:
     }
 }
 
+/// Line Join of the stroke: Miter / Round / Bevel (grid row 5, under the stroke width).
+fn line_join_field(app: &mut EffectcraftApp, ui: &mut egui::Ui, p: &egui::Painter, g: Grid, doc: &TextDoc, actions: &mut Vec<serde_json::Value>) {
+    let Grid { x0, y, w, enabled } = g;
+    let bw = (w - 2.0 * 4.0) / 3.0;
+    for (i, (key, label, join)) in
+        [("miter", "Miter", LineJoin::Miter), ("round", "Round", LineJoin::Round), ("bevel", "Bevel", LineJoin::Bevel)].into_iter().enumerate()
+    {
+        let r = Rect::from_min_size(pos2(x0 + i as f32 * (bw + 4.0), y + 5.0 * 28.0), vec2(bw, 22.0));
+        if toggle(app, ui, p, r, &format!("character.lineJoin.{key}"), (label, doc.line_join == join, false)) && enabled {
+            actions.push(json!({"lineJoin": key}));
+        }
+    }
+}
+
 /// The Character panel for the text being edited (or the selected text layer): font family and
 /// style, size, leading, tracking, stroke, scale, baseline shift and other numeric fields, kerning,
 /// fill/stroke colours with eyedroppers, style toggles, OpenType features and variable-font axes.
@@ -224,7 +247,8 @@ pub fn character(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
     numeric_fields(app, ui, &p, grid, &doc, &mut actions);
     kerning_field(app, ui, &p, grid, &doc, &mut actions);
     stroke_order_field(app, ui, grid, &doc, &mut actions);
-    y += 5.0 * 28.0 + 8.0;
+    line_join_field(app, ui, &p, grid, &doc, &mut actions);
+    y += 6.0 * 28.0 + 8.0;
     // Fill / stroke swatches with their enable boxes.
     for (i, (key, label, on, c)) in [("fill", "Fill", doc.apply_fill, doc.fill), ("stroke", "Stroke", doc.apply_stroke, doc.stroke)].into_iter().enumerate() {
         let fx = x0 + i as f32 * (w / 2.0);
@@ -630,6 +654,17 @@ struct FontSearch {
 }
 
 /// Shared font menu for Character and Properties: search, recent fonts and previews.
+/// Finish a font rescan started from the font menu and report how many faces it added.
+/// While the scan is still walking font folders, ask for another frame so the menu updates.
+pub(crate) fn poll_font_rescan(app: &mut EffectcraftApp, ctx: &egui::Context) {
+    if effectcraft_engine::text::fonts::rescan_busy() {
+        ctx.request_repaint_after(std::time::Duration::from_millis(100));
+    }
+    if let Some(n) = effectcraft_engine::text::fonts::poll_rescan() {
+        app.ui.status = format!("{} +{n}", tr("Rescan Fonts"));
+    }
+}
+
 pub(super) fn font_picker(app: &mut EffectcraftApp, ui: &mut egui::Ui, id: egui::Id, rect: Rect, current: &str, auto: &str, enabled: bool) -> Option<String> {
     let state_id = id.with("search-state");
     app.auto.add(auto, rect, "Font family");
@@ -700,6 +735,15 @@ pub(super) fn font_picker(app: &mut EffectcraftApp, ui: &mut egui::Ui, id: egui:
         let boxed = widgets::checkbox(ui, box_rect, only_variable, &t, id.with("variable-check"));
         ui.painter().text(label_rect.left_center(), Align2::LEFT_CENTER, tr("Variable fonts only"), Tokens::ui(11.5), t.text);
         app_ref.auto.add(&format!("{auto}.variable"), row.rect, "Variable fonts only");
+        // #1089: fonts installed after launch appear without restarting. The button is its own
+        // row: the popup is only 180 px wide, so a control pinned to the filter row covers
+        // "Variable fonts only". The scan itself runs off the UI thread (`poll_font_rescan`).
+        let rescan_h = 22.0;
+        let (resc, _) = ui.allocate_exact_size(vec2(ui.available_width(), rescan_h), egui::Sense::hover());
+        if widgets::text_button(ui, resc, tr("Rescan Fonts"), false, &t, id.with("rescan")).clicked() && effectcraft_engine::text::fonts::start_rescan() {
+            app_ref.ui.status = format!("{}…", tr("Rescan Fonts"));
+        }
+        app_ref.auto.add(&format!("{auto}.rescan"), resc, "Rescan Fonts");
         let toggled = row.clicked() || boxed.clicked();
         if toggled {
             only_variable = !only_variable;

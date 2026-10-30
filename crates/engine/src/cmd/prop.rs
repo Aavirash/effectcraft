@@ -1189,6 +1189,15 @@ fn toggle_hold(s: &mut Session, _: &Value) -> Result<Value> {
     })
 }
 
+fn set_muted(s: &mut Session, p: &Value) -> Result<Value> {
+    let muted = b_p(p, "muted").unwrap_or(true);
+    let label = if muted { "Mute Keyframes" } else { "Unmute Keyframes" };
+    edit_keys(s, label, None, move |keys, i, _| {
+        keys[i].muted = muted;
+        false
+    })
+}
+
 /// A number or a per-dimension array of numbers.
 fn nums_p(p: &Value, k: &str, scale: f64) -> Option<Vec<f64>> {
     match p.get(k)? {
@@ -1285,8 +1294,16 @@ fn convert_one_expr(s: &mut Session, cid: ItemId, lid: LayerId, uid: Uid) -> Res
     let fd = comp.frame_duration();
     let mut t = layer.in_point;
     while t < layer.out_point {
-        let ctx =
-            effectcraft_render::EvalCtx { project: &s.project, comp_id: cid, comp: &comp, time: t, expr: s.expr.as_deref(), footage: Some(s.footage.as_ref()) };
+        let ctx = effectcraft_render::EvalCtx {
+            project: &s.project,
+            comp_id: cid,
+            comp: &comp,
+            time: t,
+            expr: s.expr.as_deref(),
+            footage: Some(s.footage.as_ref()),
+            property_overrides: &[],
+            media_overrides: &[],
+        };
         keys.push(Keyframe::new(layer.layer_time(t), ctx.value(&layer, &pr)));
         t += fd;
     }
@@ -1373,6 +1390,7 @@ pub fn specs() -> Vec<CommandSpec> {
             &json!({"which": "out"})
         )),
         cmd!("keys.toggleHold", "Toggle Hold Keyframe", ["Animation"], Some("Cmd+Alt+H"), "{}", has_keys, toggle_hold),
+        cmd!("keys.setMuted", "Mute Keyframes", ["Animation"], None, "{muted?: bool (default true)}", has_keys, set_muted),
         cmd!(
             "keys.interpolation",
             "Keyframe Interpolation...",

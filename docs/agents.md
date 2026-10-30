@@ -212,8 +212,25 @@ Things that tripped up a long agent-driven session (a multi-scene 3D piece built
   or call `save_project {"path": …}` after each milestone.
 - **Environment light.** `layer.newLight` also accepts `"kind":"Environment"`: an equirectangular
   image that metallic surfaces reflect. Set its `lightOptions/source` to a footage, comp or solid
-  layer by layer id; with no source it uses the comp's Environment Layer (`layer.environment`)
-  ([#261](https://github.com/storytold/effectcraft/issues/261)).
+  layer by layer id; with no source it uses the comp's Environment Layer (`layer.environment`),
+  or a default studio environment — bright above and toward the initial camera, dark below and
+  behind, at a dim 0.3 mean level — of the light's colour × intensity when there is none; either
+  way the light brightens the scene. A selected Source or Environment Layer that fails to
+  render — a deleted layer, missing footage — lights nothing instead: the light never silently
+  falls back to the studio default. It has `castsShadows`/`shadowDarkness`/`shadowDiffusion`
+  like the other lights: Cast Shadows shades the scene from the image's dominant bright region
+  (the default environment's key, or a source image's brightest area; an image without a
+  sufficiently strong dominant direction has none — a uniform one, or opposing bright regions
+  that cancel — so it casts no shadow) — the region weighted by the light's colour, so a
+  coloured light shadows from the regions it actually lights (opposing red and blue regions
+  cancel to a white light, but a red light's shadow comes from the red one) — occluding only
+  that key's share of the light, so the
+  shadow stays partial like After Effects' area-light shadows, and soft by default (a penumbra
+  of at least 8 pixels or four map texels, plus Shadow Diffusion). It only lights
+  Advanced 3D comps, so creating one (or changing a light's type to Environment) switches a
+  Classic 3D comp to Advanced 3D
+  ([#261](https://github.com/storytold/effectcraft/issues/261),
+  [#2436](https://github.com/storytold/effectcraft/issues/2436)).
 
 ### Cookbook (from end-to-end QA)
 
@@ -272,10 +289,10 @@ build real projects through these interfaces; they are worked examples of everyt
   then `keys.velocity {"outSpeed":0,"outInfluence":33.33}`.
 * **Gradients**: `set_property {"path":"contents/gfill/colors","value":["#0080ff","#ffff00"]}` or
   `{"colors":[[0,"#0080ff"],[1,[1,1,0]]],"opacities":[[0,1],[1,0.5]]}`.
-* **Image sequences**: `file.import {"paths":["/r/shot_0001.png"]}` imports the file's whole
-  numbered run as one item (several picked frames: that range; a folder: each run in it;
-  `"sequence": false`: one still; dropped files, `"drag": true`, import as stills unless
-  `"sequence": true`, as in After Effects; `"alphabetical": true`: Force Alphabetical Order, the files
+* **Image sequences**: `file.import {"paths":["/r/shot_0001.png"], "sequence": true}` imports the
+  file's whole numbered run as one item (several picked frames: that range; a folder: each run in
+  it, also without `sequence`). Without `"sequence": true` a picked or dropped numbered file imports
+  as one still, as in After Effects; `"alphabetical": true`: Force Alphabetical Order, the files
   play one after another) at `frameRate` or 30 fps (Settings ▸ Import). Missing frames show
   colour bars, as in After Effects. `file.interpretFootage {"items":[id], "frameRate":12,
   "startTimecode":1001}` conforms them and sets Override Start (the item and layers that ran to its end get the new
@@ -540,7 +557,7 @@ indices): character attributes
 3. `layer.setText {"range":[6,11], "size":40, "fill":"#ff5500"}` styles the selection (the
    Character panel does the same); with an empty range it sets the style the next typed text takes.
 4. `edit.copy`, `edit.paste`, `edit.pasteTextMatchFormatting` and `edit.pasteTextFormattingOnly`
-   work on the selected text; `text.endEdit` commits (an empty Type-tool layer is removed).
+   work on the selected text; `text.endEdit` commits (an empty Type-tool layer is kept, as After Effects does).
 
 Fonts: `text.fonts` (MCP `list_fonts`) lists every family a text layer can use, bundled and installed, with its
 styles, origin (`bundled`, `system`, `user`), `variable` (it has variation axes) and own-language name
@@ -583,7 +600,9 @@ A dialog's `show()` waits for the user: the `script.run` / `file.runScript` repl
 `"waiting": true`, and the script continues (its final output arrives in the reply of the click
 that closes the dialog). File ▸ Scripts: `file.scripts.list`, `file.runScript {"name": …}`,
 `file.installScript` / `file.installScriptUIPanel {"path": …}`, `window.scriptPanel {"name": …}`,
-`window.restoreScriptPanels` (the panels open when the app last quit). Scripts' `app.settings`:
+`window.restoreScriptPanels` (the panels open when the app last quit), `file.runStartupScripts` and
+`file.runShutdownScripts` (the scripts in `Scripts/Startup` and `Scripts/Shutdown`; the second closes
+the project first). Scripts' `app.settings`:
 `script.settings.get {"section": …, "key": …}` and `script.settings.save {…, "value": …}`.
 Extension points and the bundled extensions: [plugins.md](plugins.md).
 
@@ -622,6 +641,13 @@ Extension points and the bundled extensions: [plugins.md](plugins.md).
   Dragged onto another property's name or value, in the Timeline or Effect Controls
   (`effectControls.prop.<uid>.value[.<d>]`), it runs `prop.pickWhip`: the reference replaces the
   property's expression, or is added as one, and the expression is enabled.
+* Parent and Track Matte for several layers: on a selected layer's row, the Timeline's Parent
+  menu and pick whip (`timeline.layer.<id>.parent`, `timeline.layer.<id>.pickWhip`) and its Track
+  Matte menu and pick whip (`timeline.layer.<id>.trackMatte`,
+  `timeline.layer.<id>.trackMattePickWhip`) set every selected layer's (on an unselected row,
+  that layer's), in one undo step. Directly: `layer.setParent {layers, parent}` and
+  `layer.setTrackMatte {layers, matte, kind}`, where `kind: "preserve"` keeps each layer's
+  own matte mode.
 * A property's menu (right-click its name; entries `timeline.prop.<uid>.menu.<entry>`): Reset
   (`prop.reset`: no expression, and the property's default value, an effect parameter's or a
   Transform property's; an animated property keeps its keyframes and gets the default as a
