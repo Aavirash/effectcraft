@@ -343,6 +343,38 @@ fn a_drag_keeps_its_control_past_the_window_edge() {
     h.state_mut().session.execute("scriptui.close", json!({})).unwrap();
 }
 
+/// #2585: a window the host resizes takes the size, lays out again and runs onResize; a docked
+/// ScriptUI panel gets its dock's size that way.
+#[test]
+fn script_windows_learn_the_size_they_are_given() {
+    let mut h = harness();
+    let code = r#"
+      var w = new Window("palette", "Sized");
+      var log = w.add("statictext", undefined, "", { name: "log" });
+      log.preferredSize = [200, 20];
+      w.onResize = function () { log.text = "resized " + w.size.width + "x" + w.size.height; };
+      w.show();
+    "#;
+    let r = h.state_mut().session.execute("script.run", json!({"code": code, "name": "sized.jsx"})).unwrap();
+    assert_eq!(r["ok"], true, "{r}");
+    h.run_steps(2);
+    h.state_mut().session.execute("scriptui.resize", json!({"window": "Sized", "size": [300, 180]})).unwrap();
+    let win = h.state().session.script_ui.windows[0].clone();
+    assert_eq!(win.root.lookup(&json!("log")).unwrap().text, "resized 300x180");
+    let list = h.state_mut().session.execute("scriptui.list", json!({})).unwrap();
+    assert_eq!(list[0]["size"], json!([300.0, 180.0]), "{list}");
+    assert!(h.state_mut().session.execute("scriptui.resize", json!({"window": "Sized", "size": ["wide", 1]})).is_err());
+    h.state_mut().session.execute("scriptui.close", json!({})).unwrap();
+    // A docked panel: its window is its dock's size, not its preferred size.
+    h.state_mut().session.execute("window.scriptPanel", json!({"name": "Layer Tools.jsx"})).unwrap();
+    h.run_steps(4);
+    let panel = h.state().session.script_ui.windows.iter().find(|w| w.script == "Layer Tools.jsx").unwrap().clone();
+    let dock = rect(&h, &format!("scriptui.{}", panel.id));
+    assert_eq!([panel.root.bounds[2].round(), panel.root.bounds[3].round()], [dock.width().round() as f64, dock.height().round() as f64]);
+    h.state_mut().close_panel(PanelKind::ScriptPanel(panel.id));
+    h.run_steps(2);
+}
+
 fn click_at(h: &mut Harness<'_, EffectcraftApp>, c: egui::Pos2) {
     h.input_mut().events.push(Event::PointerMoved(c));
     h.run_steps(1);
