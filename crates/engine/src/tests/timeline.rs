@@ -298,6 +298,25 @@ fn interpolation_dialog_temporal_spatial_and_roving() {
     assert_ne!(prop(&s, l, "transform/position").keys[0].out_interp, Interp::Hold);
 }
 
+/// Editing another key's value or time keeps the roving key at its share of the path (#1284: the
+/// roving key went back to where it was after edits to other keys).
+#[test]
+fn roving_key_follows_value_and_time_edits_to_other_keys() {
+    let (mut s, l) = setup();
+    animate(&mut s, l, "transform/position", &[(0.0, json!([0, 0])), (0.3, json!([300, 0])), (2.0, json!([400, 0]))]);
+    let uid = prop(&s, l, "transform/position").uid;
+    s.execute("keys.select", json!({"keys": [{"layer": l, "prop": uid, "time": 0.3}]})).unwrap();
+    s.execute("keys.interpolation", json!({"roving": true})).unwrap();
+    let roving_at = |s: &Session| prop(s, l, "transform/position").keys[1].time.seconds();
+    assert!((roving_at(&s) - 1.5).abs() < 0.01, "start: {}", roving_at(&s));
+    // The last key's value moves to 800 px: the path is 300 + 500 px, so the roving key is at 300 / 800.
+    s.execute("keys.set", json!({"layer": l, "path": "transform/position", "time": 2.0, "value": [800, 0]})).unwrap();
+    assert!((roving_at(&s) - 0.75).abs() < 0.02, "value edit: {}", roving_at(&s));
+    // The last key moves to 3 s: the same 300 / 800 share of 3 s.
+    s.execute("keys.set", json!({"layer": l, "path": "transform/position", "time": 2.0, "newTime": 3.0})).unwrap();
+    assert!((roving_at(&s) - 1.125).abs() < 0.02, "time edit: {}", roving_at(&s));
+}
+
 #[test]
 fn graph_editor_key_and_handle_edits() {
     let (mut s, l) = setup();
@@ -323,6 +342,34 @@ fn graph_editor_key_and_handle_edits() {
     assert!((k.out_ease[0].influence - 0.6).abs() < 1e-9);
     s.execute("edit.undo", json!({})).unwrap();
     assert_eq!(prop(&s, l, "transform/opacity").keys[0].out_interp, Interp::Linear);
+}
+
+#[test]
+fn graph_editor_ease_edits_reject_a_locked_layer() {
+    let (mut s, l) = setup();
+    animate(&mut s, l, "transform/opacity", &[(0.0, json!(0)), (1.0, json!(100)), (2.0, json!(0))]);
+    select_prop_keys(&mut s, l, "transform/opacity");
+    s.execute("layer.setSwitch", json!({"layers": [l], "switch": "locked", "value": true})).unwrap();
+    let before = prop(&s, l, "transform/opacity");
+    let selected = s.state.selected_keys.clone();
+    let undo = s.history.undo.len();
+    for side in ["in", "out"] {
+        let error =
+            s.execute("keys.setEase", json!({"layer": l, "path": "transform/opacity", "time": 1.0, "side": side, "speed": 200, "influence": 60})).unwrap_err();
+        assert!(error.to_string().contains("locked"), "{error}");
+        assert_eq!(prop(&s, l, "transform/opacity").keys, before.keys);
+        assert_eq!(s.state.selected_keys, selected);
+        assert_eq!(s.history.undo.len(), undo);
+    }
+    s.execute("layer.setSwitch", json!({"layers": [l], "switch": "locked", "value": false})).unwrap();
+    s.execute("keys.setEase", json!({"layer": l, "path": "transform/opacity", "time": 1.0, "side": "out", "speed": 200, "influence": 60})).unwrap();
+    let after = prop(&s, l, "transform/opacity");
+    assert_eq!(after.keys[1].out_interp, Interp::Bezier);
+    assert_eq!(after.keys[1].out_ease[0].speed, 200.0);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(prop(&s, l, "transform/opacity").keys, before.keys);
+    s.execute("edit.redo", json!({})).unwrap();
+    assert_eq!(prop(&s, l, "transform/opacity").keys, after.keys);
 }
 
 #[test]
