@@ -74,9 +74,9 @@ fn select_all(s: &mut Session, _: &Value) -> Result<Value> {
     Ok(json!(s.state.selected_layers.len()))
 }
 fn deselect_all(s: &mut Session, _: &Value) -> Result<Value> {
-    // A deselected layer never keeps an open text edit: commit the edit first, exactly as
-    // `text.endEdit` (an empty Type-tool layer included), so every route — menu, shortcut,
-    // script, MCP — leaves one final state.
+    // A deselected layer never keeps an open text edit: commit it first, exactly as `text.endEdit`,
+    // so every route — menu, shortcut, script, MCP — leaves one final state. An empty Type-tool
+    // layer survives, as it does in After Effects.
     super::text_edit::end_edit(s, &Value::Null)?;
     s.state.selected_layers.clear();
     s.state.selected_props.clear();
@@ -90,7 +90,7 @@ fn deselect_all(s: &mut Session, _: &Value) -> Result<Value> {
 fn relink_copies(comp: &mut Comp, map: &[(LayerId, LayerId)]) {
     let present: Vec<LayerId> = comp.layers.iter().map(|l| l.id).collect();
     let link = |id: LayerId| map.iter().find(|(o, _)| *o == id).map(|(_, c)| *c).or(present.contains(&id).then_some(id));
-    for l in comp.layers.iter_mut().filter(|l| map.iter().any(|(_, c)| *c == l.id)) {
+    for l in comp.layers.iter_mut_where(|l| map.iter().any(|(_, c)| *c == l.id)) {
         l.parent = l.parent.and_then(link);
         l.track_matte = l.track_matte.and_then(|m| link(m.layer).map(|layer| TrackMatte { layer, ..m }));
     }
@@ -146,6 +146,11 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
         st.selected_layers = created.clone();
         Ok(created)
     })?;
+    // Duplicating selects the copies, so an open text edit on a now-deselected layer ends
+    // (#2226): typing must not keep editing an unselected layer.
+    if s.state.text_edit.as_ref().is_some_and(|e| !s.state.selected_layers.contains(&e.layer)) {
+        super::text_edit::end_edit(s, &Value::Null)?;
+    }
     Ok(json!(new.iter().map(|l| l.0).collect::<Vec<_>>()))
 }
 
@@ -263,6 +268,7 @@ fn clear_clipboards(s: &mut Session) {
     s.state.contents_clipboard.clear();
     s.state.link_clipboard = None;
     s.state.value_clipboard.clear();
+    s.state.keyframe_text = None;
     s.state.clip_is_keys = false;
 }
 
@@ -329,10 +335,12 @@ fn copy_properties(s: &mut Session) -> Result<Option<Value>> {
     }
     let mut keys = s.state.selected_keys.clone();
     let mut values = vec![];
+    let mut statics = vec![];
     for (lid, uid) in &leaves {
         let Some(l) = comp.layer(*lid) else { continue };
         let Some(pr) = l.props.find(*uid) else { continue };
         if pr.keys.is_empty() {
+            statics.push((*lid, *uid));
             if let Some(path) = l.props.match_path_of(*uid)
                 && !values.iter().any(|(p, _)| *p == path)
             {
@@ -342,6 +350,7 @@ fn copy_properties(s: &mut Session) -> Result<Option<Value>> {
             keys.extend(pr.keys.iter().map(|k| KeyRef { layer: *lid, prop: *uid, time: k.time }));
         }
     }
+    let text = crate::keyframe_text::text(&s.project, comp, &keys, &statics);
     clear_clipboards(s);
     let mut n = 0;
     if !keys.is_empty() {
@@ -350,6 +359,7 @@ fn copy_properties(s: &mut Session) -> Result<Option<Value>> {
         s.state.selected_keys = selected;
         n = r?.as_u64().unwrap_or(0);
     }
+    s.state.keyframe_text = text;
     let v = values.len();
     s.state.value_clipboard = values;
     // Keys alone answer as `keys.copy` does (their count).
@@ -675,7 +685,7 @@ fn label(s: &mut Session, p: &Value) -> Result<Value> {
             }
         }
         if let Some(comp) = proj.comp_mut(cid) {
-            for l in comp.layers.iter_mut().filter(|l| ids.contains(&l.id)) {
+            for l in comp.layers.iter_mut_where(|l| ids.contains(&l.id)) {
                 l.label = lab;
             }
         }
