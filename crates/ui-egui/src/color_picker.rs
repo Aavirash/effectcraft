@@ -122,10 +122,25 @@ struct Armed {
     popup: egui::Id,
     pass: u64,
     sample: Option<[f32; 3]>,
+    dialog: Option<crate::Dialog>,
 }
 
 fn armed_key() -> egui::Id {
     egui::Id::unique("color-picker-eyedropper")
+}
+
+fn dialog_key() -> egui::Id {
+    egui::Id::unique("color-picker-dialog")
+}
+
+/// Record the modal before drawing the viewer. A picker may sample behind its own dialog, but
+/// a new, unrelated modal must block it from its very first pass, before its rect is known.
+pub(crate) fn note_dialog(ctx: &egui::Context, dialog: Option<crate::Dialog>) {
+    ctx.data_mut(|data| data.insert_temp(dialog_key(), dialog));
+}
+
+fn current_dialog(ctx: &egui::Context) -> Option<crate::Dialog> {
+    ctx.data(|data| data.get_temp::<Option<crate::Dialog>>(dialog_key())).flatten()
 }
 
 /// The armed eyedropper, if its picker was drawn in this pass or the last: one whose picker stops
@@ -147,7 +162,8 @@ pub fn eyedropper_armed(ctx: &egui::Context) -> bool {
 
 fn arm(ctx: &egui::Context, popup: egui::Id) {
     let pass = ctx.cumulative_pass_nr();
-    ctx.data_mut(|d| d.insert_temp(armed_key(), Armed { popup, pass, sample: None }));
+    let dialog = current_dialog(ctx);
+    ctx.data_mut(|d| d.insert_temp(armed_key(), Armed { popup, pass, sample: None, dialog }));
 }
 
 fn disarm(ctx: &egui::Context, popup: egui::Id) {
@@ -218,6 +234,9 @@ fn overlaid(ctx: &egui::Context, pos: egui::Pos2) -> bool {
 /// dialog. The pointer is read rather than the viewer's responses, since a modal dialog over the
 /// viewer takes its clicks.
 pub fn eyedropper_point(ctx: &egui::Context) -> Option<egui::Pos2> {
+    if armed_record(ctx).is_some_and(|armed| armed.dialog != current_dialog(ctx)) {
+        return None;
+    }
     let viewer: Option<(u64, Rect)> = ctx.data(|d| d.get_temp(viewer_key()));
     let viewer = viewer.filter(|(p, _)| p.saturating_add(1) >= ctx.cumulative_pass_nr())?.1;
     let pos = ctx.input(|i| i.pointer.interact_pos())?;
@@ -645,6 +664,101 @@ pub fn hsv_to_rgb([h, s, v]: [f32; 3]) -> [f32; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sampling_viewer() -> egui_kittest::Harness<'static, crate::EffectcraftApp> {
+        let mut session = effectcraft_engine::Session::default();
+        session.execute("comp.new", serde_json::json!({"width": 320, "height": 180, "duration": 2})).unwrap();
+        session.execute("layer.newSolid", serde_json::json!({"color": "#204060"})).unwrap();
+        let mut harness = egui_kittest::Harness::builder().with_size(vec2(1200.0, 800.0)).build_eframe(|_| crate::EffectcraftApp::new(session));
+        settle_sampling_viewer(&mut harness);
+        harness
+    }
+
+    fn settle_sampling_viewer(harness: &mut egui_kittest::Harness<'_, crate::EffectcraftApp>) {
+        for _ in 0..200 {
+            harness.step();
+            if harness.state().frames.inflight() == 0 && harness.state().viewer_image.is_some() {
+                harness.run_steps(3);
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        panic!("the synthetic viewer frame did not arrive");
+    }
+
+    fn press_sampling_viewer(harness: &mut egui_kittest::Harness<'_, crate::EffectcraftApp>) -> Option<[f32; 3]> {
+        let ctx = harness.ctx.clone();
+        arm(&ctx, egui::Id::unique("test-popup"));
+        let point = crate::panels::viewer::comp_to_screen(&ctx, [20.0, 20.0]).unwrap();
+        harness.event(egui::Event::PointerMoved(point));
+        harness.event(egui::Event::PointerButton { pos: point, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+        harness.step();
+        let sample = ctx.data(|data| data.get_temp::<Armed>(armed_key())).and_then(|armed| armed.sample);
+        harness.event(egui::Event::PointerButton { pos: point, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+        harness.step();
+        sample
+    }
+
+    #[test]
+    fn popup_eyedropper_samples_the_displayed_channel_and_exposure() {
+        let mut harness = sampling_viewer();
+        harness.state_mut().session.state.viewer.channel = effectcraft_engine::viewer::Channel::Green;
+        let green = press_sampling_viewer(&mut harness).unwrap();
+        assert!(green.iter().all(|value| (*value - 64.0 / 255.0).abs() < 0.01), "{green:?}");
+        let options = &mut harness.state_mut().session.state.viewer;
+        options.channel = effectcraft_engine::viewer::Channel::Rgb;
+        options.exposure = 1.0;
+        let exposed = press_sampling_viewer(&mut harness).unwrap();
+        let mut expected = [[32, 64, 96, 255]];
+        effectcraft_engine::viewer::display_transform(&mut expected, effectcraft_engine::viewer::Channel::Rgb, false, 1.0);
+        for (actual, expected) in exposed.iter().zip(expected[0]) {
+            assert!((*actual - expected as f32 / 255.0).abs() < 0.01, "{exposed:?}");
+        }
+    }
+
+    #[test]
+    fn popup_eyedropper_samples_snapshot_and_refuses_wireframe() {
+        let mut harness = sampling_viewer();
+        harness.state_mut().session.execute("view.takeSnapshot", serde_json::json!({})).unwrap();
+        harness.state_mut().session.execute("layer.newSolid", serde_json::json!({"color": "#a0b0c0"})).unwrap();
+        settle_sampling_viewer(&mut harness);
+        harness.event(egui::Event::Key { key: egui::Key::F5, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE });
+        // Let the snapshot texture's discard passes finish before arming this synthetic picker.
+        harness.step();
+        let snapshot = press_sampling_viewer(&mut harness).unwrap();
+        for (actual, expected) in snapshot.iter().zip([32, 64, 96]) {
+            assert!((*actual - expected as f32 / 255.0).abs() < 0.01, "{snapshot:?}");
+        }
+        let options = &mut harness.state_mut().session.state.viewer;
+        options.show_snapshot = false;
+        options.fast_previews = effectcraft_engine::commands::viewer_cmds::FastPreviews::Wireframe;
+        harness.event(egui::Event::Key { key: egui::Key::F5, physical_key: None, pressed: false, repeat: false, modifiers: egui::Modifiers::NONE });
+        assert_eq!(press_sampling_viewer(&mut harness), None, "wireframe must not sample an old pixel frame");
+    }
+
+    #[test]
+    fn a_new_modal_backdrop_cannot_deliver_a_pending_sample() {
+        let mut harness = sampling_viewer();
+        harness.state_mut().dialog = Some(crate::Dialog::About);
+        assert_eq!(press_sampling_viewer(&mut harness), None, "the first modal pass must already exclude its backdrop");
+    }
+
+    #[test]
+    fn a_picker_can_sample_behind_its_own_dialog_but_not_a_new_modal() {
+        let ctx = egui::Context::default();
+        let point = pos2(20.0, 20.0);
+        let mut output = ctx.run_ui(egui::RawInput { events: vec![egui::Event::PointerMoved(point)], ..Default::default() }, |ui| {
+            let ctx = ui.ctx();
+            note_dialog(ctx, Some(crate::Dialog::SolidSettings));
+            note_viewer(ctx, Rect::from_min_size(pos2(0.0, 0.0), vec2(320.0, 180.0)));
+            note_overlay(ctx, Rect::from_min_size(pos2(100.0, 100.0), vec2(120.0, 80.0)));
+            arm(ctx, egui::Id::unique("test-picker"));
+            assert_eq!(eyedropper_point(ctx), Some(point));
+            note_dialog(ctx, Some(crate::Dialog::About));
+            assert_eq!(eyedropper_point(ctx), None);
+        });
+        output.textures_delta.clear();
+    }
 
     #[test]
     fn armed_eyedropper_takes_one_sample_then_disarms() {

@@ -196,14 +196,21 @@ pub fn layer_to_comp(l2c: &Mat3, p: [f64; 2]) -> [f64; 2] {
 /// `region` ([x, y, w, h] in comp pixels: the whole comp, or the region of interest or Extended
 /// Viewer area it was rendered for), maybe at a reduced resolution. `None` outside it.
 pub fn frame_pixel(img: &egui::ColorImage, region: [f64; 4], pt: [f64; 2]) -> Option<Color32> {
+    img.pixels.get(frame_pixel_index(img.size, region, pt)?).copied()
+}
+
+pub(crate) fn frame_pixel_index(size: [usize; 2], region: [f64; 4], pt: [f64; 2]) -> Option<usize> {
+    if size.contains(&0) {
+        return None;
+    }
     let [x, y, w, h] = region;
     let (fx, fy) = ((pt[0] - x) / w, (pt[1] - y) / h);
     if !(0.0..1.0).contains(&fx) || !(0.0..1.0).contains(&fy) {
         return None;
     }
-    let sx = ((fx * img.size[0] as f64).floor() as usize).min(img.size[0].saturating_sub(1));
-    let sy = ((fy * img.size[1] as f64).floor() as usize).min(img.size[1].saturating_sub(1));
-    img.pixels.get(sy.checked_mul(img.size[0])?.checked_add(sx)?).copied()
+    let sx = ((fx * size[0] as f64).floor() as usize).min(size[0].saturating_sub(1));
+    let sy = ((fy * size[1] as f64).floor() as usize).min(size[1].saturating_sub(1));
+    sy.checked_mul(size[0])?.checked_add(sx)
 }
 
 /// Straight RGBA (0..1) of the displayed frame at comp point `pt` ([`frame_pixel`]).

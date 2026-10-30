@@ -378,6 +378,7 @@ impl EffectcraftApp {
         // Video Preview is a second viewport: only a real pass can update it.
         prefs_live::frame(self, &ctx);
         self.auto.begin_frame();
+        panels::viewer_tools::clear_sample_source(&ctx);
         if let Some(rect) = crate::color_picker::take_automation(&ctx) {
             self.auto.add("colorPicker.eyedropper", rect, "Eyedropper");
         }
@@ -409,6 +410,7 @@ impl EffectcraftApp {
         let header = egui::Rect::from_min_size(egui::pos2(full.min.x, top), egui::vec2(full.width(), header_h));
         header::show(self, ui, header);
         let body = egui::Rect::from_min_max(egui::pos2(full.min.x + 4.0, header.max.y + 2.0), egui::pos2(full.max.x - 4.0, full.max.y - 4.0));
+        crate::color_picker::note_dialog(&ctx, self.dialog);
         self.dock_area(ui, body);
         #[cfg(not(target_arch = "wasm32"))]
         prefs_live::dropped_files(self, ui, full);
