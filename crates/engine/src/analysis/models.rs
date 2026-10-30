@@ -29,10 +29,14 @@ use crate::{EngineError, Result, Session, cmd, query};
 pub struct Status {
     /// What is happening now ("Downloading MobileSAM…").
     pub busy: Option<String>,
+    /// Model whose load/download owns this lane, for selection-specific waits.
+    pub busy_model: Option<&'static str>,
     /// The model in use.
     pub active: Option<String>,
     /// The last failure, for the Settings page.
     pub error: Option<String>,
+    /// Model whose operation failed, so Roto status does not report another model's download.
+    pub error_model: Option<&'static str>,
     /// Failure of the selected model's load; downloads cannot block or retry that load.
     pub load_error: Option<String>,
     /// A finished job's message and whether it failed, for a toast (taken by
@@ -206,6 +210,7 @@ impl Session {
             }
             // Selecting the same model explicitly retries a failed load.
             s.error = None;
+            s.error_model = None;
             s.load_error = None;
         });
     }
@@ -238,7 +243,7 @@ impl Session {
         };
         let (face_slot, label) = (self.models.face_model.clone(), kind(task).label);
         let generation = st.generation;
-        spawn(&lane, label, format!("Loading {}…", info.name), wait, Some(generation), move |status| {
+        spawn(&lane, label, format!("Loading {}…", info.name), wait, Some(generation), info.id, move |status| {
             let m = load_file(&path, info.id)?;
             // the choice changed while this loaded: drop the model, `poll_models` loads the new choice
             if !activate_if_current(status, &face_slot, task, m, generation) {
@@ -260,26 +265,40 @@ impl Session {
         }
         set(self.models.lane(task), |s| {
             s.error = None;
+            s.error_model = None;
             s.load_error = None;
             // A load that read the old file must not report failure after these weights replaced it.
             s.generation = s.generation.wrapping_add(1);
         });
+        if self.models.status(task).active.as_deref() == Some(id) {
+            return Ok(true);
+        }
         if wait {
-            self.wait_model_worker(task)?;
+            self.wait_model_worker(task, id)?;
         }
         self.apply_model(task, wait);
+        if wait {
+            let status = self.models.status(task);
+            if status.active.as_deref() != Some(id) {
+                return Err(status.load_error.unwrap_or_else(|| format!("{id} is not loaded: try again when the model worker is ready")));
+            }
+        }
         Ok(true)
     }
 
-    fn wait_model_worker(&self, task: Task) -> std::result::Result<(), String> {
+    fn wait_model_worker(&self, task: Task, id: &str) -> std::result::Result<(), String> {
         let started = Instant::now();
-        while self.models.status(task).busy.is_some() {
+        loop {
+            let status = self.models.status(task);
+            let Some(operation) = status.busy else { return Ok(()) };
+            if status.busy_model != Some(id) {
+                return Err(format!("{id} cannot load while another model operation is running ({operation}): try again when it is ready"));
+            }
             if started.elapsed() >= ROTO_MODEL_WAIT {
                 return Err(format!("{} is still loading after {} minutes", self.chosen_model(task), ROTO_MODEL_WAIT.as_secs() / 60));
             }
             std::thread::sleep(Duration::from_millis(5));
         }
-        Ok(())
     }
 
     /// The Roto Brush model Settings chose, when it is one (not the classic engine).
@@ -289,7 +308,9 @@ impl Session {
 
     /// Whether the chosen Roto Brush model is still loading or downloading.
     pub fn roto_model_loading(&self) -> bool {
-        self.models.status(Task::Mask).busy.is_some() && self.chosen_model(Task::Mask) != seg::CLASSICAL
+        let status = self.models.status(Task::Mask);
+        let chosen = self.chosen_model(Task::Mask);
+        status.active.as_deref() != Some(chosen) && status.busy.is_some() && status.busy_model == Some(chosen)
     }
 
     /// The Roto Brush model Settings chose and its state (`roto.status`).
@@ -299,8 +320,8 @@ impl Session {
             "selected": self.chosen_model(Task::Mask),
             "installed": self.roto_model_info().is_none_or(|m| self.model_path(m).is_some()),
             "active": st.active,
-            "loading": st.busy.is_some(),
-            "error": st.load_error.or(st.error),
+            "loading": self.roto_model_loading(),
+            "error": st.load_error.or(st.error.filter(|_| st.error_model == Some(self.chosen_model(Task::Mask)))),
         })
     }
 
@@ -342,10 +363,13 @@ impl Session {
     /// refused either way. The classic engine needs nothing.
     pub fn ensure_roto_model(&mut self, wait: bool) -> std::result::Result<(), String> {
         let Some(info) = self.roto_model_info() else { return Ok(()) };
+        if self.models.status(Task::Mask).active.as_deref() == Some(info.id) {
+            return Ok(());
+        }
         // A download or load under way (from Settings, or `select` without `wait`) finishes first.
         // Nothing is in flight in the browser build, so this never sleeps there.
         if wait {
-            self.wait_model_worker(Task::Mask)?;
+            self.wait_model_worker(Task::Mask, info.id)?;
         }
         if self.model_path(info).is_none() {
             if self.models.status(Task::Mask).busy.is_some() {
@@ -431,6 +455,7 @@ fn spawn(
     what: String,
     wait: bool,
     generation: Option<u64>,
+    model: &'static str,
     job: impl FnOnce(&Arc<Mutex<Status>>) -> std::result::Result<String, String> + Send + 'static,
 ) {
     if cfg!(target_arch = "wasm32") {
@@ -440,18 +465,22 @@ fn spawn(
                 s.load_error = Some(message.clone());
             }
             s.error = Some(message);
+            s.error_model = Some(model);
         });
         return;
     }
     set(status, |s| {
         s.busy = Some(what);
+        s.busy_model = Some(model);
         s.error = None;
+        s.error_model = None;
     });
     let st = status.clone();
     let run = move || {
         let r = job(&st);
         set(&st, |s| {
             s.busy = None;
+            s.busy_model = None;
             if generation.is_some_and(|g| g != s.generation) {
                 // Keep a completion marker so polling starts the newly selected model.
                 s.done = Some((String::new(), false));
@@ -465,6 +494,7 @@ fn spawn(
                         s.load_error = Some(e.clone());
                     }
                     s.error = Some(e);
+                    s.error_model = Some(model);
                 }
             }
         });
@@ -474,11 +504,13 @@ fn spawn(
     } else if let Err(e) = std::thread::Builder::new().name("ec-model".into()).spawn(run) {
         set(status, |s| {
             s.busy = None;
+            s.busy_model = None;
             let message = format!("cannot start: {e}");
             if generation.is_some() {
                 s.load_error = Some(message.clone());
             }
             s.error = Some(message);
+            s.error_model = Some(model);
         });
     }
 }
@@ -595,9 +627,7 @@ fn install(s: &mut Session, p: &Value, task: Task) -> Result<Value> {
     };
     let dest = install_bytes(&dir, m, &bytes).map_err(|e| bad(&cmd, e))?;
     let wait = b_p(p, "wait").unwrap_or(false);
-    if s.retry_installed_model(task, m.id, wait).map_err(|error| bad(&cmd, error))? && wait {
-        waited(s, task, &cmd)?;
-    }
+    s.retry_installed_model(task, m.id, wait).map_err(|error| bad(&cmd, error))?;
     Ok(json!({"id": m.id, "path": dest.display().to_string()}))
 }
 
@@ -611,7 +641,7 @@ fn download(s: &mut Session, p: &Value, task: Task) -> Result<Value> {
     }
     let size = if m.size >= 10_000_000 { format!("{} MB", m.size / 1_000_000) } else { format!("{:.1} MB", m.size as f64 / 1e6) };
     let wait = b_p(p, "wait").unwrap_or(false);
-    spawn(s.models.lane(task), k.label, format!("Downloading {} ({size})…", m.name), wait, None, move |_| {
+    spawn(s.models.lane(task), k.label, format!("Downloading {} ({size})…", m.name), wait, None, m.id, move |_| {
         std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
         let tmp = dir.join(format!("{}.part", m.file_name));
         let out = std::process::Command::new("curl")
@@ -723,7 +753,7 @@ mod availability_tests {
     fn stale_model_worker_completions_do_not_poison_the_current_choice() {
         for failure in [false, true] {
             let lane = Arc::new(Mutex::new(Status::default()));
-            spawn(&lane, "Roto Brush", "Loading old choice".into(), true, Some(0), move |status| {
+            spawn(&lane, "Roto Brush", "Loading old choice".into(), true, Some(0), "mobilesam", move |status| {
                 set(status, |s| s.generation += 1);
                 if failure { Err("old choice failed".into()) } else { Ok("old choice loaded".into()) }
             });
@@ -740,7 +770,7 @@ mod availability_tests {
     fn current_load_and_download_failures_remain_actionable() {
         for generation in [Some(0), None] {
             let lane = Arc::new(Mutex::new(Status::default()));
-            spawn(&lane, "Roto Brush", "Working".into(), true, generation, move |status| {
+            spawn(&lane, "Roto Brush", "Working".into(), true, generation, "mobilesam", move |status| {
                 if generation.is_none() {
                     set(status, |s| s.generation += 1);
                 }
@@ -788,7 +818,46 @@ mod availability_tests {
             s.error = Some("another model could not be downloaded".into());
         });
         assert_eq!(session.ensure_roto_model(false), Ok(()));
+        assert!(session.roto_model()["error"].is_null());
+        set(session.models.lane(Task::Mask), |status| {
+            status.error_model = Some("mobilesam");
+            status.error = Some("selected model download failed".into());
+        });
+        assert_eq!(session.roto_model()["error"], "selected model download failed");
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn an_active_model_and_selected_install_do_not_wait_for_other_downloads() {
+        crate::tests::roto::hold_roto_cache_test_lock();
+        let mut session = Session::default();
+        session.choose_model(Task::Mask, "mobilesam");
+        set(session.models.lane(Task::Mask), |status| {
+            status.active = Some("mobilesam".into());
+            status.busy = Some("Downloading SAM 2".into());
+            status.busy_model = Some("sam2.1-hiera-tiny");
+        });
+        assert_eq!(session.ensure_roto_model(true), Ok(()));
+        assert_eq!(session.retry_installed_model(Task::Mask, "mobilesam", true), Ok(true));
+        let status = session.models.status(Task::Mask);
+        assert!(status.busy.is_some(), "the unrelated operation must still be running");
+        assert!(!session.roto_model_loading());
+        assert_eq!(session.roto_model()["loading"], false);
+    }
+
+    #[test]
+    fn waiting_on_an_inactive_model_refuses_unrelated_work_without_waiting() {
+        crate::tests::roto::hold_roto_cache_test_lock();
+        let mut session = Session::default();
+        session.choose_model(Task::Mask, "mobilesam");
+        set(session.models.lane(Task::Mask), |status| {
+            status.busy = Some("Downloading SAM 2".into());
+            status.busy_model = Some("sam2.1-hiera-tiny");
+        });
+        assert!(session.ensure_roto_model(true).unwrap_err().contains("another model operation"));
+        assert!(session.retry_installed_model(Task::Mask, "mobilesam", true).unwrap_err().contains("another model operation"));
+        assert!(session.models.status(Task::Mask).busy.is_some());
+        assert!(!session.roto_model_loading());
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -802,7 +871,7 @@ mod availability_tests {
         let mut session = Session { models_dir: Some(dir.clone()), ..Default::default() };
         session.choose_model(Task::Mask, info.id);
         let lane = session.models.lane(Task::Mask).clone();
-        spawn(&lane, "Roto Brush", "Downloading another model".into(), true, None, |_| Err("download failed".into()));
+        spawn(&lane, "Roto Brush", "Downloading another model".into(), true, None, "sam2.1-hiera-tiny", |_| Err("download failed".into()));
         assert_eq!(session.models.status(Task::Mask).error.as_deref(), Some("download failed"));
         assert!(session.models.status(Task::Mask).load_error.is_none());
         let error = session.ensure_roto_model(true).unwrap_err();
@@ -810,7 +879,7 @@ mod availability_tests {
         let failure = session.models.status(Task::Mask).load_error;
         assert!(failure.is_some(), "the synthetic weights were actually loaded and rejected");
         for download_failed in [true, false] {
-            spawn(&lane, "Roto Brush", "Downloading another model".into(), true, None, move |_| {
+            spawn(&lane, "Roto Brush", "Downloading another model".into(), true, None, "sam2.1-hiera-tiny", move |_| {
                 if download_failed { Err("download failed".into()) } else { Ok("downloaded".into()) }
             });
             session.poll_models();
@@ -858,7 +927,7 @@ mod availability_tests {
         session.choose_model(Task::Mask, info.id);
         let generation = session.models.status(Task::Mask).generation;
         let lane = session.models.lane(Task::Mask).clone();
-        spawn(&lane, "Roto Brush", "Loading the previous file".into(), false, Some(generation), move |status| {
+        spawn(&lane, "Roto Brush", "Loading the previous file".into(), false, Some(generation), info.id, move |status| {
             let started = Instant::now();
             while status.lock().unwrap().generation == generation {
                 if started.elapsed() > Duration::from_secs(3) {
@@ -868,7 +937,7 @@ mod availability_tests {
             }
             Err("previous file failed".into())
         });
-        assert!(session.retry_installed_model(Task::Mask, info.id, true).unwrap());
+        assert!(session.retry_installed_model(Task::Mask, info.id, true).unwrap_err().contains("SHA-256"));
         let status = session.models.status(Task::Mask);
         assert!(status.busy.is_none());
         assert!(
