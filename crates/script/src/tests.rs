@@ -1087,6 +1087,11 @@ fn footage_proxies_sequences_and_conform_rate() {
     let paths: Vec<String> =
         s.project.items.values().filter_map(|i| if let ItemKind::Footage(f) = &i.kind { Some(f.path.replace('\\', "/")) } else { None }).collect();
     assert!(paths.iter().any(|f| f.contains("take_")), "replaced with the take sequence: {paths:?}");
+    // replace() swaps in the one file, even a numbered still, as in After Effects.
+    ok(&mut s, &format!("app.project.item(1).replace(new File('{}'))", p("shot_0002.png")));
+    let kinds: Vec<_> =
+        s.project.items.values().filter_map(|i| if let ItemKind::Footage(f) = &i.kind { Some((f.kind, f.path.replace('\\', "/"))) } else { None }).collect();
+    assert!(kinds.iter().any(|(k, f)| *k == effectcraft_engine::project::FootageKind::Still && f.ends_with("shot_0002.png")), "{kinds:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
