@@ -141,7 +141,7 @@ pub struct ModelInfo {
     pub licence_url: &'static str,
     /// The project's page.
     pub homepage: &'static str,
-    /// The official weights file.
+    /// App download URL; empty when only Install from File is available.
     pub url: &'static str,
     pub file_name: &'static str,
     pub size: u64,
@@ -168,8 +168,8 @@ pub const MOBILE_SAM: ModelInfo = ModelInfo {
 };
 
 /// SAM 2.1 Tiny (Meta AI, Apache-2.0): a video object tracker with streaming memory. The weights are
-/// the Hugging Face `transformers` checkpoint, pinned to a commit so the SHA-256 stays valid; they
-/// are loaded by `effectcraft-sam2` (native only), not by [`load`].
+/// the Hugging Face `transformers` checkpoint, identified by SHA-256. Until a storytold mirror
+/// is available, install it from a file. `effectcraft-sam2` (native only) loads it, not [`load`].
 pub const SAM2_TINY: ModelInfo = ModelInfo {
     id: "sam2.1-hiera-tiny",
     task: Task::Mask,
@@ -179,7 +179,7 @@ pub const SAM2_TINY: ModelInfo = ModelInfo {
     licence: "Apache-2.0",
     licence_url: "https://github.com/facebookresearch/sam2/blob/main/LICENSE",
     homepage: "https://github.com/facebookresearch/sam2",
-    url: "https://huggingface.co/facebook/sam2.1-hiera-tiny/resolve/de431c4043854a71d8101e17995dfe596bf101a5/model.safetensors",
+    url: "",
     file_name: "sam2.1-hiera-tiny.safetensors",
     size: 155_908_064,
     sha256: "48c14467e5cf9e51870511feb72c89688e82dd74523142c0538b663e193ac2a7",
@@ -195,7 +195,7 @@ pub const SAM2_SMALL: ModelInfo = ModelInfo {
     licence: "Apache-2.0",
     licence_url: "https://github.com/facebookresearch/sam2/blob/main/LICENSE",
     homepage: "https://github.com/facebookresearch/sam2",
-    url: "https://huggingface.co/facebook/sam2.1-hiera-small/resolve/ee5bba1d82bb8749febdf90f45e84b687142ba03/model.safetensors",
+    url: "",
     file_name: "sam2.1-hiera-small.safetensors",
     size: 184_305_280,
     sha256: "0a4067b11ce1e23d5229203f11c718a823060d15a4b23fa2372a7d4b77cbbc60",
@@ -211,7 +211,7 @@ pub const SAM2_BASE_PLUS: ModelInfo = ModelInfo {
     licence: "Apache-2.0",
     licence_url: "https://github.com/facebookresearch/sam2/blob/main/LICENSE",
     homepage: "https://github.com/facebookresearch/sam2",
-    url: "https://huggingface.co/facebook/sam2.1-hiera-base-plus/resolve/b7320756a13354e7530a63935656d35b2f91a290/model.safetensors",
+    url: "",
     file_name: "sam2.1-hiera-base-plus.safetensors",
     size: 323_476_296,
     sha256: "2012733a0de5d03efd1bba550a2847c4551be9ef2e0d497c83074df66189f780",
@@ -227,7 +227,7 @@ pub const SAM2_LARGE: ModelInfo = ModelInfo {
     licence: "Apache-2.0",
     licence_url: "https://github.com/facebookresearch/sam2/blob/main/LICENSE",
     homepage: "https://github.com/facebookresearch/sam2",
-    url: "https://huggingface.co/facebook/sam2.1-hiera-large/resolve/665f8e2ad61cf5f53d65644ff27c8ee525124610/model.safetensors",
+    url: "",
     file_name: "sam2.1-hiera-large.safetensors",
     size: 897_897_416,
     sha256: "dc407dce21301fd94abb395c5099b4f2c455fdc8a8f261ac3d0ea6d4cd197230",
@@ -314,9 +314,10 @@ fn loader(id: &str) -> Option<Loader> {
 
 /// The notice kept next to installed weights: what they are, who made them, their licence.
 pub fn notice(m: &ModelInfo) -> String {
+    let source = if m.url.is_empty() { m.homepage } else { m.url };
     format!(
-        "{}\n\nAuthors: {}\nLicence: {} (full text: https://spdx.org/licenses/{}.html; as stated by the authors: {})\nSource: {}\nProject: {}\n\nDownloaded unmodified from the source above. EffectCraft runs it with its own implementation\nand is not affiliated with or endorsed by its authors.\n",
-        m.name, m.authors, m.licence, m.licence, m.licence_url, m.url, m.homepage
+        "{}\n\nAuthors: {}\nLicence: {} (full text: https://spdx.org/licenses/{}.html; as stated by the authors: {})\nSource: {}\nProject: {}\n\nInstalled unmodified. EffectCraft runs it with its own implementation\nand is not affiliated with or endorsed by its authors.\n",
+        m.name, m.authors, m.licence, m.licence, m.licence_url, source, m.homepage
     )
 }
 
@@ -418,14 +419,19 @@ mod tests {
         for m in MODELS {
             assert!(ALLOWED_LICENCES.contains(&m.licence), "{}", m.id);
             assert_eq!(m.sha256.len(), 64);
-            assert!(m.url.starts_with("https://") && m.licence_url.starts_with("https://") && m.homepage.starts_with("https://"));
+            assert!(m.url.is_empty() || m.url.starts_with("https://"));
+            assert!(m.licence_url.starts_with("https://") && m.homepage.starts_with("https://"));
             assert!(!m.authors.is_empty() && notice(m).contains(m.authors));
         }
         assert_eq!(
             models(Task::Mask).map(|m| m.id).collect::<Vec<_>>(),
             ["mobilesam", "sam2.1-hiera-tiny", "sam2.1-hiera-small", "sam2.1-hiera-base-plus", "sam2.1-hiera-large"]
         );
-        assert!(SAM2_TINY.url.contains("/resolve/") && SAM2_TINY.file_name.ends_with(".safetensors"), "pinned to a commit, not a branch");
+        for model in [SAM2_TINY, SAM2_SMALL, SAM2_BASE_PLUS, SAM2_LARGE] {
+            assert!(model.url.is_empty(), "SAM 2 has no app download until a storytold mirror is available");
+            assert!(model.file_name.ends_with(".safetensors"));
+            assert!(notice(&model).contains(&format!("Source: {}", model.homepage)));
+        }
         assert_eq!(models(Task::Face).map(|m| m.id).collect::<Vec<_>>(), ["mediapipe-face"]);
         assert!(load("mediapipe-face", b"nope").err().is_some_and(|e| e.contains("does not match")));
         // A file that isn't the published one is refused before anything is parsed.

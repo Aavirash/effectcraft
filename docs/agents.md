@@ -504,8 +504,9 @@ reference. Matte settings are ordinary properties (`effects/#1/rotoBrushMatte/se
 Trained model (Roto Brush 2.0 / 3.0):
 - `roto.models` lists the built-in engine and every registered model, with its authors,
   licence, size, URL, SHA-256 and whether it is installed, selected and active.
-- `roto.model.download {id}` fetches and verifies the official weights in the background;
-  `roto.model.install {path, id?}` installs a file you already have.
+- `roto.model.download {id}` fetches and verifies weights when the registry provides an app download URL;
+  `roto.model.install {path, id?}` installs a file you already have. SAM 2 is Install from File only until
+  a storytold-controlled mirror is available; its size and SHA-256 are verified before installation.
 - `roto.model.select {id: classical|mobilesam|sam2.1-hiera-tiny|sam2.1-hiera-small|sam2.1-hiera-base-plus|sam2.1-hiera-large}` chooses which one Roto Brush uses (SAM 2 also tracks the object through the clip, see [roto-brush-sam2.md](roto-brush-sam2.md); `roto.status` then reports `source` and per-frame `tracker.frames` with `confidence` and `occluded`). Loading runs
   in the background; `"wait": true` (also on download and install) returns once it is in use.
 - `roto.propagate` never falls back to the classic engine silently: a chosen model that is not installed, or failed

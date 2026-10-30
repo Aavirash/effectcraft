@@ -4,10 +4,10 @@ Roto Brush can follow an object through a clip with Meta's **SAM 2.1 Tiny** (Hie
 Apache-2.0). It is optional: nothing changes until you install the model and choose it.
 
 ## Using it
-1. Settings ▸ Roto Brush ▸ SAM 2.1 Tiny ▸ **Download** (downloads `model.safetensors`, 155.9 MB, from the pinned
-   Hugging Face commit; the SHA-256 is checked and the licence notice is kept next to the file). Or install from a
-   file you downloaded. Agents: `roto.model.download {id: "sam2.1-hiera-tiny", wait: true}`, or
-   `roto.model.install {id: "sam2.1-hiera-tiny", path: "model.safetensors"}` for a file you already have.
+1. Settings ▸ Roto Brush ▸ SAM 2.1 Tiny ▸ **Install from File…** with the published `model.safetensors`
+   (155.9 MB). The file's size and SHA-256 are checked and the licence notice is kept next to it.
+   Agents: `roto.model.install {id: "sam2.1-hiera-tiny", path: "model.safetensors"}`.
+   SAM 2 has no in-app download until the weights are mirrored under storytold control.
 2. Choose it (`roto.model.select {id: "sam2.1-hiera-tiny"}`).
 3. Paint strokes on the base frame as usual, then **Propagate**. One tracking pass follows the object through the
    whole span in both directions, using SAM 2's streaming memory, so it keeps tracking through occlusion and when the
@@ -59,7 +59,7 @@ instances can see different pixels. Objects inside one instance always see the s
 Four checkpoints are in the registry (Settings ▸ Roto Brush); the size is detected from the file, and each is
 pinned to a Hugging Face commit with its SHA-256. All run the same tracker; a bigger backbone costs time and memory.
 
-| Model | Download | GPU encode (RX 7900 GRE) | Agreement with PyTorch |
+| Model | File size | GPU encode (RX 7900 GRE) | Agreement with PyTorch |
 |---|---|---|---|
 | SAM 2.1 Tiny (`sam2.1-hiera-tiny`) | 155.9 MB | 0.24 s | encoder 6.8e-6 |
 | SAM 2.1 Small (`sam2.1-hiera-small`) | 184.3 MB | 0.20 s | encoder 1.0e-5 |

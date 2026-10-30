@@ -635,6 +635,9 @@ fn download(s: &mut Session, p: &Value, task: Task) -> Result<Value> {
     let k = kind(task);
     let cmd = format!("{}.model.download", k.prefix);
     let m = model_p(p, &cmd, task)?;
+    if m.url.is_empty() {
+        return Err(bad(&cmd, format!("{} has no app download available: use Install from File with the SHA-256-verified weights", m.name)));
+    }
     let dir = s.models_dir().ok_or_else(|| bad(&cmd, "no settings folder to install into"))?;
     if s.models.status(task).busy.is_some() {
         return Err(bad(&cmd, "a model is already downloading or loading"));
@@ -747,6 +750,19 @@ pub fn specs() -> Vec<CommandSpec> {
 #[cfg(test)]
 mod availability_tests {
     use super::*;
+
+    /// SAM 2 cannot start a network operation; file installation still verifies the published hash.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn sam2_is_install_from_file_only() {
+        let mut session = Session::default();
+        for model in [seg::SAM2_TINY, seg::SAM2_SMALL, seg::SAM2_BASE_PLUS, seg::SAM2_LARGE] {
+            let error = session.execute("roto.model.download", json!({"id": model.id})).unwrap_err();
+            assert!(error.to_string().contains("Install from File"));
+            assert!(session.models.status(Task::Mask).busy.is_none());
+            assert!(install_bytes(Path::new("unused"), &model, b"invalid weights").unwrap_err().contains("SHA-256 differs"));
+        }
+    }
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]

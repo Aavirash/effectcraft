@@ -249,19 +249,23 @@ fn reloading_for_a_stroke_does_not_block_or_retry_a_failed_load() {
     let _ = std::fs::remove_dir_all(d);
 }
 
-/// With `EFFECTCRAFT_DOWNLOAD_SIZE=sam2.1-hiera-small` (or another registry id): the in-app download (Settings ▸ Roto
-/// Brush ▸ Download) fetches the pinned file over the network, verifies it, installs it with its notice and loads it.
-/// Skipped without the variable: it needs the network and hundreds of megabytes.
+/// With `EFFECTCRAFT_DOWNLOAD_SIZE=mobilesam` (or another downloadable registry id): the in-app
+/// download verifies and loads the file. SAM 2 must refuse until a storytold mirror is available.
+/// Skipped without the variable: downloadable entries need the network and large files.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn downloading_a_size_installs_and_loads_it() {
     let Ok(id) = std::env::var("EFFECTCRAFT_DOWNLOAD_SIZE") else { return };
     crate::tests_roto::hold_roto_cache_test_lock();
     let (mut s, d) = session("download");
+    let info = effectcraft_segment::info(&id).unwrap();
+    if info.url.is_empty() {
+        assert!(s.execute_checked("roto.model.download", json!({"id": id, "wait": true})).unwrap_err().to_string().contains("Install from File"));
+        return;
+    }
     let r = s.execute_checked("roto.model.download", json!({"id": id, "wait": true})).unwrap();
     assert_eq!(r["id"], id.as_str(), "{r}");
     let dir = s.models_dir().unwrap();
-    let info = effectcraft_segment::info(&id).unwrap();
     let file = dir.join(info.file_name);
     assert_eq!(std::fs::metadata(&file).unwrap().len(), info.size, "the whole file arrived");
     assert!(dir.join(format!("{}.NOTICE.txt", info.file_name)).exists());
