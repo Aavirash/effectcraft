@@ -3,6 +3,7 @@
 mod gpu_test;
 mod native_menu_text_keys;
 mod render_queue_snapshot;
+mod roto_model_guard;
 mod shared_docking_ui;
 mod ui_3d;
 mod ui_accessibility;
@@ -71,6 +72,8 @@ mod ui_quick_offset;
 mod ui_ram_preview;
 mod ui_render_queue;
 mod ui_render_queue_keyboard;
+mod ui_roto_objects;
+mod ui_roto_span_confidence;
 mod ui_script_console;
 mod ui_scriptui;
 mod ui_scrolling;

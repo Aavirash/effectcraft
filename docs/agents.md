@@ -405,8 +405,9 @@ Face tracking's trained model works like Roto Brush's (below): `face.models` lis
 tracker and MediaPipe Face Landmarker with its authors and licence; `face.model.download {id}` /
 `face.model.install {path, id?}` install it (verified); `face.model.select {id:
 classical|mediapipe-face}` chooses it; `face.model.remove {id}` deletes it. Downloads and loading
-run in the background; `"wait": true` on download, install or select returns once the model is in
-use (or with its error), which scripts need before tracking. `track.mask` with a
+run in the background; `"wait": true` waits for the requested operation (or returns its error).
+Download/install do not change the selected model. After installing, use
+`face.model.select {id, wait:true}` to select and load it before tracking. `track.mask` with a
 face method returns `faceModel`, the engine it tries first (the classical one when the model finds
 no face in the mask).
 
@@ -513,11 +514,22 @@ reference. Matte settings are ordinary properties (`effects/#1/rotoBrushMatte/se
 
 Trained model (Roto Brush 2.0 / 3.0):
 - `roto.models` lists the built-in engine and every registered model, with its authors,
-  licence, size, URL, SHA-256 and whether it is installed, selected and active.
-- `roto.model.download {id}` fetches and verifies the official weights in the background;
-  `roto.model.install {path, id?}` installs a file you already have.
-- `roto.model.select {id: classical|mobilesam}` chooses which one Roto Brush uses. Loading runs
-  in the background; `"wait": true` (also on download and install) returns once it is in use.
+  licence, size, app download URL (empty for install-only models), checkpoint `source` and `sourceFile`,
+  SHA-256 and whether it is installed, selected and active.
+- `roto.model.download {id}` fetches and verifies weights when the registry provides an app download URL;
+  `roto.model.install {path, id?}` installs a file you already have. SAM 2 is Install from File only until
+  a storytold-controlled mirror is available; its size and SHA-256 are verified before installation.
+- `roto.model.select {id: classical|mobilesam|sam2.1-hiera-tiny|sam2.1-hiera-small|sam2.1-hiera-base-plus|sam2.1-hiera-large}` chooses which one Roto Brush uses (SAM 2 also tracks the object through the clip, see [roto-brush-sam2.md](roto-brush-sam2.md); `roto.status` then reports `source` and per-frame `tracker.frames` with `confidence` and `occluded`). Loading runs
+  in the background. `"wait": true` waits for the requested operation; download/install load the model
+  only if it is already selected. They do not activate an unselected model: after installation, use
+  `roto.model.select {id, wait:true}` to select and load it. Unrelated model work can return a retryable
+  busy error rather than reporting that a waiting selection has finished.
+- `roto.propagate` never falls back to the classic engine silently: a chosen model that is not installed, or failed
+  to load, is an error, and without `"wait": true` so is a model still loading. `roto.status` reports `model`
+  (`selected`, `installed`, `active`, `loading`, `error`) and a `notice` while the chosen model is not the one in use.
+  Tracked frames are saved in the project with the instance (`tracker.saved` names their model): they apply while the
+  strokes and span are unchanged, whichever model Settings choose (`notice` says when that differs), and a new
+  Propagate replaces them.
 - `roto.model.remove {id}` deletes the installed weights.
 - The `version` property (`effects/#1/version`: 0 = 1.0, 1 = 2.0, 2 = 3.0) picks between the
   classic engine (1.0) and the chosen model (2.0, 3.0).

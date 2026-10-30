@@ -710,6 +710,113 @@ fn render_bitrate_applies_to_vp9_webm() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// `bench --roto --clip FRAMES --truth MASKS` runs the trackers on the user's own image sequences: here a bright disc
+/// drifting over a dark textured frame, with its true masks. Mismatched sequences are refused with a message.
+#[test]
+fn bench_roto_runs_on_a_users_clip() {
+    let (frames, masks) = (tmp("clip-frames"), tmp("clip-masks"));
+    let config = frames.join("config");
+    for d in [&frames, &masks] {
+        let _ = std::fs::remove_dir_all(d);
+        std::fs::create_dir_all(d).unwrap();
+    }
+    let (w, h) = (96u32, 72u32);
+    for f in 0..14u32 {
+        let (cx, cy) = (30.0 + 4.0 * f as f32, 36.0f32);
+        let (mut img, mut mask) = (image::RgbImage::new(w, h), image::GrayImage::new(w, h));
+        for y in 0..h {
+            for x in 0..w {
+                let inside = ((x as f32 - cx).powi(2) + (y as f32 - cy).powi(2)).sqrt() < 14.0;
+                let tex = 40 + ((x * 7 + y * 13) % 30) as u8;
+                img.put_pixel(x, y, if inside { image::Rgb([230, 120, 40 + (x % 20) as u8]) } else { image::Rgb([tex / 2, tex, tex + 20]) });
+                mask.put_pixel(x, y, image::Luma([if inside { 255 } else { 0 }]));
+            }
+        }
+        let extension = if f == 0 { "jpg" } else { "png" };
+        let stem = match f {
+            0 => "a".into(),
+            1 => "a.jpg".into(),
+            _ => format!("f{f:03}"),
+        };
+        img.save(frames.join(format!("{stem}.{extension}"))).unwrap();
+        mask.save(masks.join(format!("{stem}.png"))).unwrap();
+    }
+    let (f, m) = (frames.to_str().unwrap(), masks.to_str().unwrap());
+    let out = bin().env("EFFECTCRAFT_CONFIG_DIR", &config).args(["bench", "--roto", "--clip", f, "--truth", m, "--frames", "6", "--json"]).output().unwrap();
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(out.status.success(), "{text}\n{}", String::from_utf8_lossy(&out.stderr));
+    let rows: Value = serde_json::from_str(&text).unwrap();
+    let row = rows.as_array().unwrap().iter().find(|row| row["tracker"] == "classical").unwrap();
+    assert_eq!(row["per_frame"].as_array().unwrap().len(), 6, "a user clip respects the requested frame limit");
+    let mean = row["mean_iou"].as_f64().unwrap();
+    assert!(mean > 0.8, "classical mean IoU on the user's clip: {mean}\n{text}");
+    // one mask short: refused
+    std::fs::remove_file(masks.join("f005.png")).unwrap();
+    let out = bin().env("EFFECTCRAFT_CONFIG_DIR", &config).args(["bench", "--roto", "--clip", f, "--truth", m]).output().unwrap();
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("must match"), "{}", String::from_utf8_lossy(&out.stderr));
+    // --clip without --truth
+    let out = bin().env("EFFECTCRAFT_CONFIG_DIR", &config).args(["bench", "--roto", "--clip", f]).output().unwrap();
+    assert!(!out.status.success());
+}
+
+#[test]
+fn bench_roto_rejects_mismatched_names_before_loading_images() {
+    let root = tmp("bench-clip-names");
+    let (frames, masks) = (root.join("frames"), root.join("masks"));
+    let _ = std::fs::remove_dir_all(&root);
+    for dir in [&frames, &masks] {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(dir.join("f000.png"), []).unwrap();
+    }
+    std::fs::write(frames.join("f001.png"), []).unwrap();
+    std::fs::write(masks.join("f002.png"), []).unwrap();
+    let out = bin()
+        .env("EFFECTCRAFT_CONFIG_DIR", root.join("config"))
+        .args(["bench", "--roto", "--frames", "1", "--clip"])
+        .arg(&frames)
+        .arg("--truth")
+        .arg(&masks)
+        .output()
+        .unwrap();
+    let error = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert!(error.contains("names must match"), "validate the entire name set before decoding: {error}");
+    std::fs::remove_file(frames.join("f001.png")).unwrap();
+    std::fs::remove_file(masks.join("f002.png")).unwrap();
+    for dir in [&frames, &masks] {
+        std::fs::write(dir.join("f000.jpg"), []).unwrap();
+    }
+    let out =
+        bin().env("EFFECTCRAFT_CONFIG_DIR", root.join("config")).args(["bench", "--roto", "--clip"]).arg(&frames).arg("--truth").arg(&masks).output().unwrap();
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("unique stems"));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// `bench --roto --sam2 FILE` / `--mobilesam FILE` say why a file named on the command line cannot be
+/// used (a missing file, one that is not the published weights), instead of "not installed".
+#[test]
+fn bench_roto_reports_why_a_named_model_file_failed() {
+    let dir = tmp("bench-weights");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let bogus = dir.join("bogus.bin");
+    std::fs::write(&bogus, b"not the weights").unwrap();
+    for flag in ["--sam2", "--mobilesam"] {
+        let missing = dir.join("missing.bin");
+        let out = bin().env("EFFECTCRAFT_CONFIG_DIR", dir.join("config")).args(["bench", "--roto", flag, missing.to_str().unwrap()]).output().unwrap();
+        let err = String::from_utf8_lossy(&out.stderr).to_string();
+        assert!(!out.status.success(), "{flag}: {err}");
+        assert!(err.contains(flag) && err.contains("missing.bin"), "{flag} names the file that could not be read: {err}");
+        let out = bin().env("EFFECTCRAFT_CONFIG_DIR", dir.join("config")).args(["bench", "--roto", flag, bogus.to_str().unwrap()]).output().unwrap();
+        let err = String::from_utf8_lossy(&out.stderr).to_string();
+        assert!(!out.status.success(), "{flag}: {err}");
+        assert!(err.contains("does not match"), "{flag} says the file is not the published weights: {err}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Render uses the same empty/project/demo selection as the other CLI commands.
 #[test]
 fn render_empty_does_not_load_the_demo() {
