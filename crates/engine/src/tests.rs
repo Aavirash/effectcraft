@@ -1,5 +1,6 @@
 mod anim_presets;
 mod anim_tools;
+mod blender;
 mod camera_track;
 mod codec_options;
 mod color_view;
@@ -41,6 +42,7 @@ pub(crate) mod roto;
 mod sequence;
 mod session;
 mod settings;
+mod shared_layers;
 mod shortcut_cmds;
 pub(crate) mod stubs;
 mod styles;

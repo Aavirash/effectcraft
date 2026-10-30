@@ -1456,6 +1456,18 @@ fn automation_roots_confine_file_access() {
     // Scripts can read and write anything: refused.
     denied(&mut s, "run_script", json!({"code": "1 + 1"}));
     denied(&mut s, "execute_command", json!({"command": "file.runScript", "params": {"path": p(&read, "x.jsx")}}));
+    for (id, params) in [
+        ("file.runStartupScripts", json!({})),
+        ("file.runShutdownScripts", json!({})),
+        // ScriptUI panels run their script when they open.
+        ("window.scriptPanel", json!({"name": "Layer Tools.jsx"})),
+        ("window.restoreScriptPanels", json!({})),
+    ] {
+        let msg = denied(&mut s, "execute_command", json!({"command": id, "params": params}));
+        assert!(msg.contains("not available while file access is confined"), "{id}: {msg}");
+        let msg = denied(&mut s, "batch", json!({"steps": [{"command": id, "params": params}]}));
+        assert!(msg.contains("not available while file access is confined"), "{id}: {msg}");
+    }
     // Writes to the files the agent named: none outside.
     assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 1, "only the unconfined save");
     let _ = std::fs::remove_dir_all(&base);
@@ -1516,4 +1528,31 @@ fn automation_roots_refuse_running_script_code() {
     call_json(&mut s, "execute_command", json!({"command": "prefs.set", "params": {"key": "general.showToolTips", "value": false}}));
     call_json(&mut s, "execute_command", json!({"command": "scriptui.list"}));
     let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn blender_export_requires_an_absolute_path_in_a_write_root() {
+    use crate::confine::Confinement;
+    let base = std::env::temp_dir().join(format!("ec-blender-confine-{}", std::process::id()));
+    let (read, write) = (base.join("read"), base.join("write"));
+    for dir in [&read, &write] {
+        std::fs::create_dir_all(dir).unwrap();
+    }
+    let confinement = Confinement::new(std::slice::from_ref(&read), std::slice::from_ref(&write)).unwrap();
+    let check = |path: &std::path::Path| confinement.check_command("camera.exportBlender", &json!({"path": path}));
+    assert_eq!(check(&write.join("scene.py")).unwrap(), None);
+    for path in [read.join("scene.py"), base.join("outside.py"), write.join("../read/scene.py")] {
+        assert!(check(&path).is_err(), "must deny {}", path.display());
+    }
+    for path in ["scene.py", "./scene.py", "write/scene.py", "../scene.py"] {
+        let error = check(std::path::Path::new(path)).unwrap_err().to_string();
+        assert!(error.contains("give an absolute path"), "{path}: {error}");
+    }
+    let read_only = Confinement::new(std::slice::from_ref(&write), &[]).unwrap();
+    assert!(read_only.check_command("camera.exportBlender", &json!({"path": write.join("scene.py")})).is_err());
+    for path in [json!(read.join("scene.py")), json!("scene.py"), json!("$1.path")] {
+        let batch = json!({"steps": [{"command": "camera.exportBlender", "params": {"path": path}}]});
+        assert!(confinement.check_command("engine.batch", &batch).is_err());
+    }
+    std::fs::remove_dir_all(&base).unwrap();
 }
