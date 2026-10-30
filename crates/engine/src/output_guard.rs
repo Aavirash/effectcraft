@@ -473,9 +473,6 @@ impl Session {
 
     /// What the job writes more than once. An item in `refused` writes nothing, so it takes no part.
     pub(crate) fn duplicate_outputs(&self, items: &[Vec<(RenderQueueItem, String)>], refused: &[Refused]) -> Vec<DuplicateOutput> {
-        if cfg!(target_arch = "wasm32") {
-            return Vec::new();
-        }
         let skip: HashSet<u64> = refused.iter().map(|r| r.item).collect();
         let mut writes = Writes::default();
         let mut duplicates = Vec::new();
@@ -547,10 +544,9 @@ impl Session {
     /// is stored in the item, so it stays as it is when the item it avoided goes away. One the
     /// caller chose is not touched: rendering it is refused instead ([`Session::duplicate_outputs`]).
     pub(crate) fn avoid_sources(&self, item: &mut RenderQueueItem) {
-        if cfg!(target_arch = "wasm32") {
-            return;
-        }
-        let protected = self.protected_files();
+        // Native source protection stays with its filesystem guard; virtual web outputs still
+        // need distinct queue names because the browser stores completed files by path.
+        let protected = if cfg!(target_arch = "wasm32") { Protected::default() } else { self.protected_files() };
         let queue = self.queue_writes();
         if protected.is_empty() && queue.is_empty() {
             return;
@@ -594,6 +590,23 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    /// Portable path checks protect virtual outputs too; they do not need native file identity.
+    #[test]
+    fn duplicate_queue_paths_are_reported_without_native_files() {
+        let mut s = Session::default();
+        s.execute("comp.new", json!({"name": "Main", "width": 16, "height": 16})).unwrap();
+        for _ in 0..2 {
+            s.execute("renderQueue.add", json!({"format": "h264", "output": "/virtual/shared.mp4"})).unwrap();
+        }
+        let (outputs, _) = s.queued_outputs(&effectcraft_project::render_queue::OutputFormat::ALL);
+        let duplicates = s.duplicate_outputs(&outputs, &[]);
+        assert_eq!(duplicates.len(), 1);
+        assert!(duplicates[0].path.ends_with("shared.mp4"));
+        let refused = [Refused { item: duplicates[0].item, reason: "already refused".into() }];
+        assert!(s.duplicate_outputs(&outputs, &refused).is_empty());
+    }
 
     /// An output of queue item `item` that is a file, known by its name alone.
     fn movie(item: u64, path: &str) -> Write {
