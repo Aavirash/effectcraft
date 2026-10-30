@@ -120,6 +120,11 @@ Come tell us what matters most to you on [Discord](https://discord.gg/artcraft).
 - 2026-10-28: A shape layer's Rectangle and Ellipse Size get the Constrain Proportions chain
   that Scale has, so a circle stays a circle while its size is typed, scrubbed or keyed; it
   starts off, so existing shapes behave as before (#2489).
+- 2026-10-24: Shape layers have the Wiggle Transform path operation (Contents ▸ Add, or
+  `layer.addShapeItem {kind: "wiggler"}`): it wiggles the anchor point, position, scale and
+  rotation of the paths above it by random amounts that change over time, up to the Transform
+  values it holds. The copies of a Repeater above it wiggle independently as far as its
+  Correlation allows; with the Repeater below it, they wiggle together.
 - 2026-10-16: Convert To Bezier Path turns a shape layer's Rectangle, Ellipse or Polystar
   path into an editable Path 1 with the same geometry, as After Effects does; it used to
   apply to mask RotoBezier only, so a parametric shape path could not be converted at all
