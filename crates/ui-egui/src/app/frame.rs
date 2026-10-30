@@ -98,7 +98,7 @@ impl EffectcraftApp {
                     self.ui.timeline.pps = None;
                 }
                 effectcraft_engine::Event::Toast { message, .. } => self.toast = Some((message, self.now)),
-                effectcraft_engine::Event::OpenUrl(url) => ctx.open_url(egui::OpenUrl::new_tab(url)),
+                effectcraft_engine::Event::OpenUrl(url) => open_url(ctx, url),
                 // Frames are keyed by content: an edit keeps those of comps it doesn't touch.
                 effectcraft_engine::Event::ProjectChanged { .. } => {}
                 effectcraft_engine::Event::Frontend { command, params } => {
@@ -574,5 +574,50 @@ impl EffectcraftApp {
             self.footage_watch_key = Some(key);
             watcher.set_watched(footage_reload::watched(&self.session));
         }
+    }
+}
+
+/// Opens `url`: on Windows a `file://` folder (Reveal in Explorer) in File Explorer, since the
+/// system browser would get it otherwise (#1961); anything else in the browser.
+fn open_url(ctx: &egui::Context, url: String) {
+    #[cfg(windows)]
+    if let Some(path) = file_url_path(&url) {
+        // The engine only sends folders it checked are plain folders (`reveal_url`).
+        if std::process::Command::new("explorer").arg(&path).spawn().is_ok() {
+            return;
+        }
+    }
+    ctx.open_url(egui::OpenUrl::new_tab(url));
+}
+
+/// The Windows path of a `file:///C:/…` (or `file:////server/share/…`) URL, percent-decoded.
+#[cfg(any(windows, test))]
+fn file_url_path(url: &str) -> Option<String> {
+    let rest = url.strip_prefix("file:///")?;
+    let mut bytes = Vec::with_capacity(rest.len());
+    let mut it = rest.bytes();
+    while let Some(b) = it.next() {
+        if b == b'%' {
+            let hex = [it.next()?, it.next()?];
+            bytes.push(u8::from_str_radix(std::str::from_utf8(&hex).ok()?, 16).ok()?);
+        } else {
+            bytes.push(b);
+        }
+    }
+    let path = String::from_utf8(bytes).ok()?.replace('/', "\\");
+    // `file:////server/share` is the UNC path `\\server\share`.
+    Some(if path.starts_with('\\') { format!("\\{path}") } else { path })
+}
+
+#[cfg(test)]
+mod tests {
+    /// #1961: Reveal's `file://` URLs map back to the folder Explorer opens.
+    #[test]
+    fn file_urls_map_to_windows_paths() {
+        assert_eq!(super::file_url_path("file:///C:/Footage/My%20Shots/").as_deref(), Some("C:\\Footage\\My Shots\\"));
+        assert_eq!(super::file_url_path("file:///C:/Clips/%E6%98%A0%E5%83%8F").as_deref(), Some("C:\\Clips\\映像"));
+        assert_eq!(super::file_url_path("file:////server/share/x").as_deref(), Some("\\\\server\\share\\x"));
+        assert_eq!(super::file_url_path("https://getartcraft.com"), None);
+        assert_eq!(super::file_url_path("file:///C:/bad%2"), None);
     }
 }
