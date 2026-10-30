@@ -22,7 +22,7 @@ fn settle(h: &mut Harness<'_, EffectcraftApp>) {
 
 /// Step until the GPU compositor's worker has handed its result over (attached, or why not).
 /// The first step starts the build.
-fn wait_for_compositor(h: &mut Harness<'_, EffectcraftApp>) {
+pub(crate) fn wait_for_compositor(h: &mut Harness<'_, EffectcraftApp>) {
     h.step();
     for _ in 0..3000 {
         if !h.state().gpu_initializing() {
