@@ -22,16 +22,18 @@ Apache-2.0). It is optional: nothing changes until you install the model and cho
    chose and whether it is installed, loaded and loading; `notice` says when it is not the one in use for the layer.
    `tracker.saved` names the model the saved frames came from.
 
-Propagate never falls back to the classic engine without saying so. With SAM 2 chosen but not installed, or failing to
-load, it refuses with the reason. While it is still loading, `wait: true` (agents) loads it first; without `wait` it
+With SAM 2 chosen but not installed, or failing to load, Propagate refuses with the reason. A tracker failure during
+propagation can fall back to classic; its warning is live progress only, as described under [Memory and limits](#memory-and-limits).
+While it is still loading, `wait: true` (agents) loads it first; without `wait` it
 refuses, and the load goes on in the background. Deselecting SAM 2 (choosing Classic) runs Propagate exactly as before,
 and Roto Brush 1.0 never uses a model.
 
 Tracked frames are saved in the project with the instance, as Freeze's are, so a saved project renders the same when it
 reopens, in the app or with `effectcraft-cli`, without the model being loaded or chosen there. They apply while the
 strokes and span they came from are unchanged. Changing a stroke or the span makes them stale until the next Propagate.
-Choosing another model, or the classic engine, leaves them in place and `roto.status` says so; a classic Propagate
-replaces them with classic mattes. Object Matte saves nothing.
+Choosing another model, or the classic engine, leaves them in place and `roto.status` says so. They retain the original
+model tag and per-object cache keys when rendered or re-saved; the next Propagate replaces them using the selected
+model (or classic engine). Object Matte saves nothing.
 
 ## Several objects in one instance
 A Roto Brush instance can hold several objects. The **Object N** button in the Layer panel's bar picks the object new
