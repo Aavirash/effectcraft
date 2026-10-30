@@ -379,18 +379,16 @@ fn marker(app: &mut EffectcraftApp, ui: &mut egui::Ui, p: &egui::Painter, comp: 
 
 fn name_box_x(x: f32, width: f32, end: Option<f32>, clip: Rect) -> f32 {
     let start = x + 6.0;
-    if let Some(end) = end
-        && end > start
-        && end < start + width
-    {
-        let right = end + 3.0;
-        if right + width <= clip.right() {
-            return right;
-        }
-        let left = x - 6.0 - width;
-        if left >= clip.left() {
-            return left;
-        }
+    let right = match end {
+        Some(end) if end > start && end < start + width => end + 3.0,
+        _ => start,
+    };
+    if right + width <= clip.right() {
+        return right;
+    }
+    let left = x - 6.0 - width;
+    if left >= clip.left() {
+        return left;
     }
     start
 }
@@ -523,6 +521,11 @@ mod tests {
         assert!(x + 20.0 < 70.0 - 4.0, "the left-hand box must not cover its own marker flag");
         assert!(85.0 < x || 85.0 > x + 20.0, "the end cap must remain outside the box");
         assert_eq!(name_box_x(20.0, 20.0, Some(35.0), clip), 38.0);
+        for end in [None, Some(72.0), Some(110.0)] {
+            let x = name_box_x(90.0, 20.0, end, clip);
+            assert!(x >= clip.left() && x + 20.0 <= clip.right(), "all right-edge names must remain visible: {end:?}");
+            assert!(x + 20.0 < 90.0 - 4.0);
+        }
     }
 
     #[test]
