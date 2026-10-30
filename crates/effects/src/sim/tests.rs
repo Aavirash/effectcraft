@@ -112,6 +112,45 @@ fn bubbles_near_edges_show_the_layer() {
     assert_eq!(pale, [0, 0], "pale bubble pixels (liquid, metal)");
 }
 
+/// CC Bubbles on a 40 × 40 layer `img` at `scale`, in a buffer padded by 6 transparent pixels
+/// (a half-resolution preview's layout).
+fn padded_bubbles(img: Image, scale: f64, reflection: u32) -> Image {
+    let size = 40.0;
+    let s = crate::find("ec.sim.ccbubbles").unwrap();
+    let mut params = crate::Params { values: s.params.iter().map(|p| (p.id.to_string(), crate::default_value(p, [size; 2]))).collect() };
+    for (k, v) in [("bubbleAmount", num(200.0)), ("bubbleSize", num(3.0)), ("reflectionType", Value::Enum(reflection))] {
+        params.values.insert(k.into(), v);
+    }
+    let ctx = EffectCtx { params: &params, time: 0.3, layer_size: [size; 2], seed: 1, adjustment: false, env: EffectEnv::default() };
+    let mut b = Buf { img, offset: [0.0; 2], scale };
+    b.pad(6);
+    crate::apply(s, &ctx, b).img
+}
+
+/// #2024: the same when the buffer has transparent padding around the layer: samples past the
+/// layer's edges repeat its edge pixels, not the padding, and a clear hole inside the layer is
+/// still refracted as the pale colour.
+#[test]
+fn bubbles_near_padded_edges_show_the_layer() {
+    let blue = |side| Image::filled(side, side, [0.0, 0.0, 1.0, 1.0]);
+    let pale = |img: &Image| img.data.iter().filter(|p| (p[2] - p[0] - p[3]).abs() > 1e-4).count();
+    for (scale, side) in [(1.0, 40), (0.5, 20)] {
+        let counts = [0, 1].map(|reflection| {
+            let a = padded_bubbles(blue(side), scale, reflection);
+            assert!(a.data.iter().any(|p| p[3] > 0.5), "bubbles drawn");
+            pale(&a)
+        });
+        assert_eq!(counts, [0, 0], "pale bubble pixels at scale {scale} (liquid, metal)");
+    }
+    let mut holed = blue(40);
+    for y in 12..28 {
+        for x in 12..28 {
+            holed.set(x, y, [0.0; 4]);
+        }
+    }
+    assert!(pale(&padded_bubbles(holed, 1.0, 0)) > 0, "the hole refracts as the pale colour");
+}
+
 #[test]
 fn drizzle_ripples() {
     let a = run("ec.sim.ccdrizzle", &[], ramp(48, 48), 0.6);
