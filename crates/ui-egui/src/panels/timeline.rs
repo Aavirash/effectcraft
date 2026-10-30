@@ -4177,7 +4177,7 @@ pub(crate) fn key_menu(
         let edits = !matches!(cmd, "keys.copy" | "keys.selectEqual" | "keys.selectPrevious" | "keys.selectFollowing" | "keys.selectAll");
         // An unselected key is selected before the command runs, and locked keys cannot be selected.
         let unselectable = locked && !selected && cmd != "keys.selectAll";
-        if ui.add_enabled(!(locked && edits) && !unselectable, egui::Button::new(crate::i18n::context_item(cmd, &params, lbl))).clicked() {
+        if ui.add_enabled(!(unselectable || locked && edits), egui::Button::new(crate::i18n::context_item(cmd, &params, lbl))).clicked() {
             if !selected {
                 actions.push(("keys.select".into(), json!({"keys": [this_key.clone()]})));
             }
