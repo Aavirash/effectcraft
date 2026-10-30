@@ -183,6 +183,8 @@ pub(crate) fn paste_masks(s: &mut Session, p: &Value) -> Result<Value> {
         }
         proj.next_id = next + 1;
         st.selected_props = out.clone();
+        // The source mask's points (selected with it) must not outlive its selection.
+        st.selected_vertices.clear();
         Ok(out)
     })?;
     Ok(json!({"masks": pasted.iter().map(|(_, u)| *u).collect::<Vec<_>>()}))

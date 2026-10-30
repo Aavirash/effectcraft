@@ -2006,3 +2006,32 @@ fn copy_with_an_explicit_layer_ignores_the_selected_mask() {
     assert_eq!(s.state.clipboard.len(), 1, "the named layer is copied");
     assert!(s.state.mask_clipboard.is_empty());
 }
+
+#[test]
+fn selecting_a_mask_drops_stale_key_selection_so_copy_copies_the_mask() {
+    let mut s = comp();
+    let a = solid(&mut s, "#ff0000");
+    s.execute("layer.select", json!({"layers": [a]})).unwrap();
+    s.execute("layer.addMask", json!({})).unwrap();
+    let mask = layer(&s, a).masks().unwrap().groups().next().unwrap().uid;
+    s.state.selected_keys = vec![crate::KeyRef { layer: effectcraft_project::LayerId(a), prop: 1, time: Default::default() }];
+    s.execute("prop.select", json!({"layer": a, "prop": mask})).unwrap();
+    assert!(s.state.selected_keys.is_empty());
+    assert_eq!(s.execute("edit.copy", json!({})).unwrap()["masks"], json!(1));
+}
+
+#[test]
+fn pasting_a_mask_onto_its_own_layer_drops_the_source_vertex_selection() {
+    let mut s = comp();
+    let a = solid(&mut s, "#ff0000");
+    s.execute("layer.select", json!({"layers": [a]})).unwrap();
+    s.execute("layer.addMask", json!({})).unwrap();
+    let mask = layer(&s, a).masks().unwrap().groups().next().unwrap().uid;
+    s.execute("prop.select", json!({"layer": a, "prop": mask})).unwrap();
+    assert!(!s.state.selected_vertices.is_empty());
+    s.execute("edit.copy", json!({})).unwrap();
+    s.execute("edit.paste", json!({})).unwrap();
+    assert!(s.state.selected_vertices.is_empty());
+    s.execute("edit.clear", json!({})).unwrap();
+    assert_eq!(layer(&s, a).masks().unwrap().groups().count(), 1, "the pasted mask goes, the source stays");
+}
