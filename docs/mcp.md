@@ -58,8 +58,9 @@ receive `resultType: complete` and list/read cache hints; document reads are nev
 Two outputs of one job that write the same file (two items with one Output To, a duplicated item,
 output modules or segments that meet) refuse the whole `renderQueue.render` before anything is
 written: the reply is `isError: true`, naming both items, and the queue is left as it was.
-Sequences clash only on the frames both write, and an item with Skip Existing Files leaves the
-earlier one's frames alone. A new item's default output name is numbered (`Main.mp4`,
+Sequences clash only on the frames both write. Skip Existing Files leaves earlier frames alone
+only when the exporter can check existing files; browser and other memory sinks still report
+collisions. A new item's default output name is numbered (`Main.mp4`,
 `Main_1.mp4`) when another item of the queue writes it.
 
 ## Progress and cancellation

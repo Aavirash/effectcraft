@@ -1,6 +1,27 @@
 use serde_json::json;
 
 #[test]
+fn memory_sink_cannot_overwrite_a_previous_output_even_with_skip_existing() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    let writes = Arc::new(AtomicUsize::new(0));
+    let count = writes.clone();
+    let sink: Arc<effectcraft_export::Sink> = Arc::new(move |_, _| {
+        count.fetch_add(1, Ordering::Relaxed);
+    });
+    let mut s = effectcraft_engine::Session { exporter: Some(Arc::new(super::FileExporter { sink: Some(sink) })), ..Default::default() };
+    s.execute("comp.new", json!({"name": "Main", "width": 16, "height": 16, "frameRate": 10, "duration": 0.2})).unwrap();
+    for _ in 0..2 {
+        s.execute("renderQueue.add", json!({"format": "png", "output": "/virtual/frames_[#####].png", "skipExisting": true})).unwrap();
+    }
+    let result = s.execute("renderQueue.render", json!({}));
+    assert!(result.is_err(), "a sink cannot skip previous paths: {result:?}");
+    assert_eq!(writes.load(Ordering::Relaxed), 0, "refused before the sink receives bytes");
+}
+
+#[test]
 fn host_runs_tasks_scheduled_by_panel_handlers() {
     let mut s = super::session();
     let result = s.execute("script.run", json!({"code": "var w=new Window('palette','Timer regression'); var b=w.add('button',undefined,'Import'); b.onClick=function(){app.scheduleTask(\"app.project.items.addComp('Scheduled',64,64,1,1,25)\",0,false);};w.show();"})).unwrap();
