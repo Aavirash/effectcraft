@@ -324,6 +324,11 @@ fn numpad_star_marker(app: &mut EffectcraftApp, ctx: &egui::Context) {
     }
 }
 
+/// Panels that handle Enter themselves (rename, apply, open the row).
+fn panel_owns_enter(kind: PanelKind) -> bool {
+    matches!(kind, PanelKind::Project | PanelKind::EffectsPresets | PanelKind::RenderQueue)
+}
+
 fn handle_shortcuts_impl(app: &mut EffectcraftApp, ctx: &egui::Context, tab_only: bool) {
     let start = modifiers_at_start(ctx);
     if !tab_only && app.dialog.is_some() && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
@@ -378,7 +383,9 @@ fn handle_shortcuts_impl(app: &mut EffectcraftApp, ctx: &egui::Context, tab_only
             continue;
         }
         // Enter in the Project panel renames the selected item (handled by the panel).
-        if key == egui::Key::Enter && !mods.any() && app.ui.focused == PanelKind::Project {
+        // In Effects & Presets and the Render Queue Enter applies or opens the row (handled by the
+        // panel), not the layer rename.
+        if key == egui::Key::Enter && !mods.any() && panel_owns_enter(app.ui.focused) {
             continue;
         }
         // The Project panel has its own selection; a previously selected Timeline layer
