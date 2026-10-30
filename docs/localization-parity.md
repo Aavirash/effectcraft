@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-30 · **Change:** minor (recounted at this tree after #1774: Japanese 1,923 of ≈ 4,200 interface strings (46%, with 297 effect names), Simplified Chinese 1,935 (46%, with 307 effect names), Traditional Chinese 1,581 (38%, its panel catalog 951 rows after #2244); overall ≈ 24%; previously: minor, the panel/dialog catalogs grow by 303 rows in Japanese, Simplified Chinese and Traditional Chinese: panel tabs, form and dialog labels, context menus, tracker/graph/text-panel labels, credits and File-panel footers; previously: minor, catalogs recounted at `upstream/main` 470ea7a3: menus in 10 languages, panels in 6, Hangul probe (#599)) · **Target:** Adobe After Effects 2026
+> **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-30 · **Change:** minor (Polish (`pl`): menus 630, panels 695; recounted at this tree after #1774: Japanese 1,923 of ≈ 4,200 interface strings (46%, with 297 effect names), Simplified Chinese 1,935 (46%, with 307 effect names), Traditional Chinese 1,581 (38%, its panel catalog 951 rows after #2244); overall ≈ 24%; previously: minor, the panel/dialog catalogs grow by 303 rows in Japanese, Simplified Chinese and Traditional Chinese: panel tabs, form and dialog labels, context menus, tracker/graph/text-panel labels, credits and File-panel footers; previously: minor, catalogs recounted at `upstream/main` 470ea7a3: menus in 10 languages, panels in 6, Hangul probe (#599)) · **Target:** Adobe After Effects 2026
 
 How much of EffectCraft's interface is translated, language by language, compared with After
 Effects. [gaps.md](gaps.md) gap 16 and workstream G9 hold the work;
@@ -88,12 +88,13 @@ counted, so the true percentages are slightly lower.
 | Korean | `ko` | 0 | — | Hangul fallback probe added (#599, closed); not checked on macOS here | no | none | 9–13 h + review |
 | Vietnamese | `vi` | 0 | — | Latin with stacked diacritics; untested | no | none (After Effects: none) | 8–12 h + review |
 
-Other languages EffectCraft ships (4):
+Other languages EffectCraft ships (5):
 
 | Language | Code | UI strings translated | Status | To `full` |
 |---|---|---|---|---|
 | Traditional Chinese | `zh-hant` | 1,581 (≈ 38%): menus 630 rows, panels 951 | partial | 6–9 h + review |
 | Ukrainian | `uk` | 1,153 (≈ 29%): menus 629 rows, panels 524 | partial | 6–9 h + review |
+| Polish | `pl` | 1,325 (≈ 34%): menus 630 rows, panels 695 | partial; unwrapped UI, effects and engine text still in English; AI-drafted, native review welcome | Remaining strings + native review |
 | Czech | `cs` | 1,147 (≈ 29%): menus 629 rows, panels 518 | Existing catalog entries covered; unwrapped UI, effects and engine text still in English; AI-assisted, not yet native-speaker proofread | Remaining strings + independent native review |
 | Georgian | `ka` | 1,514 (≈ 39%): menus 629 rows, panels 885 (the Simplified Chinese catalog's 694 plus 191 Georgian-only rows: form dialogs, context menus, column headers), effect names 307 + 21 categories; native-speaker reviewed | partial | 5–8 h |
 
@@ -121,6 +122,7 @@ can give; only Georgian, contributed by a native speaker (#1843), has had it.
 | 2026-10-22 | minor | Panel/dialog second step: 300 more catalog rows in Japanese, Simplified Chinese and Traditional Chinese, plus the three rows the review found missing (Basic, Advanced and Play/Stop) — panel tabs, form and dialog labels, panel context menus, the tracker and graph controls, text-panel options, File-panel footers and credits; the panel tables are now 996 Japanese and 998 Simplified Chinese rows, all drawn through `tr`/`tr_args`, with the tests keeping the three catalogs listing the same sources; the 30 October recount above carries the share |
 | 2026-10-18 | minor | Brazilian Portuguese completes its panel catalog (278 new rows, 417 → 695, the Chinese catalogs' source list); the doc recount closes the drift the batch merges left in every language's panel count; AI-assisted, not yet native-speaker proofread |
 | 2026-10-14 | minor | Georgian (`ka`): menus 628, panels 886 (191 Georgian-only, in `GEORGIAN_PANELS`), effect names and categories in `effects.rs` |
+| 2026-10-29 | minor | Polish (`pl`): menus 630, panels 695 |
 | 2026-10-13 | minor | Effect names and the generated Effect menu leave English: `i18n/effects.rs` adds 306 rows keyed by effect id (Simplified Chinese, from After Effects 2026's interface and Adobe's Chinese documentation for the `CC` series) and the 21 category names. Parameter names are still English; no other language has rows |
 | 2026-10-12 | minor | Recounted: Russian, French, German and Czech menus (#873, #987), Brazilian Portuguese and Czech panels (#830, #987), Hangul probe (#599); overall ≈ 12% to ≈ 18%; Korean and Italian still absent |
 | 2026-10-11 | minor | Ukrainian panel catalog brought level with the Chinese ones (495 of 496 rows, counted at this commit); its share rises to ≈ 29%. The other languages' panel counts are the 10 October measurement |
