@@ -216,11 +216,9 @@ pub fn first_paint(layer: &Layer, lt: Tick) -> (Option<[f64; 4]>, Option<[f64; 4
                 "fill" if fill.is_none() => fill = at("color").map(rgba),
                 "stroke" if stroke.is_none() => {
                     stroke = at("color").map(rgba);
+                    width = at("width").map(|v| v.as_f64());
                 }
                 _ => {}
-            }
-            if width.is_none() && matches!(g.match_id.as_str(), "stroke" | "gstroke") {
-                width = at("width").map(|v| v.as_f64());
             }
         });
     }
