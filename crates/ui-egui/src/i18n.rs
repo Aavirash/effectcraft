@@ -7536,6 +7536,19 @@ mod tests {
         println!("total: {total}");
     }
 
+    /// Prints the translated-row counts per language, the numbers `docs/localization-parity.md`
+    /// quotes. `cargo xtask i18n-report` runs it with `--nocapture`.
+    #[test]
+    fn catalog_row_counts_report() {
+        println!("Localization catalog rows:");
+        for code in CATALOG_CODES {
+            let menus = menu_catalog(code).map_or(0, |catalog| catalog.len());
+            let panels = ui::translated_rows(code);
+            let effect_names = effects::translated_rows(code);
+            println!("{code}: menus {menus}, panels {panels}, effect names {effect_names}, total {}", menus + panels + effect_names);
+        }
+    }
+
     #[test]
     fn menu_catalogs_have_no_stale_or_duplicate_rows() {
         let mut actual = BTreeSet::new();
