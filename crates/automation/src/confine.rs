@@ -128,6 +128,9 @@ pub enum Lookup {
     ProjectFile,
     /// Every output of the queued Render Queue items (`renderQueue.list`).
     RenderOutputs,
+    /// Whether the open project has a file (`project.summary` → `path`): a Render Queue item
+    /// added without `output` writes beside it, or to the home folder before the first save.
+    QueueDefault,
 }
 
 impl Confinement {
@@ -239,6 +242,10 @@ impl Confinement {
         if matches!(id, "file.openRecent" | "file.importRecent" | "anim.applyRecentPreset") && !given {
             return Err(Error::BadArgs(format!("`{id}`: give `path` while file access is confined")));
         }
+        // Without `output`, an unsaved project's item would write to the home folder (#2479).
+        if id == "renderQueue.add" && !given {
+            return Ok(Some(Lookup::QueueDefault));
+        }
         if IMPLICIT_WRITES.contains(&id) && !(given && id == "file.save") {
             return Ok(Some(if id == "file.save" || id == "file.incrementAndSave" { Lookup::ProjectFile } else { Lookup::RenderOutputs }));
         }
@@ -252,6 +259,13 @@ impl Confinement {
                 // Increment and Save writes beside it.
                 Some(p) => self.check(p, Access::Write).map(drop),
                 None => Err(Error::BadArgs("the project has no file yet: give `path` (Save As) inside an automation write root".into())),
+            },
+            // A saved project's default output sits beside it, and rendering checks it then.
+            Lookup::QueueDefault => match found.get("path").and_then(Value::as_str) {
+                Some(_) => Ok(()),
+                None => Err(Error::BadArgs(
+                    "`renderQueue.add`: the project has no file yet, so the default output would go to the home folder: give `output` inside an automation write root".into(),
+                )),
             },
             Lookup::RenderOutputs => {
                 let items = found.get("items").or(Some(found)).and_then(Value::as_array).cloned().unwrap_or_default();

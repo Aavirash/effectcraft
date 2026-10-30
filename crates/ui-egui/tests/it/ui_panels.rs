@@ -2,6 +2,7 @@
 //! registers its automation ids; the Footage panel's buttons edit into the comp; the Progress
 //! panel lists and cancels a job; Lumetri Scopes switch scope through their dropdown.
 
+use crate::gpu_test::RenderSerial;
 use effectcraft_ui_egui::dock::WorkspaceExt as _;
 use std::sync::Arc;
 
@@ -448,7 +449,7 @@ fn panels_snapshot() {
         }
         open(&mut h, panel);
         h.run_steps(3);
-        let img = h.render().expect("render");
+        let img = h.render_serialized().expect("render");
         img.save(format!("{dir}/{panel}{scope}.png")).unwrap();
     }
 }

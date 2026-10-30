@@ -3,6 +3,7 @@
 //! Effect Controls' layer parameters (a Displacement Map's layer) pick through the same widget,
 //! and both write an undoable `prop.set`.
 
+use crate::gpu_test::RenderSerial;
 use effectcraft_engine::Session;
 use effectcraft_engine::keyframe::Value;
 use effectcraft_engine::project::LayerId;
@@ -183,6 +184,7 @@ fn effect_controls_layer_param_picks_through_the_shared_widget() {
 #[test]
 #[ignore = "renders with wgpu; run with --ignored (set EC_SNAPSHOT_DIR to keep PNGs)"]
 fn snapshot_source_dropdown_open_and_chosen() {
+    let _device = crate::gpu_test::lock();
     let mut s = Session::default();
     s.execute("comp.new", json!({"name": "Main", "width": 1280, "height": 720, "frameRate": 30, "duration": 5})).unwrap();
     s.execute("comp.settings", json!({"renderer": "advanced3D"})).unwrap();
@@ -200,7 +202,7 @@ fn snapshot_source_dropdown_open_and_chosen() {
     h.run_steps(4);
     let save = |h: &mut Harness<'_, EffectcraftApp>, name: &str| {
         if let Ok(dir) = std::env::var("EC_SNAPSHOT_DIR") {
-            h.render().expect("render").save(format!("{dir}/{name}")).expect("save");
+            h.render_serialized().expect("render").save(format!("{dir}/{name}")).expect("save");
         }
     };
     save(&mut h, "source_unset.png");

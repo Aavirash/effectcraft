@@ -1,5 +1,6 @@
 //! The crate's integration tests, one binary (each module is a former `tests/<name>.rs`).
 
+mod gpu_test;
 mod native_menu_text_keys;
 mod render_queue_snapshot;
 mod shared_docking_ui;
@@ -13,6 +14,7 @@ mod ui_batch_switches;
 mod ui_blank_context_menus;
 mod ui_camera_tracker;
 mod ui_character_eyedropper;
+mod ui_character_stroke_order;
 mod ui_color_hex;
 mod ui_comp_presets;
 mod ui_control_modifiers;
@@ -74,6 +76,7 @@ mod ui_text_range_handles;
 mod ui_theme_favorites;
 mod ui_time_zoom_controls;
 mod ui_timeline_effect_label;
+mod ui_timeline_group_select;
 mod ui_timeline_pan;
 mod ui_timeline_shapes;
 mod ui_timeline_switches;

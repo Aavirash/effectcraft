@@ -1,6 +1,7 @@
 //! The menu bar from the keyboard, and the app's shortcuts waiting while a menu is open (#279)
 //! (egui_kittest, UI logic only).
 
+use crate::gpu_test::RenderSerial;
 use effectcraft_engine::Session;
 use effectcraft_ui_egui::EffectcraftApp;
 use egui::{Event, Key, Modifiers, Pos2, Rect, pos2, vec2};
@@ -226,7 +227,7 @@ fn relink_is_reachable_through_the_dependencies_menu() {
     h.run_steps(8);
     let relink = h.query_by_label_contains("Relink Missing Footage").unwrap().rect();
     if let Some(path) = std::env::var_os("EFFECTCRAFT_RELINK_MENU_SNAPSHOT") {
-        h.render().unwrap().save(path).unwrap();
+        h.render_serialized().unwrap().save(path).unwrap();
     }
     click_at(&mut h, relink.center());
     assert!(picked.get());

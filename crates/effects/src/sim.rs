@@ -32,6 +32,7 @@ use engine::{MERCURY, PS2, PW_EFFECT_CAMERA, Stepped, rate_history, sim_key, sim
 #[cfg(test)]
 pub(crate) use engine::{PState, PW_ANIMS, Phys, simulate};
 pub(crate) use engine::{SPS, steps_at};
+pub(crate) use particle_fx::particle_world_textured;
 pub use particle_fx::{Blob, mercury_blobs};
 #[cfg(test)]
 use particle_fx::{PW_RATE, mercury_phys, ps2_phys, pw_phys};

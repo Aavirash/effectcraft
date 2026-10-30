@@ -492,3 +492,35 @@ fn shift_click_selects_several_effects_for_a_preset() {
     shift_click(&mut h, uids[1]);
     assert_eq!(selected(&h), [uids[0]], "a second Shift-click takes it out");
 }
+
+/// #2513: the Text group's Animate menu adds Animator 1 with the chosen property (and a Range
+/// Selector), and the animator's Add menu adds another property to it.
+#[test]
+fn text_animate_menu_adds_an_animator_with_the_property() {
+    let mut s = session();
+    let l = s.execute("layer.newText", json!({"text": "Hello"})).unwrap()["layer"].as_u64().unwrap();
+    let text = s.active_comp().unwrap().layer(LayerId(l)).unwrap().props.sub("text").unwrap().uid;
+    let mut h = harness(s);
+    h.state_mut().ui.timeline.open_groups.insert(text);
+    open_layer(&mut h, l);
+    click(&mut h, &format!("timeline.group.{text}.animate"));
+    let entry = h.get_by_label("Position").rect();
+    click_at(&mut h, entry.center());
+    let animators = |h: &Harness<'_, EffectcraftApp>| {
+        h.state().session.active_comp().unwrap().layer(LayerId(l)).unwrap().props.sub("text").unwrap().sub("animators").cloned()
+    };
+    let anims = animators(&h).expect("an Animators group");
+    let a = anims.groups().next().expect("Animator 1");
+    let has = |a: &effectcraft_engine::project::PropGroup, m: &str| a.sub("properties").is_some_and(|p| p.children.iter().any(|c| c.match_id() == m));
+    assert!(has(a, "position"), "Position was added: {:?}", a.sub("properties"));
+    assert!(a.sub("selectors").is_some_and(|s| !s.children.is_empty()), "with a Range Selector");
+    // The animator's Add menu adds a property to it.
+    h.state_mut().ui.timeline.open_groups.insert(anims.uid);
+    h.state_mut().ui.timeline.open_groups.insert(a.uid);
+    h.run_steps(2);
+    click(&mut h, &format!("timeline.group.{}.add", a.uid));
+    let entry = h.get_by_label("Property: Opacity").rect();
+    click_at(&mut h, entry.center());
+    let a = animators(&h).unwrap().groups().next().unwrap().clone();
+    assert!(has(&a, "opacity"), "Opacity was added: {:?}", a.sub("properties"));
+}
