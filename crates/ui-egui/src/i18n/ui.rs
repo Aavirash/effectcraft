@@ -173,6 +173,7 @@ pub(crate) fn tr_args(text: &str, args: &[&dyn Display]) -> String {
 
 /// Japanese: the same rows, in the same order, as the Chinese catalogs below.
 const JAPANESE: &[(&str, &str)] = &[
+    ("Click to sample color", "クリックして色をサンプル"),
     ("Appearance Settings…", "外観設定…"),
     ("Add to favorites", "お気に入りに追加"),
     ("Remove from favorites", "お気に入りから削除"),
@@ -455,7 +456,7 @@ const JAPANESE: &[(&str, &str)] = &[
     ("None", "なし"),
     ("Not applied: tick it in the list to add it.", "未適用：リストでチェックを入れると追加されます。"),
     ("Not assigned", "未割り当て"),
-    ("Note: Shadows are only cast from layers with Cast Shadows enabled.", "注意：シャドウは「シャドウを投影」が有効なレイヤーからのみ投影されます。"),
+    ("Note: Shadows are only cast from layers with Cast Shadows enabled.", "注意：「シャドウを落とす」が有効なレイヤーだけがシャドウを落とします。"),
     ("Notify", "通知"),
     ("OK", "OK"),
     ("Offset:", "オフセット:"),
@@ -537,7 +538,7 @@ const JAPANESE: &[(&str, &str)] = &[
     ("Select a command to change its shortcut.", "ショートカットを変更するコマンドを選択してください。"),
     ("Select a layer to see its effects", "レイヤーを選択するとエフェクトが表示されます"),
     ("Select a layer to see its properties", "レイヤーを選択するとプロパティが表示されます"),
-    ("({}) Selected Objects", "({}) 個の選択されたオブジェクト"),
+    ("({}) Selected Objects", "選択したオブジェクト（{}）"),
     (
         "Select a layer with a mask or shape path (or the path property), or Puppet pins.",
         "マスクまたはシェイプパスのあるレイヤー（またはパスプロパティ）か、パペットピンを選択してください。",
@@ -685,7 +686,7 @@ const JAPANESE: &[(&str, &str)] = &[
     ("Import Image Sequence", "画像シーケンスを読み込み"),
     ("Import PDF / Illustrator File", "PDF / Illustratorファイルを読み込み"),
     ("Import Photoshop File", "Photoshopファイルを読み込み"),
-    ("Interpret Unlabeled Alpha As", "ラベルのないアルファを変換"),
+    ("Interpret Unlabeled Alpha As", "ラベルのないアルファの解釈"),
     ("Join the ArtCraft Discord", "ArtCraftのDiscordに参加"),
     ("Mercury GPU Acceleration ({})", "Mercury GPUアクセラレーション（{}）"),
     ("Mercury Software Only", "Mercuryソフトウェアのみ"),
@@ -803,7 +804,7 @@ const JAPANESE: &[(&str, &str)] = &[
     ("Cycle Mask Colors", "新規マスクに別のカラーを使用"),
     ("Use Gradients", "グラデーションを使用"),
     ("Menu Bar", "メニューバー"),
-    ("Grids & Guides", "グリッド＆ガイド"),
+    ("Grids & Guides", "グリッドとガイド"),
     ("Gridline Every", "グリッドの間隔"),
     ("Subdivisions", "分割数"),
     ("Style", "スタイル"),
@@ -835,7 +836,7 @@ const JAPANESE: &[(&str, &str)] = &[
     ("Ask User", "ユーザーに確認"),
     ("Guess", "推測"),
     ("Ignore", "無視"),
-    ("Straight", "そのまま"),
+    ("Straight", "ストレート"),
     ("Premultiplied", "プリマルチプライ"),
     ("Default Drag Import As", "複数アイテムのドラッグ読み込みの初期設定"),
     ("Footage", "フッテージ"),
@@ -885,7 +886,7 @@ const JAPANESE: &[(&str, &str)] = &[
     ("Scripting & Expressions", "スクリプトとエクスプレッション"),
     ("Application Scripting", "アプリケーションのスクリプト"),
     ("Allow Scripts to Write Files and Access Network", "スクリプトによるファイルへの書き込みとネットワークへのアクセスを許可"),
-    ("Warn User When Executing Files", "ファイルの実行時にカーソルに警告"),
+    ("Warn User When Executing Files", "ファイルの実行時にユーザーに警告"),
     ("Enable JavaScript Debugger", "JavaScript デバッガーを使用"),
     ("Expressions Editor", "エクスプレッションエディター"),
     ("Font Size", "フォントサイズ"),
@@ -894,7 +895,7 @@ const JAPANESE: &[(&str, &str)] = &[
     ("Auto-complete", "オートコンプリート"),
     ("Bracket Matching", "対応する括弧をハイライト"),
     ("Word Wrap", "折り返し"),
-    ("Show Expression Error Banner", "式のエラーがある場合に警告バナーを表示"),
+    ("Show Expression Error Banner", "エクスプレッションのエラーがある場合に警告バナーを表示"),
     (
         "Expressions use the JavaScript engine. Script errors report their file and line in the Script Console; there is no step debugger.",
         "エクスプレッションはJavaScriptエンジンを使用します。スクリプトのエラーはファイルと行をスクリプトコンソールに報告します。ステップ実行デバッガーはありません。",
@@ -1003,8 +1004,8 @@ const JAPANESE: &[(&str, &str)] = &[
     ("Create Shapes from Vector Layer", "ベクターレイヤーからシェイプを作成"),
     ("Create Shapes from Text", "テキストからシェイプを作成"),
     ("Create Masks from Text", "テキストからマスクを作成"),
-    ("New Mask", "新しいマスク"),
-    ("Center In View", "ビュー内で中央揃え"),
+    ("New Mask", "新規マスク"),
+    ("Center In View", "ビューの中央に配置"),
     ("Fit to Comp", "コンポジションに合わせる"),
     ("Flip Horizontal", "水平方向に反転"),
     ("Flip Vertical", "垂直方向に反転"),
@@ -1033,8 +1034,8 @@ const JAPANESE: &[(&str, &str)] = &[
     ("All Transform Properties", "すべてのトランスフォームプロパティ"),
     ("Line Anchor", "行のアンカー"),
     ("Line Spacing", "行間"),
-    ("Character Offset", "文字オフセット"),
-    ("Character Value", "文字値"),
+    ("Character Offset", "文字のオフセット"),
+    ("Character Value", "文字の値"),
     ("Fill Color: RGB", "塗りの色: RGB"),
     ("Fill Color: Hue", "塗りの色: 色相"),
     ("Fill Color: Saturation", "塗りの色: 彩度"),
@@ -1060,7 +1061,7 @@ const JAPANESE: &[(&str, &str)] = &[
     ("ScriptUI Panel", "ScriptUI パネル"),
     ("Lumetri Scopes", "Lumetri スコープ"),
     ("Media Browser", "メディアブラウザー"),
-    ("Content-Aware Fill", "コンテンツに応じた塗り"),
+    ("Content-Aware Fill", "コンテンツに応じた塗りつぶし"),
     ("Create Nulls From Paths", "パスからヌルを作成"),
     ("VR Comp Editor", "VR コンポジションエディター"),
     ("Media Duration", "メディアの長さ"),
@@ -1095,7 +1096,7 @@ const JAPANESE: &[(&str, &str)] = &[
     ("Background Color", "背景色"),
     ("Basic", "基本"),
     ("Shutter Angle", "シャッター角度"),
-    ("Shutter Phase", "シャッター位相"),
+    ("Shutter Phase", "シャッターフェーズ"),
     ("Samples Per Frame", "フレームあたりのサンプル数"),
     ("Adaptive Sample Limit", "適応サンプル数の上限"),
     ("X and Y", "X と Y"),
@@ -1222,6 +1223,7 @@ const JAPANESE: &[(&str, &str)] = &[
 ];
 
 const SIMPLIFIED_CHINESE: &[(&str, &str)] = &[
+    ("Click to sample color", "单击以取样颜色"),
     ("Appearance Settings…", "外观设置…"),
     ("Add to favorites", "添加到收藏"),
     ("Remove from favorites", "从收藏中移除"),
@@ -2330,6 +2332,7 @@ const SIMPLIFIED_CHINESE: &[(&str, &str)] = &[
 ];
 
 const TRADITIONAL_CHINESE: &[(&str, &str)] = &[
+    ("Click to sample color", "按一下以取樣顏色"),
     ("Appearance Settings…", "外觀設定…"),
     ("Add to favorites", "加入最愛"),
     ("Remove from favorites", "從最愛移除"),
@@ -3386,6 +3389,7 @@ const TRADITIONAL_CHINESE: &[(&str, &str)] = &[
 /// Ukrainian (uk): original translations of the same interface rows as the Chinese catalogs.
 /// Technical names, key names and substituted project content keep their original spelling.
 const UKRAINIAN: &[(&str, &str)] = &[
+    ("Click to sample color", "Клацніть, щоб узяти зразок кольору"),
     ("Appearance Settings…", "Налаштування вигляду…"),
     ("Add to favorites", "Додати до вибраного"),
     ("Remove from favorites", "Видалити з вибраного"),
@@ -3962,6 +3966,7 @@ const UKRAINIAN: &[(&str, &str)] = &[
 
 // Brazilian Portuguese.
 const PORTUGUESE: &[(&str, &str)] = &[
+    ("Click to sample color", "Clique para obter uma amostra de cor"),
     ("Export Scene to Blender...", "Exportar cena para o Blender..."),
     ("   OK   ", "   OK   "),
     ("  Delete  ", "  Excluir  "),
@@ -4715,6 +4720,7 @@ const PORTUGUESE: &[(&str, &str)] = &[
 
 /// Polish (pl): original translations covering every row in the Chinese panel catalogs.
 const POLISH: &[(&str, &str)] = &[
+    ("Click to sample color", "Kliknij, aby pobrać próbkę koloru"),
     ("Appearance Settings…", "Ustawienia wyglądu…"),
     ("Add to favorites", "Dodaj do ulubionych"),
     ("Remove from favorites", "Usuń z ulubionych"),
@@ -5462,6 +5468,7 @@ const POLISH: &[(&str, &str)] = &[
 
 /// Czech (cs): original translations covering every row in the Chinese panel catalogs.
 const CZECH: &[(&str, &str)] = &[
+    ("Click to sample color", "Kliknutím naberete barvu"),
     ("   OK   ", "   OK   "),
     ("  Delete  ", "  Odstranit  "),
     (" Open Auto-Save ", " Otevřít automatickou zálohu "),
@@ -6018,6 +6025,7 @@ const CZECH: &[(&str, &str)] = &[
 /// order. Terms follow the Spanish menu catalog (composición, material de archivo, cola de procesamiento,
 /// ajuste preestablecido, método abreviado). Written from the English source.
 const SPANISH: &[(&str, &str)] = &[
+    ("Click to sample color", "Haz clic para tomar una muestra de color"),
     ("Copy Source Path", "Copiar ruta de origen"),
     ("Appearance Settings…", "Ajustes de apariencia…"),
     ("Add to favorites", "Añadir a favoritos"),
@@ -6576,6 +6584,7 @@ const SPANISH: &[(&str, &str)] = &[
 
 /// Georgian (ka): every row of the Chinese catalogs, in the same order (the tests keep them in step).
 const GEORGIAN: &[(&str, &str)] = &[
+    ("Click to sample color", "დააწკაპუნეთ ფერის ნიმუშის ასაღებად"),
     ("Appearance Settings…", "იერსახის პარამეტრები…"),
     ("Add to favorites", "რჩეულებში დამატება"),
     ("Remove from favorites", "რჩეულებიდან ამოშლა"),
