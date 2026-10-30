@@ -1410,10 +1410,7 @@ fn duplicate_of_an_empty_type_tool_layer_ends_the_edit_and_copies_it() {
     use effectcraft_project::LayerId;
     let (mut s, _keep) = session("Hello");
     let new = s.execute("layer.newText", json!({"text": "", "position": [80.0, 80.0], "edit": true})).unwrap()["layer"].as_u64().unwrap();
-    assert!(
-        s.state.text_edit.as_ref().is_some_and(|e| e.created && e.layer == LayerId(new)),
-        "the Type tool opens the edit on its new, empty layer"
-    );
+    assert!(s.state.text_edit.as_ref().is_some_and(|e| e.created && e.layer == LayerId(new)), "the Type tool opens the edit on its new, empty layer");
     let before = layer_count(&s);
     let copy = s.execute("edit.duplicate", json!({})).unwrap()[0].as_u64().unwrap();
     assert!(s.state.text_edit.is_none(), "the edit ends the way text.endEdit ends it");
