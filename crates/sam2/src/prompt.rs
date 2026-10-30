@@ -140,7 +140,6 @@ impl PromptEncoder {
                     let v: Vec<f32> = e.iter().zip(self.point_row(row)).map(|(a, b)| a + b).collect();
                     push(&v);
                 }
-                push(&self.not_a_point.clone());
             }
         }
         Ok(Tensor::from_vec(tokens, (1, n, DIM), &Device::Cpu)?)
@@ -175,6 +174,53 @@ impl PromptEncoder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A tiny deterministic checkpoint exercises token labels without downloading trained weights.
+    fn encoder() -> PromptEncoder {
+        let mut map = std::collections::HashMap::new();
+        for (name, shape) in [
+            ("shared_embedding.positional_embedding", vec![2, DIM / 2]),
+            ("no_mask_embed.weight", vec![1, DIM]),
+            ("mask_embed.conv1.weight", vec![4, 1, 2, 2]),
+            ("mask_embed.conv1.bias", vec![4]),
+            ("mask_embed.conv2.weight", vec![16, 4, 2, 2]),
+            ("mask_embed.conv2.bias", vec![16]),
+            ("mask_embed.conv3.weight", vec![DIM, 16, 1, 1]),
+            ("mask_embed.conv3.bias", vec![DIM]),
+            ("mask_embed.layer_norm1.weight", vec![4]),
+            ("mask_embed.layer_norm1.bias", vec![4]),
+            ("mask_embed.layer_norm2.weight", vec![16]),
+            ("mask_embed.layer_norm2.bias", vec![16]),
+        ] {
+            map.insert(format!("prompt_encoder.{name}"), Tensor::zeros(shape, candle_core::DType::F32, &Device::Cpu).unwrap());
+        }
+        let rows: Vec<f32> = (1..=4).flat_map(|row| vec![row as f32 * 10.0; DIM]).collect();
+        map.insert("prompt_encoder.point_embed.weight".into(), Tensor::from_vec(rows, (4, DIM), &Device::Cpu).unwrap());
+        map.insert("prompt_encoder.not_a_point_embed.weight".into(), Tensor::from_vec(vec![-1000.0f32; DIM], (1, DIM), &Device::Cpu).unwrap());
+        PromptEncoder::load(&Weights::from_map(map).unwrap()).unwrap()
+    }
+
+    /// The reference pads only point-only prompts; box corners are already complete tokens.
+    #[test]
+    fn boxes_do_not_add_point_padding_and_click_only_prompts_still_do() {
+        let encoder = encoder();
+        let points = vec![([10.0, 20.0], false), ([30.0, 40.0], true)];
+        for points in [vec![], points.clone()] {
+            let sparse = encoder.sparse(&Prompt { points: points.clone(), bbox: Some([0.0, 0.0, 100.0, 100.0]) }).unwrap();
+            assert_eq!(sparse.dims(), &[1, points.len() + 2, DIM]);
+            let rows = sparse.to_vec3::<f32>().unwrap();
+            for (token, label) in rows[0].iter().zip(if points.is_empty() { vec![30.0, 40.0] } else { vec![10.0, 20.0, 30.0, 40.0] }) {
+                assert!(token[..DIM / 2].iter().all(|value| *value == label));
+                assert!(token[DIM / 2..].iter().all(|value| *value == label + 1.0));
+            }
+        }
+        let clicks = encoder.sparse(&Prompt { points, bbox: None }).unwrap();
+        assert_eq!(clicks.dims(), &[1, 3, DIM]);
+        assert!(clicks.to_vec3::<f32>().unwrap()[0][2].iter().all(|value| *value == -1000.0));
+        let none = encoder.sparse_none().unwrap();
+        assert_eq!(none.dims(), &[1, 2, DIM]);
+        assert!(none.flatten_all().unwrap().to_vec1::<f32>().unwrap().iter().all(|value| *value == -1000.0));
+    }
 
     #[test]
     fn hostile_prompts_are_rejected() {
