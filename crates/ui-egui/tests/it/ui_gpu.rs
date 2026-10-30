@@ -53,6 +53,7 @@ fn small_session() -> Session {
 /// composites on the CPU. The worker is held on a gate so the "preparing" state is observable.
 #[test]
 fn the_interface_draws_and_composites_on_the_cpu_while_the_gpu_compositor_is_built() {
+    let _device = crate::gpu_test::lock();
     if !any_adapter() {
         eprintln!("no wgpu adapter: skipping");
         return;
@@ -111,6 +112,7 @@ fn the_interface_draws_and_composites_on_the_cpu_while_the_gpu_compositor_is_bui
 /// thread, not under the UI: the window keeps drawing on the CPU and says why.
 #[test]
 fn a_compositor_build_that_panics_leaves_the_viewer_on_the_cpu() {
+    let _device = crate::gpu_test::lock();
     if !any_adapter() {
         eprintln!("no wgpu adapter: skipping");
         return;
@@ -153,6 +155,7 @@ fn same_adapter(name: String) -> eframe::egui_wgpu::WgpuSetup {
 
 #[test]
 fn viewer_draws_gpu_frames_that_match_the_cpu() {
+    let _device = crate::gpu_test::lock();
     let Some(probe) = effectcraft_gpu::Gpu::headless() else {
         eprintln!("no GPU adapter: skipping");
         return;

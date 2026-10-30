@@ -36,6 +36,7 @@ mod panels;
 mod project_items;
 mod proxy;
 mod quick_offset;
+mod render_overwrite;
 mod replace_source;
 mod rig3d;
 pub(crate) mod roto;

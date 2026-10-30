@@ -173,21 +173,43 @@ fn kerning_field(app: &mut EffectcraftApp, ui: &mut egui::Ui, p: &egui::Painter,
     }
 }
 
-/// Stroke Over Fill / Fill Over Stroke (grid row 2, right).
-fn stroke_order_field(app: &mut EffectcraftApp, ui: &mut egui::Ui, g: Grid, doc: &TextDoc, actions: &mut Vec<serde_json::Value>) {
+/// Stroke order (grid row 2, right): per character (Fill Over Stroke / Stroke Over Fill), or for
+/// the whole layer, which is the layer's More Options > Fill & Stroke (`fill_stroke`, see
+/// [`layer_fill_stroke`]). Returns the layer order picked, if any.
+fn stroke_order_field(
+    app: &mut EffectcraftApp,
+    ui: &mut egui::Ui,
+    g: Grid,
+    doc: &TextDoc,
+    fill_stroke: u32,
+    actions: &mut Vec<serde_json::Value>,
+) -> Option<u32> {
     let t = app.tokens;
     let Grid { x0, y, w, enabled } = g;
     let fx = x0 + w / 2.0;
     let fy = y + 2.0 * 28.0;
     let dr = Rect::from_min_size(pos2(fx, fy), vec2(w / 2.0, 20.0));
-    let labels = vec!["Fill Over Stroke".to_string(), "Stroke Over Fill".to_string()];
+    let labels: Vec<String> =
+        ["Fill Over Stroke", "Stroke Over Fill", "-", "All Fills Over All Strokes", "All Strokes Over All Fills"].iter().map(|s| s.to_string()).collect();
+    let current = match fill_stroke {
+        1 => 3,
+        2 => 4,
+        _ => doc.stroke_over_fill as usize,
+    };
     let pop = egui::Id::unique("char-stroke-order-pop");
-    if widgets::dropdown(ui, dr, &labels[doc.stroke_over_fill as usize], &t, egui::Id::unique("char-stroke-order")).clicked() && enabled {
+    if widgets::dropdown(ui, dr, &labels[current], &t, egui::Id::unique("char-stroke-order")).clicked() && enabled {
         widgets::open_popup(ui, pop);
     }
     app.auto.add("character.strokeOverFill", dr, "Stroke order");
-    if let Some(i) = widgets::popup_menu(ui, pop, dr.left_bottom(), &labels, Some(doc.stroke_over_fill as usize)) {
-        actions.push(json!({"strokeOverFill": i == 1}));
+    match widgets::popup_menu(ui, pop, dr.left_bottom(), &labels, Some(current)) {
+        Some(i @ (3 | 4)) => Some(i as u32 - 2),
+        Some(i) => {
+            actions.push(json!({"strokeOverFill": i == 1}));
+            // A per-character order puts the layer back on the Per Character Palette, or it
+            // would have no visible effect.
+            (fill_stroke != 0).then_some(0)
+        }
+        None => None,
     }
 }
 
@@ -203,6 +225,27 @@ fn line_join_field(app: &mut EffectcraftApp, ui: &mut egui::Ui, p: &egui::Painte
             actions.push(json!({"lineJoin": key}));
         }
     }
+}
+
+/// Sets the layer's More Options > Fill & Stroke to `v` together with the per-character order
+/// it changes, as one undo step.
+fn apply_layer_fill_stroke(app: &mut EffectcraftApp, ctx: &egui::Context, tt: &TextTarget, v: u32, actions: Vec<serde_json::Value>) {
+    let set = json!({"command": "prop.set", "params": {"layer": tt.layer, "path": "text/moreOptions/fillStroke", "value": v}});
+    let steps: Vec<serde_json::Value> =
+        std::iter::once(set).chain(actions.into_iter().map(|a| json!({"command": "layer.setText", "params": tt.params(a)}))).collect();
+    if let Err(e) = crate::menus::invoke(app, ctx, "engine.batch", json!({"steps": steps, "label": "Stroke Order"})) {
+        app.ui.status = e;
+    }
+}
+
+/// A text layer's More Options > Fill & Stroke in the active comp: 0 per character palette,
+/// 1 all fills over all strokes, 2 all strokes over all fills.
+fn layer_fill_stroke(app: &EffectcraftApp, layer: u64) -> u32 {
+    let (Some(comp), Some(cid)) = (app.session.active_comp(), app.session.active_comp_id()) else { return 0 };
+    let Some(l) = comp.layer(effectcraft_engine::project::LayerId(layer)) else { return 0 };
+    let Some(more) = l.props.sub("text").and_then(|t| t.sub("moreOptions")) else { return 0 };
+    let ectx = EvalCtx { expr: app.session.expr.as_deref(), ..EvalCtx::new(&app.session.project, cid, comp, app.session.time()) };
+    ectx.e(l, more, "fillStroke")
 }
 
 /// The Character panel for the text being edited (or the selected text layer): font family and
@@ -246,7 +289,8 @@ pub fn character(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
     let grid = Grid { x0, y, w, enabled };
     numeric_fields(app, ui, &p, grid, &doc, &mut actions);
     kerning_field(app, ui, &p, grid, &doc, &mut actions);
-    stroke_order_field(app, ui, grid, &doc, &mut actions);
+    let fill_stroke = target.as_ref().map_or(0, |tt| layer_fill_stroke(app, tt.layer));
+    let layer_fill_stroke_pick = stroke_order_field(app, ui, grid, &doc, fill_stroke, &mut actions);
     line_join_field(app, ui, &p, grid, &doc, &mut actions);
     y += 6.0 * 28.0 + 8.0;
     // Fill / stroke swatches with their enable boxes.
@@ -269,7 +313,8 @@ pub fn character(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
         }
         let er = Rect::from_min_size(pos2(fs.max.x + 4.0, y + 1.0), vec2(18.0, 18.0));
         let active = app.ui.text_color_pick.as_ref().is_some_and(|pick| pick.layer == target.as_ref().map_or(0, |tt| tt.layer) && pick.field == key);
-        let eye = super::fx_widgets::eyedropper_button(ui, er, active, egui::Id::unique(("char-eye", key)), &t);
+        let eye = super::fx_widgets::eyedropper_button(ui, er, active, egui::Id::unique(("char-eye", key)), &t)
+            .on_hover_text(tr("Eyedropper: click, then click in the Composition panel"));
         app.auto.add(&format!("character.{key}.eyedropper"), er, &format!("{label} eyedropper"));
         if eye.clicked() {
             if active {
@@ -383,6 +428,9 @@ pub fn character(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
         _ => {}
     }
     let Some(tt) = target else { return };
+    if let Some(v) = layer_fill_stroke_pick {
+        apply_layer_fill_stroke(app, &ctx, &tt, v, std::mem::take(&mut actions));
+    }
     for a in actions {
         if let Err(e) = crate::menus::invoke(app, &ctx, "layer.setText", tt.params(a)) {
             app.ui.status = e;
