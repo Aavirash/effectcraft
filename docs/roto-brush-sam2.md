@@ -134,7 +134,7 @@ A single object's results need no pending buffer.
 ## How it works
 `crates/sam2` is a Rust port (on [candle](https://github.com/huggingface/candle), native only) of the Hugging Face
 `transformers` SAM 2 implementation, Apache-2.0 (see its `NOTICE`). Every stage is checked against PyTorch by
-`crates/sam2/tests/reference.rs` (they skip without the weights; reference tensors come from
+`crates/sam2/tests/it/reference.rs` (they skip without the weights; reference tensors come from
 `tools/sam2_reference.py` and `tools/sam2_video_reference.py`):
 
 | Stage | Max abs error vs PyTorch |
