@@ -257,7 +257,7 @@ pub(crate) fn modal_fit_placed(ctx: &egui::Context, title: &str, size: egui::Vec
             // The id stays keyed on the untranslated source, so switching language cannot move it.
             let head = ui.label(egui::RichText::new(tr(title)).font(Tokens::semibold(15.0)).color(t.tab_text_active));
             let row = Rect::from_x_y_ranges(ui.max_rect().x_range(), head.rect.y_range());
-            let grip = ui.interact(row, id.with("grip"), Sense::drag()).on_hover_cursor(egui::CursorIcon::Grab);
+            let grip = ui.interact(row, id.with("grip"), Sense::DRAG).on_hover_cursor(egui::CursorIcon::Grab);
             if grip.dragged() {
                 let moved = (offset + grip.drag_delta()).clamp(-room, room);
                 ui.ctx().data_mut(|d| d.insert_temp(offset_id, moved));
@@ -584,7 +584,11 @@ fn solid(app: &mut EffectcraftApp, ctx: &egui::Context, t: &Tokens) {
             ui.horizontal(|ui| {
                 let r = ui.add(crate::widgets::drag_value(egui::DragValue::new(&mut size[0]).range(1..=30000).suffix(" px")));
                 auto.add("dialog.solid.width", r.rect, "Width");
-                let r = ui.checkbox(&mut lock, tr_args("Lock Aspect Ratio to {}", &[&(super::comp_settings::aspect_label(ow as f64, oh as f64))]));
+                let r = crate::widgets::labelled_checkbox(
+                    ui,
+                    &mut lock,
+                    tr_args("Lock Aspect Ratio to {}", &[&(super::comp_settings::aspect_label(ow as f64, oh as f64))]),
+                );
                 auto.add("dialog.solid.lockAspect", r.rect, "Lock Aspect Ratio");
             });
             ui.end_row();
@@ -640,7 +644,7 @@ fn solid(app: &mut EffectcraftApp, ctx: &egui::Context, t: &Tokens) {
         if editing.is_some() {
             ui.add_space(8.0);
             let r = ui
-                .add_enabled(shared, egui::Checkbox::new(&mut affect_all, tr("Affect all layers that use this solid")))
+                .add_enabled(shared, crate::widgets::DragCheckbox::new(&mut affect_all, tr("Affect all layers that use this solid")))
                 .on_disabled_hover_text(tr("Only this layer uses this solid."));
             auto.add("dialog.solid.affectAll", r.rect, "Affect all layers that use this solid");
             if shared && !affect_all {
