@@ -174,6 +174,8 @@ fn crop_roi_and_resize() {
     assert_eq!((z.width(), z.height()), (32, 24));
 }
 
+/// Resizing to the cropped frame's own dimensions must preserve every decoded PNG pixel.
+/// Compare against crop-only output for padding and scaled ROIs with both resize qualities.
 #[test]
 fn crop_resize_preserves_pixels_when_the_cropped_size_is_requested() {
     let (p, cid) = project(FrameRate::new(25, 1), |_, _| {});

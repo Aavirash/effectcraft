@@ -1063,6 +1063,7 @@ mod tests {
         }
     }
 
+    /// Regress the locked-aspect example: cropping 1920x1080 must resize to 1280x1440.
     #[test]
     fn crop_resize_applies_margins_once() {
         use effectcraft_project::render_queue::{Crop, OutputModule, Resize};
@@ -1077,6 +1078,7 @@ mod tests {
         assert_eq!(img.data.len(), 1280 * 1440);
     }
 
+    /// Apply output-module geometry to a synthetic frame without rendering or writing files.
     fn run_crop_resize(img: Image, output: &effectcraft_project::render_queue::OutputModule, scale: f64) -> Image {
         use effectcraft_project::render_queue::RenderSettings;
         let project = Project::default();
@@ -1097,6 +1099,7 @@ mod tests {
         Cx::new(&job).crop_resize(img)
     }
 
+    /// Match predicted dimensions across crop, padding, ROI scale, aspect locks and resize qualities.
     #[test]
     fn crop_resize_dimensions_match_the_output_module() {
         use effectcraft_project::render_queue::{Crop, OutputModule, Resize};
@@ -1124,6 +1127,7 @@ mod tests {
         }
     }
 
+    /// Exercise zero/empty inputs, collapsed crops and existing caps on extreme single-axis resizes.
     #[test]
     fn crop_resize_zero_and_extreme_sizes_stay_bounded() {
         use effectcraft_project::render_queue::{Crop, OutputModule, Resize};
