@@ -46,7 +46,7 @@ pub struct Run {
     /// Mean IoU over the frames after the object's last absence (re-appearance), if it had one.
     pub after_return: Option<f64>,
     pub per_frame: Vec<f64>,
-    /// Correction strokes needed before every frame reaches the target IoU (`>N`: not within N); set by
+    /// Correction rounds needed before every frame reaches the target IoU (`>N`: not within N); set by
     /// [`with_fixes`], `None` when not measured.
     pub fixes: Option<String>,
     /// The most memory (MB) the tracker held for its memory banks and cached frames (trackers that have none: `None`).
@@ -301,7 +301,7 @@ pub fn run_tracker(sc: &Scenario, tracker: &str, model: &dyn MaskModel) -> Optio
 }
 
 /// The correction a user would paint on frame `f` where `pred` is wrong: a short foreground stroke through
-/// the true object's centre, and a background stroke on the biggest false-positive blob's centre.
+/// the true object's centre, and a background stroke at the centroid of all false-positive pixels.
 fn correction(sc: &Scenario, f: usize, pred: &[u8]) -> Vec<Stroke> {
     let truth = sc.truth.get(f).map(Vec::as_slice).unwrap_or(&[]);
     let centre = |keep: &dyn Fn(usize) -> bool| -> Option<[f64; 2]> {
@@ -324,8 +324,8 @@ fn correction(sc: &Scenario, f: usize, pred: &[u8]) -> Vec<Stroke> {
 }
 
 /// Repeat `run` on `sc`, each time painting the correction a user would on the first frame under `target` IoU,
-/// until every frame reaches it or `max` corrections were needed. Sets `fixes` on the first run's result: the
-/// number of corrections, or `>max`.
+/// until every frame reaches it or `max` correction rounds were needed. Sets `fixes` on the first run's result:
+/// the number of rounds (each can add foreground and background strokes), or `>max`.
 pub fn with_fixes(sc: &Scenario, target: f64, max: usize, run: &dyn Fn(&Scenario) -> Option<Run>) -> Option<Run> {
     let mut cur = sc.clone();
     let mut first: Option<Run> = None;

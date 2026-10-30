@@ -126,8 +126,10 @@ the CPU.
 
 Pending per-object probability maps have a separate 256 MiB budget, including their allocated capacity and frame
 slots. This bounds the full-resolution results waiting to be united when objects first prompted on different frames
-report in separate passes. Reaching the budget cancels tracking and reports the reason through the existing
-`trackerNote`; propagation falls back to the classic engine. A single object's results need no pending buffer.
+report in separate passes. Reaching the budget cancels tracking and falls back to the classic engine. The reason is
+available as `trackerNote` in live job progress only. Completion removes that progress and shows a success toast, so
+`wait: true` callers can miss the fallback reason; the completion toast alone does not confirm the tracker was used.
+A single object's results need no pending buffer.
 
 ## How it works
 `crates/sam2` is a Rust port (on [candle](https://github.com/huggingface/candle), native only) of the Hugging Face
@@ -189,9 +191,10 @@ loses it when it is hidden; SAM 2's streaming memory is what lets it re-acquire 
 textured disc), so the "move" and "light" rows mostly show all three working; the last two rows are the difference.
 
 ### Corrections needed (`--fixes`)
-`bench --roto --fixes` also counts the correction strokes each tracker needs before every frame reaches IoU 0.9: after each
-run it paints what a user would on the first frame under the target (a short foreground stroke through the true object's
-centre, and a background stroke on the biggest false-positive blob), up to 6. 16 frames, debug build:
+`bench --roto --fixes` also counts the correction rounds each tracker needs before every frame reaches IoU 0.9: after each
+run it paints on the first frame under the target, up to 6 rounds. A round can add a short foreground stroke through the
+true object's centre and a background stroke at the centroid of all false-positive pixels. With separate false-positive
+blobs, that centroid can fall between them. The counts below are rounds, not individual strokes. 16 frames, debug build:
 
 | Clip | Classical | MobileSAM | SAM 2.1 Tiny |
 |---|---|---|---|

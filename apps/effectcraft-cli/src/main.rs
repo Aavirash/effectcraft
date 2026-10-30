@@ -1056,7 +1056,7 @@ fn bench_roto(args: &Args) -> Result<(), Failure> {
     if sam2.is_none() {
         note!("bench --roto: no SAM 2.1 size is installed; no SAM 2 column");
     }
-    // `--fixes`: also count the correction strokes each needs before every frame reaches IoU 0.9 (up to 6).
+    // `--fixes`: count correction rounds before every frame reaches IoU 0.9 (up to 6 rounds, each up to two strokes).
     let fixes = args.flag("--fixes");
     let measure = |sc: &bench::Scenario, run: &dyn Fn(&bench::Scenario) -> Option<bench::Run>| if fixes { bench::with_fixes(sc, 0.9, 6, run) } else { run(sc) };
     let mut runs = vec![];
