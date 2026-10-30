@@ -1778,7 +1778,7 @@ fn empty_timeline(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
     if let Some(crate::panels::DragPayload::Item(dragged)) = egui::DragAndDrop::payload::<crate::panels::DragPayload>(&ctx).as_deref()
         && ui.rect_contains_pointer(rect)
     {
-        let items: Vec<ItemId> = crate::panels::project_drop_items(app, *dragged)
+        let items: Vec<ItemId> = crate::panels::project_drop_items(app, *dragged, None)
             .into_iter()
             .map(ItemId)
             .filter(|id| {
@@ -4964,7 +4964,7 @@ fn drop_insert_layers(app: &mut EffectcraftApp, g: &mut Rw, payload: &std::sync:
         match payload.as_ref() {
             crate::panels::DragPayload::Item(id) => {
                 // Insert each selected item at the drop point, in selection order.
-                for (offset, item) in crate::panels::project_drop_items(app, *id).into_iter().enumerate() {
+                for (offset, item) in crate::panels::project_drop_items(app, *id, Some(g.tl.cid)).into_iter().enumerate() {
                     actions.push(("layer.addItem".into(), json!({"item": item, "index": index.saturating_add(offset), "time": time.clone()})));
                 }
             }
