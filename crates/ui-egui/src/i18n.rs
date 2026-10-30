@@ -280,6 +280,8 @@ pub(crate) fn entry(app: &EffectcraftApp, e: &MenuEntry, shown: String) -> Strin
         "es" => Some(("Deshacer", "No se puede deshacer", "Rehacer", "No se puede rehacer")),
         "pt-br" => Some(("Desfazer", "Não há nada para desfazer", "Refazer", "Não há nada para refazer")),
         "cs" => Some(("Zpět", "Není co vrátit", "Znovu", "Není co zopakovat")),
+        "fr" => Some(("Annuler", "Impossible d'annuler", "Rétablir", "Impossible de rétablir")),
+        "de" => Some(("Rückgängig", "Rückgängig nicht möglich", "Wiederholen", "Wiederholen nicht möglich")),
         "pl" => Some(("Cofnij", "Nie można cofnąć", "Ponów", "Nie można ponowić")),
         // A colon before the history's (untranslated) action name: "დაბრუნება: Comp1".
         "ka" => Some(("დაბრუნება:", "დაბრუნება შეუძლებელია", "ხელახლა შესრულება:", "ხელახლა შესრულება შეუძლებელია")),
@@ -866,6 +868,8 @@ const SIMPLIFIED_CHINESE: &[(&str, &str, &str)] = &[
     ("layer.applyTextPreset", "Drop In Lines", "行落下"),
     ("anim.addKeyframe", "Add Keyframe", "添加关键帧"),
     ("keys.toggleHold", "Toggle Hold Keyframe", "切换定格关键帧"),
+    ("keys.setMuted", "Mute Keyframes", "静音关键帧"),
+    ("keys.setMuted", "Unmute Keyframes", "取消静音关键帧"),
     ("keys.interpolation", "Keyframe Interpolation...", "关键帧插值..."),
     ("keys.velocity", "Keyframe Velocity...", "关键帧速度..."),
     ("", "Keyframe Assistant", "关键帧辅助"),
@@ -1502,6 +1506,8 @@ const TRADITIONAL_CHINESE: &[(&str, &str, &str)] = &[
     ("layer.applyTextPreset", "Drop In Lines", "行落下"),
     ("anim.addKeyframe", "Add Keyframe", "新增關鍵影格"),
     ("keys.toggleHold", "Toggle Hold Keyframe", "切換定格關鍵影格"),
+    ("keys.setMuted", "Mute Keyframes", "靜音關鍵影格"),
+    ("keys.setMuted", "Unmute Keyframes", "取消靜音關鍵影格"),
     ("keys.interpolation", "Keyframe Interpolation...", "關鍵影格插補..."),
     ("keys.velocity", "Keyframe Velocity...", "關鍵影格速度..."),
     ("", "Keyframe Assistant", "關鍵影格輔助"),
@@ -2135,6 +2141,8 @@ const JAPANESE: &[(&str, &str, &str)] = &[
     ("layer.applyTextPreset", "Drop In Lines", "行をドロップイン"),
     ("anim.addKeyframe", "Add Keyframe", "キーフレームを追加"),
     ("keys.toggleHold", "Toggle Hold Keyframe", "停止したキーフレームの切り替え"),
+    ("keys.setMuted", "Mute Keyframes", "キーフレームをミュート"),
+    ("keys.setMuted", "Unmute Keyframes", "キーフレームのミュートを解除"),
     ("keys.interpolation", "Keyframe Interpolation...", "キーフレーム補間法..."),
     ("keys.velocity", "Keyframe Velocity...", "キーフレーム速度..."),
     ("", "Keyframe Assistant", "キーフレーム補助"),
@@ -2771,6 +2779,8 @@ const UKRAINIAN: &[(&str, &str, &str)] = &[
     ("layer.applyTextPreset", "Drop In Lines", "Поява рядків згори"),
     ("anim.addKeyframe", "Add Keyframe", "Додати ключовий кадр"),
     ("keys.toggleHold", "Toggle Hold Keyframe", "Перемкнути утримання ключового кадру"),
+    ("keys.setMuted", "Mute Keyframes", "Заглушити ключові кадри"),
+    ("keys.setMuted", "Unmute Keyframes", "Зняти заглушення ключових кадрів"),
     ("keys.interpolation", "Keyframe Interpolation...", "Інтерполяція ключових кадрів..."),
     ("keys.velocity", "Keyframe Velocity...", "Швидкість ключових кадрів..."),
     ("", "Keyframe Assistant", "Помічник ключових кадрів"),
@@ -3408,6 +3418,8 @@ const SPANISH: &[(&str, &str, &str)] = &[
     ("layer.applyTextPreset", "Drop In Lines", "Entrada de líneas cayendo"),
     ("anim.addKeyframe", "Add Keyframe", "Añadir fotograma clave"),
     ("keys.toggleHold", "Toggle Hold Keyframe", "Conmutar mantener fotograma clave"),
+    ("keys.setMuted", "Mute Keyframes", "Silenciar fotogramas clave"),
+    ("keys.setMuted", "Unmute Keyframes", "Reactivar fotogramas clave"),
     ("keys.interpolation", "Keyframe Interpolation...", "Interpolación de fotogramas clave..."),
     ("keys.velocity", "Keyframe Velocity...", "Velocidad de fotogramas clave..."),
     ("", "Keyframe Assistant", "Asistente de fotogramas clave"),
@@ -4043,6 +4055,8 @@ const PORTUGUESE: &[(&str, &str, &str)] = &[
     ("layer.applyTextPreset", "Drop In Lines", "Entrar com queda de linhas"),
     ("anim.addKeyframe", "Add Keyframe", "Adicionar quadro-chave"),
     ("keys.toggleHold", "Toggle Hold Keyframe", "Alternar quadro-chave de retenção"),
+    ("keys.setMuted", "Mute Keyframes", "Silenciar quadros-chave"),
+    ("keys.setMuted", "Unmute Keyframes", "Reativar quadros-chave"),
     ("keys.interpolation", "Keyframe Interpolation...", "Interpolação de quadro-chave..."),
     ("keys.velocity", "Keyframe Velocity...", "Velocidade do quadro-chave..."),
     ("", "Keyframe Assistant", "Assistente de quadro-chave"),
@@ -4685,6 +4699,8 @@ const RUSSIAN: &[(&str, &str, &str)] = &[
     ("layer.applyTextPreset", "Drop In Lines", "Появление строк сверху"),
     ("anim.addKeyframe", "Add Keyframe", "Добавить ключевой кадр"),
     ("keys.toggleHold", "Toggle Hold Keyframe", "Переключить фиксацию ключевого кадра"),
+    ("keys.setMuted", "Mute Keyframes", "Отключить ключевые кадры"),
+    ("keys.setMuted", "Unmute Keyframes", "Включить ключевые кадры"),
     ("keys.interpolation", "Keyframe Interpolation...", "Интерполяция ключевых кадров..."),
     ("keys.velocity", "Keyframe Velocity...", "Скорость ключевых кадров..."),
     ("", "Keyframe Assistant", "Помощник по ключевым кадрам"),
@@ -5320,6 +5336,8 @@ const FRENCH: &[(&str, &str, &str)] = &[
     ("layer.applyTextPreset", "Drop In Lines", "Chute des lignes depuis le haut"),
     ("anim.addKeyframe", "Add Keyframe", "Ajouter une image clé"),
     ("keys.toggleHold", "Toggle Hold Keyframe", "Activer/Désactiver l'image clé figée"),
+    ("keys.setMuted", "Mute Keyframes", "Désactiver les images clés"),
+    ("keys.setMuted", "Unmute Keyframes", "Réactiver les images clés"),
     ("keys.interpolation", "Keyframe Interpolation...", "Interpolation des images clés..."),
     ("keys.velocity", "Keyframe Velocity...", "Vitesse des images clés..."),
     ("", "Keyframe Assistant", "Assistant d'images clés"),
@@ -5955,6 +5973,8 @@ const GERMAN: &[(&str, &str, &str)] = &[
     ("layer.applyTextPreset", "Drop In Lines", "Zeilen fallen ein"),
     ("anim.addKeyframe", "Add Keyframe", "Keyframe hinzufügen"),
     ("keys.toggleHold", "Toggle Hold Keyframe", "Halte-Keyframe umschalten"),
+    ("keys.setMuted", "Mute Keyframes", "Keyframes stummschalten"),
+    ("keys.setMuted", "Unmute Keyframes", "Keyframes wieder aktivieren"),
     ("keys.interpolation", "Keyframe Interpolation...", "Keyframe-Interpolation..."),
     ("keys.velocity", "Keyframe Velocity...", "Keyframe-Geschwindigkeit..."),
     ("", "Keyframe Assistant", "Keyframe-Assistent"),
@@ -7225,6 +7245,8 @@ const CZECH: &[(&str, &str, &str)] = &[
     ("layer.applyTextPreset", "Drop In Lines", "Spustit řádky shora"),
     ("anim.addKeyframe", "Add Keyframe", "Přidat klíčový snímek"),
     ("keys.toggleHold", "Toggle Hold Keyframe", "Přepnout podržení klíčového snímku"),
+    ("keys.setMuted", "Mute Keyframes", "Ztlumit klíčové snímky"),
+    ("keys.setMuted", "Unmute Keyframes", "Obnovit klíčové snímky"),
     ("keys.interpolation", "Keyframe Interpolation...", "Interpolace klíčových snímků..."),
     ("keys.velocity", "Keyframe Velocity...", "Rychlost klíčového snímku..."),
     ("", "Keyframe Assistant", "Pomocník klíčových snímků"),
@@ -7856,6 +7878,8 @@ const GEORGIAN: &[(&str, &str, &str)] = &[
     ("layer.applyTextPreset", "Drop In Lines", "სტრიქონების ჩამოვარდნა"),
     ("anim.addKeyframe", "Add Keyframe", "საკვანძო კადრის დამატება"),
     ("keys.toggleHold", "Toggle Hold Keyframe", "ფიქსირებული საკვანძო კადრის გადართვა"),
+    ("keys.setMuted", "Mute Keyframes", "საკვანძო კადრების დადუმება"),
+    ("keys.setMuted", "Unmute Keyframes", "საკვანძო კადრების დადუმების მოხსნა"),
     ("keys.interpolation", "Keyframe Interpolation...", "საკვანძო კადრის ინტერპოლაცია..."),
     ("keys.velocity", "Keyframe Velocity...", "საკვანძო კადრის სიჩქარე..."),
     ("", "Keyframe Assistant", "საკვანძო კადრების ასისტენტი"),
@@ -8176,6 +8200,19 @@ mod tests {
         println!("total: {total}");
     }
 
+    /// Prints the translated-row counts per language, the numbers `docs/localization-parity.md`
+    /// quotes. `cargo xtask i18n-report` runs it with `--nocapture`.
+    #[test]
+    fn catalog_row_counts_report() {
+        println!("Localization catalog rows:");
+        for code in CATALOG_CODES {
+            let menus = menu_catalog(code).map_or(0, |catalog| catalog.len());
+            let panels = ui::translated_rows(code);
+            let effect_names = effects::translated_rows(code);
+            println!("{code}: menus {menus}, panels {panels}, effect names {effect_names}, total {}", menus + panels + effect_names);
+        }
+    }
+
     #[test]
     fn menu_catalogs_have_no_stale_or_duplicate_rows() {
         let mut actual = BTreeSet::new();
@@ -8214,6 +8251,43 @@ mod tests {
         app.session.execute("prefs.set", json!({"key":"general.language", "value":"en"})).unwrap();
         assert_eq!(label(&app, "", "Composition"), "Composition");
     }
+    /// Match System in the browser also picks the Russian, French and German catalogs, in the
+    /// order of the browser's preferences (#1700).
+    #[test]
+    fn browser_preferences_choose_russian_french_and_german() {
+        let tags = |t: &[&str]| t.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        for (locales, expected) in
+            [(vec!["de-DE", "es-ES"], "de"), (vec!["xx-XX", "fr-CA"], "fr"), (vec!["ru-RU", "cs"], "ru"), (vec!["en-US", "de-DE"], "en"), (vec!["xx-XX"], "en")]
+        {
+            assert_eq!(super::first_supported(None, &tags(&locales), super::web_draws), expected, "{locales:?}");
+        }
+    }
+
+    /// The Edit menu's Undo and Redo name the history's action in the interface language, also in
+    /// the languages added with #1700.
+    #[test]
+    fn undo_and_redo_are_localized_for_russian_french_and_german() {
+        for (language, undo, no_undo, redo, no_redo) in [
+            ("ru", "Отменить:", "Нечего отменять", "Повторить:", "Нечего повторять"),
+            ("fr", "Annuler", "Impossible d'annuler", "Rétablir", "Impossible de rétablir"),
+            ("de", "Rückgängig", "Rückgängig nicht möglich", "Wiederholen", "Wiederholen nicht möglich"),
+        ] {
+            let mut app = EffectcraftApp::new(effectcraft_engine::Session::default());
+            app.session.execute("prefs.set", json!({"key": "general.language", "value": language})).unwrap();
+            let entry_of = |app: &EffectcraftApp, command: &str| {
+                let (_, e) = effectcraft_engine::menus::entries().into_iter().find(|(_, e)| e.command == command).unwrap();
+                entry(app, e, e.label.clone())
+            };
+            assert_eq!(entry_of(&app, "edit.undo"), no_undo, "{language}");
+            assert_eq!(entry_of(&app, "edit.redo"), no_redo, "{language}");
+            app.session.execute("comp.new", json!({"name": "A", "duration": 1})).unwrap();
+            let action = app.session.history.undo.last().map(|u| u.0.clone()).unwrap();
+            assert_eq!(entry_of(&app, "edit.undo"), format!("{undo} {action}"), "{language}");
+            app.session.execute("edit.undo", json!({})).unwrap();
+            assert_eq!(entry_of(&app, "edit.redo"), format!("{redo} {action}"), "{language}");
+        }
+    }
+
     #[test]
     fn match_system_uses_the_system_language_where_there_is_a_catalog() {
         for (locale, language) in [
@@ -8313,6 +8387,35 @@ mod tests {
         }
     }
 
+    /// The dock's tab titles are `PanelKind::title()`; the panels the Window menu lists are drawn in
+    /// the interface language through their `(window.panel, title)` rows. `History` and `ScriptUI
+    /// Panel` are in no menu and keep their English names, which is what this pins.
+    #[test]
+    fn the_dock_draws_every_panel_it_can_in_the_interface_language() {
+        use crate::dock::PanelKind;
+        const WITHOUT_A_ROW: &[&str] = &["History", "ScriptUI Panel"];
+        for (name, catalog, code) in [("ja", JAPANESE, "ja"), ("zh-hans", SIMPLIFIED_CHINESE, "zh-hans"), ("zh-hant", TRADITIONAL_CHINESE, "zh-hant")] {
+            // The dock asks both catalogs, so a title may be named by either.
+            ui::set_current(code);
+            for p in PanelKind::ALL {
+                let title = p.title();
+                let in_menu = catalog.iter().any(|(c, en, _)| *c == "window.panel" && *en == title);
+                let in_panel = ui::tr(title) != title;
+                assert_eq!(
+                    in_menu || in_panel,
+                    !WITHOUT_A_ROW.contains(&title),
+                    "{name}: {title} is {}named by a catalog and {}in the exception list",
+                    if in_menu || in_panel { "" } else { "not " },
+                    if WITHOUT_A_ROW.contains(&title) { "" } else { "not " }
+                );
+            }
+        }
+        ui::set_current("en");
+        // The dock asks the catalog rather than drawing the English name.
+        let dock_ui = include_str!("dock_ui.rs");
+        assert!(dock_ui.contains(r#"crate::i18n::command_label("window.panel", title)"#), "dock_ui.rs no longer asks the catalog for the panel titles");
+    }
+
     #[test]
     fn ukrainian_catalog_matches_the_settings_registry() {
         let codes: Vec<_> = effectcraft_engine::prefs::LANGUAGES.iter().map(|(_, code)| *code).filter(|code| !matches!(*code, "system" | "en")).collect();
@@ -8346,7 +8449,7 @@ mod tests {
         app.session.execute("prefs.set", json!({"key":"general.language", "value":"ru"})).unwrap();
         assert_eq!(entry(&app, &undo, "Can't Undo".into()), "Нечего отменять");
         app.session.execute("prefs.set", json!({"key":"general.language", "value":"de"})).unwrap();
-        assert_eq!(entry(&app, &undo, "Can't Undo".into()), "Can't Undo", "no German undo wording yet: the shown label");
+        assert_eq!(entry(&app, &undo, "Can't Undo".into()), "Rückgängig nicht möglich");
         app.session.execute("prefs.set", json!({"key":"general.language", "value":"en"})).unwrap();
         assert_eq!(entry(&app, &new_comp, new_comp.label.clone()), "New Composition...");
     }
