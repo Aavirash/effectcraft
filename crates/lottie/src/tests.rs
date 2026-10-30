@@ -407,6 +407,30 @@ fn offset_paths_miter_uses_animatable_lottie_value() {
     assert_eq!(second.get("miter").unwrap().value, Value::Scalar(6.0));
 }
 
+#[test]
+fn extra_dash_gap_pairs_survive_a_roundtrip() {
+    let (mut p, cid) = setup();
+    let l = shape_layer(&mut p, cid, |ids| {
+        let mut stroke = build::shape_stroke(ids, [0.0, 0.0, 1.0, 1.0], 3.0);
+        let d = stroke.sub_mut("dashes").unwrap();
+        d.get_mut("dash").unwrap().value = Value::Scalar(10.0);
+        d.get_mut("gap").unwrap().value = Value::Scalar(5.0);
+        let at = d.children.iter().position(|n| n.match_id() == "offset").unwrap();
+        d.children.insert(at, ids.prop("gap2", "Gap 2", Value::Scalar(3.0)).into());
+        d.children.insert(at, ids.prop("dash2", "Dash 2", Value::Scalar(20.0)).into());
+        let rect = build::shape_rect(ids, [60.0, 40.0], [0.0, 0.0], 0.0);
+        vec![build::shape_group(ids, "G", vec![rect, stroke])]
+    });
+    push(&mut p, cid, l);
+    let (q, nc, _, _) = roundtrip(&p, cid, &ExportOptions::default());
+    let c = q.comp(nc).unwrap();
+    let g = c.layers[0].props.sub("contents").unwrap().groups().next().unwrap();
+    let stroke = g.sub("contents").unwrap().groups().find(|g| g.match_id == "stroke").unwrap();
+    let d = stroke.sub("dashes").unwrap();
+    let v = |m: &str| d.get(m).map(|p| p.value.as_f64());
+    assert_eq!((v("dash"), v("gap"), v("dash2"), v("gap2")), (Some(10.0), Some(5.0), Some(20.0), Some(3.0)));
+}
+
 // ---------------------------------------------------------------- layers
 
 #[test]
@@ -485,6 +509,18 @@ fn layers_parenting_timing_mattes_masks_and_blend_modes() {
 }
 
 #[test]
+fn zero_time_stretch_is_not_imported() {
+    let doc = json!({"w": 20, "h": 20, "fr": 30, "ip": 0, "op": 30, "assets": [],
+        "layers": [{"ty": 1, "ind": 1, "sc": "#ff0000", "sw": 20, "sh": 20, "sr": 0, "ip": 0, "op": 30, "st": 0, "ks": {}}]});
+    let mut q = Project::default();
+    let imp = import(&mut q, doc.to_string().as_bytes(), "Imported", "", &mut |_| None).unwrap();
+    let l = &q.comp(imp.comp).unwrap().layers[0];
+    // layer.timeStretch refuses anything below 1 %, and keyframe commands refuse a layer with 0 %.
+    assert_eq!(l.stretch, 100.0);
+    assert!(imp.warnings.iter().any(|w| w.contains("time stretch")), "{:?}", imp.warnings);
+}
+
+#[test]
 fn precomp_with_time_remap() {
     let (mut p, cid) = setup();
     let inner = p.add_item("Inner", Label::Sandstone, None, ItemKind::Comp(Comp::new(100, 100, FrameRate::FPS_30, s(2.0)).into()));
@@ -513,6 +549,19 @@ fn precomp_with_time_remap() {
     };
     assert!(compare_comps(&p, inner, &q, qi) > 3);
     compare_renders(&p, cid, &q, nc, 2.0 / 255.0);
+}
+
+#[test]
+fn precomp_size_comes_from_the_layer_when_the_asset_has_none() {
+    // lottie-spec: a precomposition asset has no `w`/`h`; the precomp layer carries them.
+    let doc = json!({"w": 200, "h": 120, "fr": 30, "ip": 0, "op": 30,
+        "assets": [{"id": "c", "layers": []}],
+        "layers": [{"ty": 0, "ind": 1, "refId": "c", "w": 50, "h": 40, "ip": 0, "op": 30, "st": 0, "ks": {}}]});
+    let mut q = Project::default();
+    let nc = import(&mut q, doc.to_string().as_bytes(), "Imported", "", &mut |_| None).unwrap().comp;
+    let LayerSource::Comp { item } = q.comp(nc).unwrap().layers[0].source else { panic!("not a precomp") };
+    let pc = q.comp(item).unwrap();
+    assert_eq!((pc.width, pc.height), (50, 40));
 }
 
 #[test]
@@ -805,4 +854,45 @@ fn extreme_enum_numbers_do_not_overflow() {
     assert!(hits > 0);
     let mut q = Project::default();
     import(&mut q, doc.to_string().as_bytes(), "x", "", &mut |_| None).unwrap();
+}
+
+/// External image assets are taken from the Lottie file's folder; one on another computer is not
+/// imported.
+#[test]
+fn external_images_are_local_or_skipped() {
+    let base = std::env::temp_dir().join("ec-lottie-anim");
+    let mut assets = vec![
+        serde_json::json!({"id": "near", "u": "images/", "p": "a.png", "w": 1, "h": 1}),
+        serde_json::json!({"id": "unc", "u": "", "p": r"\\192.0.2.1\share\x.png", "w": 1, "h": 1}),
+        serde_json::json!({"id": "url", "u": "file://192.0.2.1/s/", "p": "x.png", "w": 1, "h": 1}),
+    ];
+    // `u` + `p` is `//tmp/…/a.png`, which Linux reads as a local file.
+    if cfg!(unix) {
+        assets.push(serde_json::json!({"id": "slashes", "u": "/", "p": base.join("a.png").to_string_lossy(), "w": 1, "h": 1}));
+    }
+    let doc = serde_json::json!({"w": 10, "h": 10, "fr": 30, "ip": 0, "op": 30, "assets": assets, "layers": []});
+    let mut q = Project::default();
+    let r = import(&mut q, doc.to_string().as_bytes(), "x", &base.to_string_lossy(), &mut |_| None).unwrap();
+    let paths: Vec<String> = q.items.values().filter_map(|i| if let ItemKind::Footage(f) = &i.kind { Some(f.path.clone()) } else { None }).collect();
+    assert_eq!(paths.len(), 1, "{paths:?}");
+    assert_eq!(std::path::Path::new(&paths[0]), base.join("images").join("a.png"));
+    assert_eq!(r.warnings.iter().filter(|w| w.contains("is not imported")).count(), assets.len() - 1, "{:?}", r.warnings);
+}
+
+#[test]
+fn muted_keys_are_omitted_from_the_export() {
+    let (mut p, cid) = setup();
+    let mut l = solid_layer(&mut p, cid, [0.0, 1.0, 0.0], 20, 20);
+    let mut b = Keyframe::new(s(1.0), Value::Scalar(100.0));
+    b.muted = true;
+    l.props.prop_mut("transform/opacity").unwrap().keys = vec![Keyframe::new(s(0.0), Value::Scalar(0.0)), b, Keyframe::new(s(2.0), Value::Scalar(300.0))];
+    push(&mut p, cid, l);
+    let (q, nc, warnings, json) = roundtrip(&p, cid, &ExportOptions::default());
+    assert!(warnings.iter().any(|w| w.contains("muted keyframes")), "{warnings:?}");
+    // Lottie has no mute state: the two active keys carry the 0 → 300 animation.
+    assert_eq!(json["layers"][0]["ks"]["o"]["k"].as_array().unwrap().len(), 2);
+    assert_eq!(json["layers"][0]["ks"]["o"]["k"][1]["s"], json!([300.0]));
+    let opacity_at = |p: &Project, cid: ItemId, t: f64| p.comp(cid).unwrap().layers[0].props.prop("transform/opacity").unwrap().value_at(s(t)).as_f64();
+    assert!((opacity_at(&p, cid, 1.0) - 150.0).abs() < 1e-6);
+    assert!((opacity_at(&q, nc, 1.0) - 150.0).abs() < 1e-6);
 }

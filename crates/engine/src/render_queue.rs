@@ -110,7 +110,7 @@ pub struct JobShared {
 }
 
 pub(crate) fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(|e| e.into_inner())
+    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 impl JobShared {
@@ -207,6 +207,16 @@ pub fn bytes_per_frame(om: &OutputModule, w: u32, h: u32, fps: f64) -> f64 {
         OutputFormat::Uncompressed => {
             let bpp = if om.channels == effectcraft_project::render_queue::Channels::Rgba { 4 } else { 3 };
             ((w as u64 * bpp).next_multiple_of(2) * h as u64) as f64
+        }
+        // An 18-byte header and 24-bit BGR, 32-bit BGRA or 8-bit grey (Alpha) pixels, uncompressed.
+        OutputFormat::TargaSequence => {
+            use effectcraft_project::render_queue::Channels;
+            let bpp = match om.channels {
+                Channels::Rgb => 3,
+                Channels::Rgba => 4,
+                Channels::Alpha => 1,
+            };
+            (18 + w as u64 * h as u64 * bpp) as f64
         }
         OutputFormat::WebM => mbps(8.0) * px / fps,
         OutputFormat::Gif => w as f64 * h as f64 * 0.5,
@@ -676,7 +686,7 @@ impl Session {
                         continue;
                     }
                     if let Some(c) = proj.comp_mut(cid) {
-                        for l in c.layers.iter_mut().filter(|l| matches!(l.source, LayerSource::Comp { item } if item == comp)) {
+                        for l in c.layers.iter_mut_where(|l| matches!(l.source, LayerSource::Comp { item } if item == comp)) {
                             l.source = LayerSource::Footage { item: fid };
                         }
                     }

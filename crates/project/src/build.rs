@@ -4,7 +4,7 @@ use effectcraft_color::{BlendMode, Label};
 use effectcraft_keyframe::{Gradient, ShapePath, TextDoc, Value};
 use effectcraft_time::Tick;
 
-use crate::props::{GroupKind, MaskMode, ParamUi, PropGroup, Property};
+use crate::props::{GroupKind, MaskMode, Node, ParamUi, PropGroup, Property};
 use crate::{Comp, Layer, LayerId, LayerSource, LightKind, Project, Switches};
 
 /// Id allocator borrowing the project's counter.
@@ -594,7 +594,24 @@ pub fn shape_simple_op(ids: &mut Ids, kind: &str) -> Option<PropGroup> {
             .with(ids.prop("speed", "Wiggles/Second", Value::Scalar(2.0)))
             .with(ids.prop("correlation", "Correlation", Value::Scalar(50.0)).with_ui(ParamUi::Percent))
             .with(ids.prop("phase", "Temporal Phase", Value::Scalar(0.0)).with_ui(ParamUi::Angle))
+            .with(wiggle_spatial_phase(ids))
             .with(ids.prop("seed", "Random Seed", Value::Scalar(0.0))),
+        "wiggler" | "wiggleTransform" => {
+            // The Transform group holds how far each transformation wiggles.
+            let tr = ids
+                .group("transform", "Transform")
+                .with(ids.prop("anchor", "Anchor Point", Value::Vec2([0.0, 0.0])).with_ui(ParamUi::Point))
+                .with(ids.prop("position", "Position", Value::Vec2([0.0, 0.0])).with_ui(ParamUi::Point))
+                .with(ids.prop("scale", "Scale", Value::Vec2([0.0, 0.0])).with_ui(ParamUi::Percent))
+                .with(ids.prop("rotation", "Rotation", Value::Scalar(0.0)).with_ui(ParamUi::Angle));
+            indexed(ids.group("wiggler", "Wiggle Transform 1"))
+                .with(ids.prop("speed", "Wiggles/Second", Value::Scalar(2.0)))
+                .with(ids.prop("correlation", "Correlation", Value::Scalar(50.0)).with_ui(ParamUi::Percent))
+                .with(ids.prop("phase", "Temporal Phase", Value::Scalar(0.0)).with_ui(ParamUi::Angle))
+                .with(ids.prop("spatialPhase", "Spatial Phase", Value::Scalar(0.0)).with_ui(ParamUi::Angle))
+                .with(ids.prop("seed", "Random Seed", Value::Scalar(0.0)))
+                .with(tr)
+        }
         "merge" => indexed(ids.group("merge", "Merge Paths 1")).with(ids.prop("mode", "Mode", Value::Enum(0)).with_ui(popup(&[
             "Merge",
             "Add",
@@ -605,6 +622,32 @@ pub fn shape_simple_op(ids: &mut Ids, kind: &str) -> Option<PropGroup> {
         _ => return None,
     };
     Some(g)
+}
+
+/// Wiggle Paths' Spatial Phase.
+fn wiggle_spatial_phase(ids: &mut Ids) -> Property {
+    ids.prop("spatialPhase", "Spatial Phase", Value::Scalar(0.0)).with_ui(ParamUi::Angle)
+}
+
+/// Adds the properties that shape path operations have gained since a project was saved (Wiggle
+/// Paths' Spatial Phase), at their defaults, to the operations in `contents` and its nested
+/// groups. Returns whether anything was added. It walks the nested groups with a work list and
+/// does not recurse.
+pub fn upgrade_shape_contents(ids: &mut Ids, contents: &mut PropGroup) -> bool {
+    let mut changed = false;
+    let mut todo = vec![contents];
+    while let Some(group) = todo.pop() {
+        for n in &mut group.children {
+            let Node::Group(g) = n else { continue };
+            if g.match_id == "wiggle" && !g.children.iter().any(|c| c.match_id() == "spatialPhase") {
+                let at = g.children.iter().position(|c| c.match_id() == "phase").map_or(g.children.len(), |i| i + 1);
+                g.children.insert(at, wiggle_spatial_phase(ids).into());
+                changed = true;
+            }
+            todo.push(g);
+        }
+    }
+    changed
 }
 
 // ---------------------------------------------------------------- camera / light / 3D
@@ -654,10 +697,16 @@ pub fn light_options(ids: &mut Ids, kind: LightKind) -> PropGroup {
     }
     if kind == LightKind::Environment {
         // The environment image: a layer (footage, comp…) mapped as an equirectangular panorama;
-        // none = the comp's Environment Layer.
+        // none = the comp's Environment Layer, or a flat default environment of the light's
+        // colour × intensity when there is none. No Falloff: an environment light shines from
+        // every direction at once. Environment lights cast shadows too (After Effects' Light
+        // Settings shows Cast Shadows for them; not for Ambient) (#2436).
         return g
             .with(ids.prop("source", "Source", Value::Layer(None)).with_ui(ParamUi::Layer))
-            .with(ids.prop("rotation", "Environment Rotation", Value::Scalar(0.0)).with_ui(ParamUi::Angle));
+            .with(ids.prop("rotation", "Environment Rotation", Value::Scalar(0.0)).with_ui(ParamUi::Angle))
+            .with(ids.prop("castsShadows", "Casts Shadows", Value::Bool(false)).with_ui(ParamUi::Checkbox))
+            .with(ids.prop("shadowDarkness", "Shadow Darkness", Value::Scalar(100.0)).with_ui(ParamUi::Percent))
+            .with(ids.prop("shadowDiffusion", "Shadow Diffusion", Value::Scalar(0.0)).with_ui(ParamUi::Pixels));
     }
     if kind != LightKind::Ambient {
         g = g
@@ -854,6 +903,14 @@ pub fn layer(project: &mut Project, comp: &Comp, name: &str, source: LayerSource
             _ => {}
         }
     }
+    // A footage layer starts with the markers its file carries (layer time is footage time).
+    let footage_markers = match &source {
+        LayerSource::Footage { item } => match project.item(*item).map(|i| &i.kind) {
+            Some(crate::ItemKind::Footage(f)) => f.markers.clone(),
+            _ => vec![],
+        },
+        _ => vec![],
+    };
     let has_audio = matches!(&source, LayerSource::Footage { item } if matches!(project.item(*item).map(|i| &i.kind), Some(crate::ItemKind::Footage(f)) if f.has_audio))
         || matches!(source, LayerSource::Comp { .. });
     if has_audio {
@@ -883,7 +940,7 @@ pub fn layer(project: &mut Project, comp: &Comp, name: &str, source: LayerSource
         preserve_transparency: false,
         track_matte: None,
         parent: None,
-        markers: vec![],
+        markers: footage_markers,
         markers_locked: false,
         environment: false,
         environment_background: false,

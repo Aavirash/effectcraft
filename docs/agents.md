@@ -54,13 +54,13 @@ The release packages ship `effectcraft-cli` alongside the desktop app, so no bui
 
 | Install | CLI |
 |---|---|
-| Windows (MSI) | `C:\Program Files\EffectCraft\effectcraft-cli.exe` by default (wherever you installed it otherwise), not on `PATH` |
+| Windows (MSI) | `%LOCALAPPDATA%\Programs\ArtCraft\EffectCraft\effectcraft-cli.exe` by default (`C:\Program Files\ArtCraft\EffectCraft\effectcraft-cli.exe` for an all-users install, under `Program Files (x86)` instead for the 32-bit build, or wherever you installed it otherwise), not on `PATH` |
 | Linux (deb, rpm) | `/usr/bin/effectcraft-cli` |
 | macOS | the separate `effectcraft-cli-<version>-macos-<arch>.zip` release asset (the `.app` holds only the desktop app) |
 
 ```sh
-# Windows, default install folder
-claude mcp add effectcraft -- "C:\Program Files\EffectCraft\effectcraft-cli.exe" mcp
+# Windows (PowerShell), default install folder
+claude mcp add effectcraft -- "$env:LOCALAPPDATA\Programs\ArtCraft\EffectCraft\effectcraft-cli.exe" mcp
 # Linux, or macOS with the CLI unzipped onto PATH
 claude mcp add effectcraft -- effectcraft-cli mcp
 ```
@@ -101,7 +101,7 @@ See [MCP conventions](mcp.md) for core tools, resources, strict arguments, and r
 
 | Tool | What it does |
 |---|---|
-| `list_commands {filter?, enabled_only?, schemas?}` | Discover command ids, their param docs (and, with `schemas`, a JSON Schema each), and whether each can run now. |
+| `list_commands {filter?, enabled_only?, schemas?, compact?}` | Discover command ids, their param docs (and, with `schemas`, a JSON Schema each), and whether each can run now; `compact` lists only ids and labels (and overrides `schemas`). |
 | `describe_command {command \| id}` | One command in full: label, menu, shortcut, params doc, JSON `schema`, enabled / `why`. |
 | `execute_command {command \| id, params?}` | Run any command (undoable). Unknown parameter keys are rejected with the accepted list. |
 | `get_state` | Editor state (active comp, time, selections, tool) plus `app`: version, command and effect counts, export formats, parity summary. |
@@ -111,7 +111,7 @@ See [MCP conventions](mcp.md) for core tools, resources, strict arguments, and r
 | `get_property {layer, path, comp?, time?}` | A leaf property's value at a time, keyframes and expression. Group paths (for example `geometryOptions`) contain children: inspect them with `get_layer`, then query a leaf such as `geometryOptions/extrusionDepth`. |
 | `set_property {layer, path, value?, time?, timeBase?, expression?, comp?}` | Sets a static value. With `time` it sets a keyframe (`timeBase: "comp"` for comp seconds); with `expression` it sets an expression. |
 | `add_keyframe {layer, path, time+value \| keys:[...], timeBase?, interpolation?, comp?}` | Adds keys (layer seconds, or comp seconds with `timeBase: "comp"`), then optionally applies linear/bezier/hold/easyEase. |
-| `list_effects {filter?}` | Effect ids, names, categories, GPU / 32-bpc support and parameters. |
+| `list_effects {filter?, compact?}` | Effect ids, names, categories, GPU / 32-bpc support and parameters; `compact` lists only ids, names and categories. |
 | `list_fonts {query?, variable?, rescan?}` | Font families text layers can use, bundled and installed, with their styles, origin, whether each is a variable font and own-language name; `variable` lists only variable fonts; `rescan` picks up fonts installed since launch. |
 | `add_effect {layer, effect, values?, comp?}` | Apply an effect and set its parameters in one call and one undo step (a failing value leaves nothing applied); returns the instance path (`effects/#n`) and its parameter paths. |
 | `render_frame {comp?, time?, max_side?, path?, inline?, transparent?}` | Returns a PNG image of a frame; `transparent: true` keeps the alpha (as an RGB + Alpha render writes it) instead of compositing over the comp background. |
@@ -180,6 +180,7 @@ Short recipes; every step is one tool call.
 | Animate | `add_keyframe {"layer":2,"path":"transform/scale","keys":[{"time":0,"value":[0,0]},{"time":0.5,"value":[100,100]}],"interpolation":"easyEase"}` |
 | Effect with settings | `list_effects {"filter":"glow"}` → `add_effect {"layer":2,"effect":"Glow","values":{"threshold":40,"radius":30}}` → `set_property {"layer":2,"path":"effects/#1/intensity","value":2}` |
 | Key a green screen | `add_effect {"layer":2,"effect":"Keylight (1.2)"}` → `execute_command effect.pickColor {"layer":2,"effect":1,"param":"screenColour","x":20,"y":20,"average":true}` (a screen pixel, layer space; samples the effect's input) → `set_property {"layer":2,"path":"effects/#1/screenMatte/clipBlack","value":10}` → `render_frame {"transparent":true}` |
+| Key objects by Cryptomatte | `add_effect {"layer":2,"effect":"Cryptomatte"}` → `execute_command effect.pickCryptomatte {"layer":2,"effect":1,"x":120,"y":80}` (the ID under that layer pixel replaces the Selection; `"mode":"add"` / `"remove"` edit it; `effect.cryptomatteAt` with the same point only reports the name) → `render_frame` |
 | Drive with an expression | `set_property {"layer":2,"path":"transform/rotation","expression":"time*90"}` |
 | Inspect a layer | `get_layer {"layer":2,"flat":true}` (every property with its `path`, value, key count) |
 | Check the result | `render_frame {"time":1.5,"max_side":640}`; in bridge mode `screenshot {"panel":"Timeline"}` |
@@ -211,12 +212,29 @@ Things that tripped up a long agent-driven session (a multi-scene 3D piece built
   or call `save_project {"path": …}` after each milestone.
 - **Environment light.** `layer.newLight` also accepts `"kind":"Environment"`: an equirectangular
   image that metallic surfaces reflect. Set its `lightOptions/source` to a footage, comp or solid
-  layer by layer id; with no source it uses the comp's Environment Layer (`layer.environment`)
-  ([#261](https://github.com/storytold/effectcraft/issues/261)).
+  layer by layer id; with no source it uses the comp's Environment Layer (`layer.environment`),
+  or a default studio environment — bright above and toward the initial camera, dark below and
+  behind, at a dim 0.3 mean level — of the light's colour × intensity when there is none; either
+  way the light brightens the scene. A selected Source or Environment Layer that fails to
+  render — a deleted layer, missing footage — lights nothing instead: the light never silently
+  falls back to the studio default. It has `castsShadows`/`shadowDarkness`/`shadowDiffusion`
+  like the other lights: Cast Shadows shades the scene from the image's dominant bright region
+  (the default environment's key, or a source image's brightest area; an image without a
+  sufficiently strong dominant direction has none — a uniform one, or opposing bright regions
+  that cancel — so it casts no shadow) — the region weighted by the light's colour, so a
+  coloured light shadows from the regions it actually lights (opposing red and blue regions
+  cancel to a white light, but a red light's shadow comes from the red one) — occluding only
+  that key's share of the light, so the
+  shadow stays partial like After Effects' area-light shadows, and soft by default (a penumbra
+  of at least 8 pixels or four map texels, plus Shadow Diffusion). It only lights
+  Advanced 3D comps, so creating one (or changing a light's type to Environment) switches a
+  Classic 3D comp to Advanced 3D
+  ([#261](https://github.com/storytold/effectcraft/issues/261),
+  [#2436](https://github.com/storytold/effectcraft/issues/2436)).
 
 ### Cookbook (from end-to-end QA)
 
-The scenarios in `crates/automation/tests/qa/` and `apps/effectcraft-cli/tests/qa_template.rs`
+The scenarios in `crates/automation/tests/qa/` and `apps/effectcraft-cli/tests/it/qa_template.rs`
 build real projects through these interfaces; they are worked examples of everything below.
 
 * **Name things when you create them**: `layer.newText`, `layer.newShape`, `layer.newSolid`,
@@ -271,10 +289,10 @@ build real projects through these interfaces; they are worked examples of everyt
   then `keys.velocity {"outSpeed":0,"outInfluence":33.33}`.
 * **Gradients**: `set_property {"path":"contents/gfill/colors","value":["#0080ff","#ffff00"]}` or
   `{"colors":[[0,"#0080ff"],[1,[1,1,0]]],"opacities":[[0,1],[1,0.5]]}`.
-* **Image sequences**: `file.import {"paths":["/r/shot_0001.png"]}` imports the file's whole
-  numbered run as one item (several picked frames: that range; a folder: each run in it;
-  `"sequence": false`: one still; dropped files, `"drag": true`, import as stills unless
-  `"sequence": true`, as in After Effects; `"alphabetical": true`: Force Alphabetical Order, the files
+* **Image sequences**: `file.import {"paths":["/r/shot_0001.png"], "sequence": true}` imports the
+  file's whole numbered run as one item (several picked frames: that range; a folder: each run in
+  it, also without `sequence`). Without `"sequence": true` a picked or dropped numbered file imports
+  as one still, as in After Effects; `"alphabetical": true`: Force Alphabetical Order, the files
   play one after another) at `frameRate` or 30 fps (Settings ▸ Import). Missing frames show
   colour bars, as in After Effects. `file.interpretFootage {"items":[id], "frameRate":12,
   "startTimecode":1001}` conforms them and sets Override Start (the item and layers that ran to its end get the new
@@ -303,7 +321,9 @@ build real projects through these interfaces; they are worked examples of everyt
   The CLI also renders an exported template directly:
   `effectcraft-cli render --template lt.ectemplate --values values.json --out 'title_[#####].png'`.
   `values.json` is an object such as `{"Title":"John Smith","Bar Color":"#00c080","Bar Opacity":50}`;
-  names follow `essential.set`, including its case-insensitive matching. Values override one
+  names follow `essential.set`, including its case-insensitive matching. A Media Replacement
+  control takes a footage file path (`{"Clip":"/in/clipB.mp4"}`, or `{"path": …}`), which is
+  imported and set as the control's `item`. Values override one
   imported instance; the template file and its source controls keep their defaults. Omit
   `--values` to render those defaults, or use the same options with `render-frame` for a PNG.
   Values must fit in 1 MiB. Invalid JSON, unknown controls and invalid values fail before rendering.
@@ -321,8 +341,8 @@ build real projects through these interfaces; they are worked examples of everyt
 ### Effect positions
 
 Effect points, Puppet pins (`puppet.addPin`, `puppet.recordPin`), Paint, Liquify and Roto Brush
-strokes and `effect.pickColor` are in **effect space**: layer pixels from the top-left of the
-layer's effect bounds. For footage, solids and precomps that is the layer's own pixel grid. Shape
+strokes, `effect.pickColor` and `effect.pickCryptomatte` are in **effect space**: layer pixels
+from the top-left of the layer's effect bounds. For footage, solids and precomps that is the layer's own pixel grid. Shape
 and text layers have comp-sized bounds centred on their content's origin, so in a `w` × `h` comp
 the point `[w / 2, h / 2]` is that origin (a new effect's default point). `prop.get` / `prop.set`
 read and write these values as they are.
@@ -530,18 +550,23 @@ indices): character attributes
    starts editing (`position` instead of `box` makes point text; `vertical: true` vertical type).
 2. `text.insert {"text":"Hello world"}` types at the caret (replacing the selection);
    `text.setSelection {"start":6,"end":11}` selects "world"; `text.moveCaret {"to":"wordLeft",
-   "extend":true}` moves like the arrow keys; `text.delete {"word":true}` is Alt+Backspace.
+   "extend":true}` moves like the arrow keys; `text.delete {"word":true}` is Alt+Backspace;
+   `text.deleteSurrounding {"before":1,"after":2,"bytes":true}` deletes the characters around the
+   selection without deleting it (what an input method's replacement asks for: the selection stays
+   for the commit that follows; a byte count ending inside a character leaves that character).
 3. `layer.setText {"range":[6,11], "size":40, "fill":"#ff5500"}` styles the selection (the
    Character panel does the same); with an empty range it sets the style the next typed text takes.
 4. `edit.copy`, `edit.paste`, `edit.pasteTextMatchFormatting` and `edit.pasteTextFormattingOnly`
-   work on the selected text; `text.endEdit` commits (an empty Type-tool layer is removed).
+   work on the selected text; `text.endEdit` commits (an empty Type-tool layer is kept, as After Effects does).
 
 Fonts: `text.fonts` (MCP `list_fonts`) lists every family a text layer can use, bundled and installed, with its
 styles, origin (`bundled`, `system`, `user`), `variable` (it has variation axes) and own-language name
 (`{"query":"gothic"}` filters by name, `{"variable":true}` keeps only variable fonts, like the font
 menu's Variable Fonts filter; `{"rescan":true}` first picks up fonts installed since launch). Pass a listed `family` and
-one of its `styles` to `layer.setText {"font", "style"}`; `text.fontFeatures` says which OpenType
-options a font draws with its own glyphs.
+one of its `styles` to `layer.setText {"font", "style"}`. A variable font's named instances (`Light` …
+`Black`) are styles of its family; a style or an instance's PostScript name (`"font": "Figtree-Black"`)
+sets the instance's axis values, and `variations` set on the text override them axis by axis.
+`text.fontFeatures` says which OpenType options a font draws with its own glyphs.
 A tool with its own font library can hand it over without installing it: folders listed in
 `EFFECTCRAFT_FONT_DIRS` (a path list, `:`-separated, `;` on Windows) are scanned like the system font folders.
 On Linux and the BSDs the system font folders are `/usr/share/fonts`, `/usr/local/share/fonts`,
@@ -575,7 +600,9 @@ A dialog's `show()` waits for the user: the `script.run` / `file.runScript` repl
 `"waiting": true`, and the script continues (its final output arrives in the reply of the click
 that closes the dialog). File ▸ Scripts: `file.scripts.list`, `file.runScript {"name": …}`,
 `file.installScript` / `file.installScriptUIPanel {"path": …}`, `window.scriptPanel {"name": …}`,
-`window.restoreScriptPanels` (the panels open when the app last quit). Scripts' `app.settings`:
+`window.restoreScriptPanels` (the panels open when the app last quit), `file.runStartupScripts` and
+`file.runShutdownScripts` (the scripts in `Scripts/Startup` and `Scripts/Shutdown`; the second closes
+the project first). Scripts' `app.settings`:
 `script.settings.get {"section": …, "key": …}` and `script.settings.save {…, "value": …}`.
 Extension points and the bundled extensions: [plugins.md](plugins.md).
 
@@ -591,6 +618,12 @@ Extension points and the bundled extensions: [plugins.md](plugins.md).
   properties, FF missing effects, EE Expressions, LL Waveform, UU everything changed from its
   default. Shift+key adds or removes a set; the same key again hides it; Ctrl/Cmd+` twirls the
   selected layers open or closed. With no layer selected they apply to every layer.
+* A row control clicked on one of several selected layers applies to every selected layer, as in
+  After Effects: the A/V switches (video, audio, solo, lock), the Switches column (shy, collapse,
+  quality, fx, frame blending, motion blur, adjustment, 3D), the label swatch and the Modes column
+  (blending mode, Preserve Transparency), one undo step, with the layers the switch doesn't apply
+  to left out. A control on an unselected row changes that layer alone; Alt-clicking an A/V feature
+  still sets the selected layers apart from the rest.
 * `keys.toggleTransform {"layers"?: [...], "prop": "position"}` (Alt+Shift+A/P/S/R/T) adds or
   removes a keyframe at the current time on that Transform property of each layer, in one undo
   step (separated X/Y/Z Position; Orientation and X/Y/Z Rotation on 3D layers).
@@ -600,12 +633,21 @@ Extension points and the bundled extensions: [plugins.md](plugins.md).
   Display Style between Timecode and Frames: `file.projectSettings {"timeDisplay": "frames"}`.
 * `prop.pickWhip {layer, prop, target: {layer, prop, dimension?}}` links a property as its
   expression pick whip does; `dimension` picks one of the target's values (`position[0]`), as a
-  drop on that value field does.
+  drop on that value field does. `byIndex: true` (an Alt pick whip: Alt held as it drops) refers
+  to an effect's properties by their index, `effect("Color Control")(1)`: it still reads a
+  renamed property, but another one if properties are reordered.
 * Every property row has a property pick whip in the Parent & Link column
   (`timeline.prop.<uid>.propertyPickWhip`; the expression row's is `timeline.prop.<uid>.pickWhip`).
   Dragged onto another property's name or value, in the Timeline or Effect Controls
   (`effectControls.prop.<uid>.value[.<d>]`), it runs `prop.pickWhip`: the reference replaces the
   property's expression, or is added as one, and the expression is enabled.
+* Parent and Track Matte for several layers: on a selected layer's row, the Timeline's Parent
+  menu and pick whip (`timeline.layer.<id>.parent`, `timeline.layer.<id>.pickWhip`) and its Track
+  Matte menu and pick whip (`timeline.layer.<id>.trackMatte`,
+  `timeline.layer.<id>.trackMattePickWhip`) set every selected layer's (on an unselected row,
+  that layer's), in one undo step. Directly: `layer.setParent {layers, parent}` and
+  `layer.setTrackMatte {layers, matte, kind}`, where `kind: "preserve"` keeps each layer's
+  own matte mode.
 * A property's menu (right-click its name; entries `timeline.prop.<uid>.menu.<entry>`): Reset
   (`prop.reset`: no expression, and the property's default value, an effect parameter's or a
   Transform property's; an animated property keeps its keyframes and gets the default as a
@@ -663,6 +705,20 @@ effectcraft-cli render-frame main.ecproj --time 1 --max-side 640 --out f.png --j
 effectcraft-cli exec layer.newNull --bridge 9877                 # same commands, against the live app
 effectcraft-cli exec file.exportLottie '{"comp":"Main","path":"main.json","includeExpressions":true}' main.ecproj --json
 effectcraft-cli exec file.importLottie '{"path":"anim.json"}' main.ecproj --save
+effectcraft-cli render main.ecproj --comp Main --out main.mov --format prores --progress   # progress lines on stderr for a program that reads them
+```
+
+A long `run` doesn't fit on a command line (Windows caps it at 32 767 characters, Linux one
+argument at 128 KiB). `run --args-file F` reads the same `<id> <json>` arguments one per line;
+`run --commands FILE` reads steps as a JSON array of `{"command": ID, "params": {…}}` objects, or one
+such object per line (JSON Lines), and `--commands -` reads them from standard input. `--commands`
+may be repeated; its steps run after the positional pairs and `--args-file`. A malformed step is a
+usage error naming its index (from 0, as in the results) before anything runs, and the error of a step
+that fails ends with `(step N)`:
+
+```sh
+effectcraft-cli run --commands steps.json --empty --save-as main.ecproj
+generate-steps | effectcraft-cli run main.ecproj --commands - --save --json
 ```
 
 Scripts written against After Effects' documented scripting API run with `script`:

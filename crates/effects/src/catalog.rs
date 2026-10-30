@@ -92,7 +92,7 @@ const CPU_ONLY_CONTROLS: &[(&str, &[&str])] = &[
 ];
 
 /// Whether the GPU kernel of effect `id` covers the instance's current settings (see
-/// [`CPU_ONLY_CONTROLS`]; plus Cell Pattern's HQ variants and Turbulent Displace's locked
+/// `CPU_ONLY_CONTROLS`; plus Cell Pattern's HQ variants and Turbulent Displace's locked
 /// pinning).
 pub fn gpu_supported(id: &str, ctx: &crate::EffectCtx) -> bool {
     match id {
@@ -180,6 +180,20 @@ mod tests {
         // A Windows checkout may use CRLF; catalog content must still match exactly.
         let have = std::fs::read_to_string(path).unwrap_or_default().replace("\r\n", "\n");
         assert!(have == want, "docs/effects.md is stale: UPDATE_DOCS=1 cargo test -p effectcraft-effects --lib effects_doc_is_current");
+    }
+
+    /// The README quotes the number of effects (#2565): every count it gives is the registry's.
+    #[test]
+    fn readme_effect_counts_are_current() {
+        let readme = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../README.md")).unwrap_or_default();
+        let words: Vec<&str> = readme.split_whitespace().collect();
+        let counts: Vec<&str> = words
+            .windows(3)
+            .filter(|w| w[0].parse::<u32>().is_ok() && (w[1].starts_with("effects") || (w[1] == "built-in" && w[2].starts_with("effects"))))
+            .map(|w| w[0])
+            .collect();
+        let n = super::registry().len().to_string();
+        assert!(!counts.is_empty() && counts.iter().all(|c| *c == n), "README.md says {counts:?} effects; the registry has {n}");
     }
 
     #[test]
