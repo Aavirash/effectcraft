@@ -320,6 +320,26 @@ fn toolbar_fill_and_stroke_paint_selected_shape_layers() {
     let _ = s.render(cid, s.time(), Default::default());
 }
 
+/// The toolbar/query width follows the selected solid or gradient stroke, including animation.
+#[test]
+fn shape_toolbar_reads_solid_and_gradient_stroke_widths_at_the_current_time() {
+    for kind in ["solid", "linear", "radial"] {
+        let mut s = Session::default();
+        s.execute("comp.new", json!({"width": 400, "height": 300, "duration": 2})).unwrap();
+        let layer = s.execute("layer.newShape", json!({"kind": "rect"})).unwrap()["layer"].as_u64().unwrap();
+        let configured = s.execute("shape.fillStroke", json!({"fill": false, "strokeType": kind, "strokeWidth": 9})).unwrap();
+        assert_eq!(configured["strokeWidth"].as_f64(), Some(9.0), "configured {kind} stroke");
+        let group = if kind == "solid" { "stroke" } else { "gstroke" };
+        let path = format!("contents/group/contents/{group}/width");
+        for (time, width) in [(0, 9), (1, 17)] {
+            s.execute("prop.addKey", json!({"layer": layer, "path": path, "time": time, "value": width})).unwrap();
+        }
+        s.set_time(effectcraft_time::Tick::from_seconds_f64(1.0));
+        let displayed = s.execute("shape.fillStroke", json!({})).unwrap();
+        assert_eq!(displayed["strokeWidth"].as_f64(), Some(17.0), "animated {kind} stroke");
+    }
+}
+
 /// A Wiggle Paths saved without Spatial Phase gets the property, at 0°, after Temporal Phase when
 /// the project opens.
 #[test]
