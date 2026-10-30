@@ -538,6 +538,12 @@ fn ft_id() -> egui::Id {
     egui::Id::unique("viewer-free-transform")
 }
 
+/// Enter Free Transform Points on a path: its box scales and rotates the whole path while its
+/// points stay editable (Layer ▸ Mask and Shape Path ▸ Free Transform Points, #290).
+pub(crate) fn begin_free_transform(ctx: &egui::Context, layer: LayerId, uid: u64) {
+    ctx.data_mut(|d| d.insert_temp(ft_id(), (layer, uid)));
+}
+
 pub(crate) fn end_free_transform(ctx: &egui::Context) {
     ctx.data_mut(|d| d.remove::<(LayerId, u64)>(ft_id()));
 }

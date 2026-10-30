@@ -1848,10 +1848,21 @@ fn phase_dblclick(app: &mut EffectcraftApp, ectx: &EvalCtx, resp: &egui::Respons
         && let Some(pos) = resp.interact_pointer_pos()
         && let Some((l, m)) = path_at(pos)
     {
-        // Double-click a path: point editing. Its points show and the layer's transform box
-        // stays hidden; no free-transform box is put around the path (After Effects).
+        // A mask: double-click enters Free Transform Points (#290), as in After Effects, with
+        // every point selected so a drag inside the box moves the whole mask. A shape layer's
+        // path: point editing, without the layer's transform box competing with the points.
+        let found = paths.iter().find(|p| p.layer == l && p.uid == m);
+        let is_mask = found.is_some_and(|p| p.is_mask);
+        let vertices = found.map_or(0, |p| p.sp.vertices.len());
         ov::end_free_transform(&ctx);
-        ov::begin_point_edit(&ctx, l, m);
+        ov::end_point_edit(&ctx);
+        if is_mask {
+            let all: Vec<serde_json::Value> = (0..vertices).map(|index| json!({"layer": l.0, "mask": m, "index": index})).collect();
+            let _ = app.session.execute("mask.selectVertices", json!({"vertices": all}));
+            ov::begin_free_transform(&ctx, l, m);
+        } else {
+            ov::begin_point_edit(&ctx, l, m);
+        }
     } else if resp.double_clicked()
         && !text_owns
         && !app.ui.tool.is_pen()

@@ -1098,7 +1098,7 @@ fn pen_shift_click_draws_a_straight_segment() {
 /// double-click on a point selects all of them in a free-transform box, and dragging inside it
 /// (or, once the box is gone, dragging a point) moves the whole mask (#290).
 #[test]
-fn pen_mask_undoes_step_by_step_and_double_click_enters_point_editing() {
+fn pen_mask_undoes_step_by_step_and_double_click_moves_the_whole_mask() {
     let mut h = harness();
     let plate = layer_id(&h, "Plate");
     h.state_mut().session.execute("layer.select", json!({"layers": [plate]})).unwrap();
@@ -1133,8 +1133,7 @@ fn pen_mask_undoes_step_by_step_and_double_click_enters_point_editing() {
         h.state_mut().session.execute("edit.redo", json!({})).unwrap();
     }
     h.run_steps(2);
-    // Double-click a point: point editing starts, without the free-transform box and without
-    // selecting every point (After Effects: the layer's box stays hidden until editing ends).
+    // Double-click a point: all of them selected, in a free-transform box.
     let at = screen(&h, [100.0, 300.0]);
     h.input_mut().events.push(Event::PointerMoved(at));
     h.step();
@@ -1142,17 +1141,22 @@ fn pen_mask_undoes_step_by_step_and_double_click_enters_point_editing() {
         h.input_mut().events.push(Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() });
     }
     h.run_steps(3);
-    // The click that precedes the double-click selects the point it lands on; what the old flow
-    // did, and this must not, is select every point.
-    let picked = h.state().session.state.selected_vertices.len();
-    assert!(picked < 4, "point editing starts without selecting every point (selected {picked})");
-    assert!(h.state().auto.find("viewer.freeTransform.handle.0").is_none(), "no free-transform box in point editing");
-    // A click away ends point editing; nothing was moved by the double-click.
+    assert_eq!(h.state().session.state.selected_vertices.len(), 4);
+    assert!(h.state().auto.find("viewer.freeTransform.handle.0").is_some(), "the free-transform box is up");
+    // Dragging inside the box moves the whole mask.
+    let (from, to) = (screen(&h, [300.0, 120.0]), screen(&h, [310.0, 130.0]));
+    drag(&mut h, from, to);
+    let path = mask_path(&h, "Plate");
+    assert!(path.vertices.iter().zip(&moved.vertices).all(|(v, c)| near(*v, [c[0] + 10.0, c[1] + 10.0])), "{path:?}");
+    // A click away ends the box; the points stay selected and dragging one moves them all.
     let away = screen(&h, [600.0, 340.0]);
     click(&mut h, away);
     h.run_steps(2);
     assert!(h.state().auto.find("viewer.freeTransform.handle.0").is_none());
-    assert_eq!(mask_path(&h, "Plate"), moved, "the mask is where it was");
+    let (from, to) = (screen(&h, [110.0, 310.0]), screen(&h, [100.0, 300.0]));
+    drag(&mut h, from, to);
+    let back = mask_path(&h, "Plate");
+    assert!(back.vertices.iter().zip(&moved.vertices).all(|(v, c)| near(*v, *c)), "{back:?}");
 }
 
 /// #513: clicking away from a mask's path, even on its own layer, deselects the mask's points;
