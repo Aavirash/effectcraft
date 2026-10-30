@@ -1416,6 +1416,12 @@ fn automation_roots_confine_file_access() {
         assert!(err, "{name} {args} should be refused: {c:?}");
         c[0]["text"].as_str().unwrap_or_default().to_string()
     };
+    // #2479: an unsaved project's queue item without `output` would write to the home folder.
+    call_json(&mut s, "execute_command", json!({"command": "comp.new", "params": {"name": "Unsaved", "width": 64, "height": 64}}));
+    let msg = denied(&mut s, "execute_command", json!({"command": "renderQueue.add", "params": {"comp": "Unsaved"}}));
+    assert!(msg.contains("home folder") && msg.contains("give `output`"), "{msg}");
+    call_json(&mut s, "execute_command", json!({"command": "renderQueue.add", "params": {"comp": "Unsaved", "output": p(&write, "unsaved.mp4")}}));
+    call_json(&mut s, "execute_command", json!({"command": "renderQueue.remove"}));
     // Reading: inside a read root, not outside.
     call_json(&mut s, "open_project", json!({"path": p(&read, "source.ecproj")}));
     let msg = denied(&mut s, "open_project", json!({"path": p(&outside, "free.ecproj")}));

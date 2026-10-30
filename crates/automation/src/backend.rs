@@ -64,7 +64,7 @@ impl Backend {
         let params = if params.is_null() { json!({}) } else { params };
         if let Some(c) = self.confinement.clone() {
             let lookup = match c.check_command(id, &params)? {
-                Some(crate::confine::Lookup::ProjectFile) => Some((crate::confine::Lookup::ProjectFile, self.run("project.summary", json!({}))?)),
+                Some(l @ (crate::confine::Lookup::ProjectFile | crate::confine::Lookup::QueueDefault)) => Some((l, self.run("project.summary", json!({}))?)),
                 Some(crate::confine::Lookup::RenderOutputs) => Some((crate::confine::Lookup::RenderOutputs, self.run("renderQueue.list", json!({}))?)),
                 None => None,
             };
