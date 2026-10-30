@@ -44,6 +44,7 @@ fn same_adapter(name: String) -> eframe::egui_wgpu::WgpuSetup {
 /// viewer's GPU frames change when the light is added.
 #[test]
 fn environment_light_lights_the_scene_on_the_gpu() {
+    let _device = crate::gpu_test::lock();
     let Some(probe) = effectcraft_gpu::Gpu::headless() else {
         eprintln!("no GPU adapter: skipping");
         return;
