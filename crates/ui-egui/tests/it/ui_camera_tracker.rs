@@ -16,8 +16,9 @@ const H: f64 = 360.0;
 
 fn app() -> (EffectcraftApp, u64, u64) {
     let mut s = Session::default();
-    s.execute("comp.new", json!({"name": "Shot", "width": W, "height": H, "duration": 2})).unwrap();
-    let plate = s.execute("layer.newSolid", json!({"name": "Plate", "color": "#406080"})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("comp.new", json!({"name": "Shot", "width": W as u32, "height": H as u32, "duration": 2, "frameRate": 30})).unwrap();
+    let plate =
+        s.execute("layer.newSolid", json!({"name": "Plate", "color": "#406080", "width": W as u32, "height": H as u32})).unwrap()["layer"].as_u64().unwrap();
     let r = s.execute("effect.apply", json!({"effect": ct::ID, "layers": [plate]})).unwrap();
     let uid = r["effects"][0].as_u64().unwrap();
     // A synthetic solve: a static camera (focal 600) looking at a 6 × 4 grid of points on z = 1.
@@ -135,7 +136,11 @@ fn viewer_points_selection_and_effect_controls() {
     h.state_mut().show_panel(PanelKind::EffectControls);
     h.run_steps(4);
     let all = ids(&h);
-    for want in [format!("effectControls.cameraTracker.{uid}.analyze"), format!("effectControls.cameraTracker.{uid}.createCamera")] {
+    for want in [
+        format!("effectControls.cameraTracker.{uid}.analyze"),
+        format!("effectControls.cameraTracker.{uid}.createCamera"),
+        format!("effectControls.cameraTracker.{uid}.exportBlender"),
+    ] {
         assert!(all.contains(&want), "missing {want}");
     }
     // Tracker panel: Track Camera is available for the selected layer.
@@ -143,6 +148,56 @@ fn viewer_points_selection_and_effect_controls() {
     h.run_steps(3);
     assert!(ids(&h).iter().any(|i| i == "tracker.trackCamera"));
     assert!(h.state().session.is_enabled("track.camera"));
+}
+
+#[test]
+fn blender_export_button_opens_python_dialog_and_writes_scene() {
+    use effectcraft_engine::project::{Footage, FootageKind, ItemKind, LayerId, LayerSource};
+    let (mut a, plate, uid) = app();
+    let cid = a.session.active_comp_id().unwrap();
+    a.session
+        .edit("video fixture", None, |p, _| {
+            let item = p.add_item(
+                "Video",
+                Default::default(),
+                None,
+                ItemKind::Footage(Footage {
+                    path: "/tmp/effectcraft-ui-synthetic.mp4".into(),
+                    kind: FootageKind::Video,
+                    width: W as u32,
+                    height: H as u32,
+                    has_video: true,
+                    duration: effectcraft_engine::time::Tick::from_seconds_f64(2.0),
+                    ..Default::default()
+                }),
+            );
+            p.comp_mut(cid).unwrap().layer_mut(LayerId(plate)).unwrap().source = LayerSource::Footage { item };
+            Ok(())
+        })
+        .unwrap();
+    a.session.camera_pending.clear();
+    let output = std::env::temp_dir().join(format!("effectcraft-ui-blender-{}.py", std::process::id()));
+    let selected_path = output.clone();
+    a.hooks.pick_save_file = Some(Box::new(move |name, ext| {
+        assert!(name.ends_with(".py"));
+        assert_eq!(ext, "py");
+        Some(selected_path.to_string_lossy().into_owned())
+    }));
+    let shot = std::env::var("EFFECTCRAFT_BLENDER_UI_SNAPSHOT").ok();
+    let builder = Harness::builder().with_size(egui::vec2(1600.0, 1000.0));
+    let builder = if shot.is_some() { builder.wgpu() } else { builder };
+    let mut h = builder.build_eframe(|_| a);
+    h.state_mut().show_panel(PanelKind::EffectControls);
+    h.run_steps(5);
+    let button = rect(&h, &format!("effectControls.cameraTracker.{uid}.exportBlender"));
+    if let Some(path) = shot {
+        h.render().expect("render export button").save(path).unwrap();
+    }
+    click(&mut h, button.center(), Default::default());
+    assert!(output.exists(), "UI export failed: {}", h.state().ui.status);
+    let script = std::fs::read_to_string(output).expect("clicking the export button saves a Python scene");
+    assert!(script.contains("def import_scene():"));
+    assert_eq!(h.state().session.active_comp().unwrap().layers.len(), 1, "export does not create a camera in the source project");
 }
 
 /// Drag with `button` from `from` to `to` in steps, then release.

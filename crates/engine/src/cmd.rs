@@ -10,6 +10,7 @@ mod animation;
 pub(crate) mod app_more;
 mod autotrace;
 mod batch;
+mod blender;
 mod camera_cmds;
 mod comp;
 pub(crate) mod comp_more;
