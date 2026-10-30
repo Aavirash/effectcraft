@@ -86,7 +86,7 @@ fn imported_files_go_into_the_comp_where_they_were_dropped() {
     s.execute("file.import", params).unwrap();
     let comp = s.active_comp().unwrap();
     assert_eq!(comp.layers.iter().map(|l| l.name.as_str()).collect::<Vec<_>>(), ["a.png", "b.png", "Bg"]);
-    for l in &comp.layers[..2] {
+    for l in comp.layers.iter().take(2) {
         assert_eq!(l.props.prop("transform/position").map(|p| p.value.clone()), Some(effectcraft_keyframe::Value::Vec3([40.0, 50.0, 0.0])));
         assert_eq!(l.in_point, effectcraft_time::Tick::from_seconds_f64(1.0));
     }

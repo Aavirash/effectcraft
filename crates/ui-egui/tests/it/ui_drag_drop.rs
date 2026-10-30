@@ -236,7 +236,7 @@ fn dragging_selected_project_items_adds_every_item_to_the_viewer() {
     let to = comp_to_screen(&h.ctx, [80.0, 45.0]).unwrap();
     drag(&mut h, from, to, Modifiers::NONE);
     assert_eq!(stack(&h), ["Clip", "Other", "Top", "Middle", "Bottom"]);
-    for layer in &h.state().session.active_comp().unwrap().layers[..2] {
+    for layer in h.state().session.active_comp().unwrap().layers.iter().take(2) {
         let Some(KV::Vec3(p)) = layer.props.prop("transform/position").map(|p| p.value.clone()) else { panic!("no position") };
         let tol = 1.0 / last_fit(&h.ctx) as f64 + 1e-6;
         assert!((p[0] - 80.0).abs() <= tol && (p[1] - 45.0).abs() <= tol, "{p:?}");

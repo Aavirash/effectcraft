@@ -210,7 +210,7 @@ fn gpu_matches_cpu_wide_penumbrae() {
     set(&mut comp.layers[0], "lightOptions/shadowDiffusion", Value::Scalar(30.0));
     let s = scene(&p, cid);
     let (cpu, gt) = (adv::raster::render(&s), g.raster_3d(&s).expect("gpu raster"));
-    for l in &mut p.comp_mut(cid).unwrap().layers[..2] {
+    for l in p.comp_mut(cid).unwrap().layers.iter_mut().take(2) {
         set(l, "lightOptions/castsShadows", Value::Bool(false));
     }
     let unshadowed = adv::raster::render(&scene(&p, cid));
@@ -280,7 +280,7 @@ pub(crate) fn dof_mb_project() -> (Project, ItemId) {
     c.enable_motion_blur = true;
     c.motion_blur_samples = 6;
     // The sphere moves 40 px per frame.
-    let sphere = c.layers.iter_mut().find(|l| matches!(l.source, LayerSource::Primitive { kind: PrimitiveKind::Sphere })).unwrap();
+    let sphere = c.layers.find_mut(|l| matches!(l.source, LayerSource::Primitive { kind: PrimitiveKind::Sphere })).unwrap();
     sphere.switches.motion_blur = true;
     sphere.props.prop_mut("transform/position").unwrap().keys = vec![
         effectcraft_keyframe::Keyframe::new(Tick::ZERO, Value::Vec3([80.0, 95.0, 0.0])),
@@ -449,7 +449,7 @@ fn gpu_compositor_draws_advanced_3d_runs_on_the_device() {
     eprintln!("walk: {:.3} % beyond 1/255 (max {max:.4})", share * 100.0);
     assert!(share <= 0.01, "{:.3} % of pixels differ", share * 100.0);
     // A blend mode in the run takes the 2D compositing path (`SplitRun`, also on the GPU).
-    p.comp_mut(cid).unwrap().layers.iter_mut().find(|l| l.switches.three_d && !l.is_light() && l.source.is_av()).unwrap().blend_mode =
+    p.comp_mut(cid).unwrap().layers.find_mut(|l| l.switches.three_d && !l.is_light() && l.source.is_av()).unwrap().blend_mode =
         effectcraft_color::BlendMode::Screen;
     let (ctx, run) = run_of(&p, cid);
     assert!(Renderer::new(&p, &NoFootage, RenderOpts::default()).prepare_adv_run(&ctx, &run, (240, 160)).is_none());
@@ -570,12 +570,12 @@ fn gpu_compositor_draws_split_advanced_3d_runs_and_skies() {
             });
         }
         let c = p.comp_mut(cid).unwrap();
-        let env = c.layers.iter_mut().find(|l| l.environment).unwrap();
+        let env = c.layers.find_mut(|l| l.environment).unwrap();
         env.props.sub_mut("effects").unwrap().children.push(ramp.into());
         let ids: Vec<_> = c.layers.iter().filter(|l| l.switches.three_d && !l.is_light() && !l.environment && l.source.is_av()).map(|l| l.id).collect();
         let top = c.layers[0].id;
         fn by_id(c: &mut Comp, id: effectcraft_project::LayerId) -> &mut effectcraft_project::Layer {
-            c.layers.iter_mut().find(|l| l.id == id).unwrap()
+            c.layers.find_mut(|l| l.id == id).unwrap()
         }
         match case {
             0 => by_id(c, ids[1]).blend_mode = effectcraft_color::BlendMode::Screen,
@@ -593,7 +593,7 @@ fn gpu_compositor_draws_split_advanced_3d_runs_and_skies() {
             }
             _ => {
                 // An environment background behind the run, and the 2D track matte.
-                c.layers.iter_mut().find(|l| l.environment).unwrap().environment_background = true;
+                c.layers.find_mut(|l| l.environment).unwrap().environment_background = true;
                 by_id(c, ids[0]).track_matte = Some(effectcraft_project::TrackMatte { layer: top, kind: effectcraft_project::MatteKind::Alpha });
             }
         }

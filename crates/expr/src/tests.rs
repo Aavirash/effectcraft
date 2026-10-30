@@ -77,7 +77,7 @@ fn fx() -> Fx {
 
     let ids = (a.id, b.id, title.id, shape.id);
     let c = p.comp_mut(cid).unwrap();
-    c.layers = vec![a, b, title, shape];
+    c.layers = vec![a, b, title, shape].into();
     c.markers.push(Marker { time: secs(1.5), comment: "comp marker".into(), ..Default::default() });
 
     let other = Comp::new(64, 32, FrameRate::FPS_24, Tick::from_seconds_f64(3.0));

@@ -544,7 +544,7 @@ fn auto_orient(s: &mut Session, p: &Value) -> Result<Value> {
     };
     s.edit("Auto-Orient", None, |proj, _| {
         let comp = proj.comp_mut(cid).ok_or(EngineError::NoComp)?;
-        for l in comp.layers.iter_mut().filter(|l| ids.contains(&l.id)) {
+        for l in comp.layers.iter_mut_where(|l| ids.contains(&l.id)) {
             let rig = l.is_camera() || l.is_light();
             let ok = match mode {
                 AutoOrient::Off | AutoOrient::AlongPath => true,
