@@ -689,6 +689,7 @@ impl Chain {
         // Each object has its own prompts: a few clicks from its strokes and a box around what the classic engine
         // makes of them on that frame (clicks alone pick a part of the object, not all of it).
         let objects = self.data.objects();
+        let several = objects.len() > 1;
         let mut by_object: Vec<Vec<(i64, effectcraft_segment::Prompt)>> = vec![];
         for &obj in &objects {
             let mut prompts = vec![];
@@ -751,7 +752,6 @@ impl Chain {
             // a frame is occluded when every object is absent; otherwise the doubtful object sets the confidence
             let (occluded, confidence) = (!present, if present { confidence } else { worst });
             // with several objects each keeps its own matte too (Show Object, the per-object overlay)
-            let several = objects.len() > 1;
             let mut parts = Vec::with_capacity(segs.len());
             for (obj, seg) in segs {
                 if several {
@@ -803,8 +803,8 @@ impl Chain {
     }
 }
 
-/// Each object's matte of layer frame `f` where the tracker followed several objects (full resolution; computes
-/// nothing). Show Object limits it to the one chosen. Empty with fewer than two objects.
+/// Each tracked object's matte of layer frame `f` in a multi-object instance (full resolution; computes
+/// nothing). Show Object limits it to the one chosen. Empty with fewer than two objects in the instance.
 pub fn object_mattes(params: &Params, layer_size: [f64; 2], fps: f64, f: i64) -> Vec<(u32, Arc<FrameSeg>)> {
     let mut chain = Chain::new(params, layer_size, fps, 1.0);
     let objects = chain.data.objects();
@@ -1429,6 +1429,43 @@ mod tests {
                 }
             }
             Ok(())
+        }
+    }
+
+    #[test]
+    fn a_single_followed_object_keeps_its_matte_in_a_multi_object_instance() {
+        for outside_span in [false, true] {
+            let mut data = RotoData::default();
+            data.add(Stroke { kind: StrokeKind::Fg, frame: 0, radius: 3.0, points: vec![[35.0, 40.0]], object: 0 }, 2, [0, 5]);
+            data.add(Stroke { kind: StrokeKind::Fg, frame: if outside_span { 5 } else { 0 }, radius: 3.0, points: vec![[85.0, 70.0]], object: 1 }, 2, [0, 5]);
+            if !outside_span {
+                data.add(Stroke { kind: StrokeKind::Bg, frame: 0, radius: 8.0, points: vec![[85.0, 70.0]], object: 1 }, 2, [0, 5]);
+            }
+            data.span = [0, 2];
+            assert_eq!(data.objects(), [0, 1]);
+            let mut params = params_with(&data);
+            params.values.insert(INPUT_KEY.into(), Value::Str(format!("one-followed-object-{outside_span}")));
+            let mut chain = Chain::new(&params, [100.0, 80.0], 25.0, 1.0);
+            chain.model = Some(Arc::new(TwoObjects(Default::default())));
+            chain.keys = data.chain_keys(seed_with(&params, [100.0, 80.0], 25.0, effectcraft_segment::SAM2_TINY.id));
+            let mut get = |f: i64| Some(Arc::new(frame(f as f64 / 25.0)));
+            assert_eq!(chain.track(&mut get, &|| false, &mut |_| {}).unwrap().unwrap().frames, 3);
+            let matte = chain.object_seg(1, 0).expect("the followed object keeps its own matte");
+            assert!(matte.area() > 0);
+            assert!(chain.object_seg(1, 1).is_none(), "the unprompted object has no invented matte");
+            chain.show_object = 1;
+            assert_eq!(chain.ensure(1, &mut get, &|| false).unwrap().matte, matte.matte);
+            let saved = tracks_of(&chain).unwrap();
+            assert_eq!(saved.objects.get(&0).unwrap().len(), 3);
+            assert!(!saved.objects.contains_key(&1));
+            params.values.insert(TRACKED.into(), Value::Str(saved.to_json()));
+            params.values.insert("rotoBrushMatte/object".into(), Value::Scalar(1.0));
+            let reopened = Chain::new(&params, [100.0, 80.0], 25.0, 1.0);
+            assert_eq!(reopened.object_seg(1, 0).unwrap().matte, matte.matte);
+            assert_eq!(reopened.ensure(1, &mut |_| None, &|| false).unwrap().matte, matte.matte);
+            let overlays = object_mattes(&params, [100.0, 80.0], 25.0, 1);
+            assert_eq!(overlays.len(), 1);
+            assert_eq!((overlays[0].0, overlays[0].1.area()), (0, matte.area()));
         }
     }
 
