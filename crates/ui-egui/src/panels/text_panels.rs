@@ -3,7 +3,7 @@
 //! otherwise they apply to the whole selected text layer.
 
 use crate::i18n::tr;
-use effectcraft_engine::keyframe::{BaselineOption, Composer, Direction, FigureStyle, FigureWidth, Justify, Kerning, TextDoc};
+use effectcraft_engine::keyframe::{BaselineOption, Composer, Direction, FigureStyle, FigureWidth, Justify, Kerning, LineJoin, TextDoc};
 use effectcraft_engine::render::EvalCtx;
 use egui::{Align2, Rect, Sense, pos2, vec2};
 use serde_json::json;
@@ -57,7 +57,16 @@ pub fn text_target(app: &EffectcraftApp) -> Option<TextTarget> {
         .iter()
         .filter_map(|id| comp.layer(*id))
         .find(|l| matches!(l.source, effectcraft_engine::project::LayerSource::Text))?;
-    let ectx = EvalCtx { project: &app.session.project, comp_id: cid, comp, time: app.session.time(), expr: app.session.expr.as_deref(), footage: None };
+    let ectx = EvalCtx {
+        project: &app.session.project,
+        comp_id: cid,
+        comp,
+        time: app.session.time(),
+        expr: app.session.expr.as_deref(),
+        footage: None,
+        property_overrides: &[],
+        media_overrides: &[],
+    };
     effectcraft_engine::render::text::source_text(&ectx, layer).map(|d| TextTarget { layer: layer.id.0, doc: d, range: None })
 }
 
@@ -164,22 +173,79 @@ fn kerning_field(app: &mut EffectcraftApp, ui: &mut egui::Ui, p: &egui::Painter,
     }
 }
 
-/// Stroke Over Fill / Fill Over Stroke (grid row 2, right).
-fn stroke_order_field(app: &mut EffectcraftApp, ui: &mut egui::Ui, g: Grid, doc: &TextDoc, actions: &mut Vec<serde_json::Value>) {
+/// Stroke order (grid row 2, right): per character (Fill Over Stroke / Stroke Over Fill), or for
+/// the whole layer, which is the layer's More Options > Fill & Stroke (`fill_stroke`, see
+/// [`layer_fill_stroke`]). Returns the layer order picked, if any.
+fn stroke_order_field(
+    app: &mut EffectcraftApp,
+    ui: &mut egui::Ui,
+    g: Grid,
+    doc: &TextDoc,
+    fill_stroke: u32,
+    actions: &mut Vec<serde_json::Value>,
+) -> Option<u32> {
     let t = app.tokens;
     let Grid { x0, y, w, enabled } = g;
     let fx = x0 + w / 2.0;
     let fy = y + 2.0 * 28.0;
     let dr = Rect::from_min_size(pos2(fx, fy), vec2(w / 2.0, 20.0));
-    let labels = vec!["Fill Over Stroke".to_string(), "Stroke Over Fill".to_string()];
+    let labels: Vec<String> =
+        ["Fill Over Stroke", "Stroke Over Fill", "-", "All Fills Over All Strokes", "All Strokes Over All Fills"].iter().map(|s| s.to_string()).collect();
+    let current = match fill_stroke {
+        1 => 3,
+        2 => 4,
+        _ => doc.stroke_over_fill as usize,
+    };
     let pop = egui::Id::unique("char-stroke-order-pop");
-    if widgets::dropdown(ui, dr, &labels[doc.stroke_over_fill as usize], &t, egui::Id::unique("char-stroke-order")).clicked() && enabled {
+    if widgets::dropdown(ui, dr, &labels[current], &t, egui::Id::unique("char-stroke-order")).clicked() && enabled {
         widgets::open_popup(ui, pop);
     }
     app.auto.add("character.strokeOverFill", dr, "Stroke order");
-    if let Some(i) = widgets::popup_menu(ui, pop, dr.left_bottom(), &labels, Some(doc.stroke_over_fill as usize)) {
-        actions.push(json!({"strokeOverFill": i == 1}));
+    match widgets::popup_menu(ui, pop, dr.left_bottom(), &labels, Some(current)) {
+        Some(i @ (3 | 4)) => Some(i as u32 - 2),
+        Some(i) => {
+            actions.push(json!({"strokeOverFill": i == 1}));
+            // A per-character order puts the layer back on the Per Character Palette, or it
+            // would have no visible effect.
+            (fill_stroke != 0).then_some(0)
+        }
+        None => None,
     }
+}
+
+/// Line Join of the stroke: Miter / Round / Bevel (grid row 5, under the stroke width).
+fn line_join_field(app: &mut EffectcraftApp, ui: &mut egui::Ui, p: &egui::Painter, g: Grid, doc: &TextDoc, actions: &mut Vec<serde_json::Value>) {
+    let Grid { x0, y, w, enabled } = g;
+    let bw = (w - 2.0 * 4.0) / 3.0;
+    for (i, (key, label, join)) in
+        [("miter", "Miter", LineJoin::Miter), ("round", "Round", LineJoin::Round), ("bevel", "Bevel", LineJoin::Bevel)].into_iter().enumerate()
+    {
+        let r = Rect::from_min_size(pos2(x0 + i as f32 * (bw + 4.0), y + 5.0 * 28.0), vec2(bw, 22.0));
+        if toggle(app, ui, p, r, &format!("character.lineJoin.{key}"), (label, doc.line_join == join, false)) && enabled {
+            actions.push(json!({"lineJoin": key}));
+        }
+    }
+}
+
+/// Sets the layer's More Options > Fill & Stroke to `v` together with the per-character order
+/// it changes, as one undo step.
+fn apply_layer_fill_stroke(app: &mut EffectcraftApp, ctx: &egui::Context, tt: &TextTarget, v: u32, actions: Vec<serde_json::Value>) {
+    let set = json!({"command": "prop.set", "params": {"layer": tt.layer, "path": "text/moreOptions/fillStroke", "value": v}});
+    let steps: Vec<serde_json::Value> =
+        std::iter::once(set).chain(actions.into_iter().map(|a| json!({"command": "layer.setText", "params": tt.params(a)}))).collect();
+    if let Err(e) = crate::menus::invoke(app, ctx, "engine.batch", json!({"steps": steps, "label": "Stroke Order"})) {
+        app.ui.status = e;
+    }
+}
+
+/// A text layer's More Options > Fill & Stroke in the active comp: 0 per character palette,
+/// 1 all fills over all strokes, 2 all strokes over all fills.
+fn layer_fill_stroke(app: &EffectcraftApp, layer: u64) -> u32 {
+    let (Some(comp), Some(cid)) = (app.session.active_comp(), app.session.active_comp_id()) else { return 0 };
+    let Some(l) = comp.layer(effectcraft_engine::project::LayerId(layer)) else { return 0 };
+    let Some(more) = l.props.sub("text").and_then(|t| t.sub("moreOptions")) else { return 0 };
+    let ectx = EvalCtx { expr: app.session.expr.as_deref(), ..EvalCtx::new(&app.session.project, cid, comp, app.session.time()) };
+    ectx.e(l, more, "fillStroke")
 }
 
 /// The Character panel for the text being edited (or the selected text layer): font family and
@@ -223,8 +289,10 @@ pub fn character(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
     let grid = Grid { x0, y, w, enabled };
     numeric_fields(app, ui, &p, grid, &doc, &mut actions);
     kerning_field(app, ui, &p, grid, &doc, &mut actions);
-    stroke_order_field(app, ui, grid, &doc, &mut actions);
-    y += 5.0 * 28.0 + 8.0;
+    let fill_stroke = target.as_ref().map_or(0, |tt| layer_fill_stroke(app, tt.layer));
+    let layer_fill_stroke_pick = stroke_order_field(app, ui, grid, &doc, fill_stroke, &mut actions);
+    line_join_field(app, ui, &p, grid, &doc, &mut actions);
+    y += 6.0 * 28.0 + 8.0;
     // Fill / stroke swatches with their enable boxes.
     for (i, (key, label, on, c)) in [("fill", "Fill", doc.apply_fill, doc.fill), ("stroke", "Stroke", doc.apply_stroke, doc.stroke)].into_iter().enumerate() {
         let fx = x0 + i as f32 * (w / 2.0);
@@ -245,7 +313,8 @@ pub fn character(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
         }
         let er = Rect::from_min_size(pos2(fs.max.x + 4.0, y + 1.0), vec2(18.0, 18.0));
         let active = app.ui.text_color_pick.as_ref().is_some_and(|pick| pick.layer == target.as_ref().map_or(0, |tt| tt.layer) && pick.field == key);
-        let eye = super::fx_widgets::eyedropper_button(ui, er, active, egui::Id::unique(("char-eye", key)), &t);
+        let eye = super::fx_widgets::eyedropper_button(ui, er, active, egui::Id::unique(("char-eye", key)), &t)
+            .on_hover_text(tr("Eyedropper: click, then click in the Composition panel"));
         app.auto.add(&format!("character.{key}.eyedropper"), er, &format!("{label} eyedropper"));
         if eye.clicked() {
             if active {
@@ -359,6 +428,9 @@ pub fn character(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
         _ => {}
     }
     let Some(tt) = target else { return };
+    if let Some(v) = layer_fill_stroke_pick {
+        apply_layer_fill_stroke(app, &ctx, &tt, v, std::mem::take(&mut actions));
+    }
     for a in actions {
         if let Err(e) = crate::menus::invoke(app, &ctx, "layer.setText", tt.params(a)) {
             app.ui.status = e;
@@ -630,6 +702,17 @@ struct FontSearch {
 }
 
 /// Shared font menu for Character and Properties: search, recent fonts and previews.
+/// Finish a font rescan started from the font menu and report how many faces it added.
+/// While the scan is still walking font folders, ask for another frame so the menu updates.
+pub(crate) fn poll_font_rescan(app: &mut EffectcraftApp, ctx: &egui::Context) {
+    if effectcraft_engine::text::fonts::rescan_busy() {
+        ctx.request_repaint_after(std::time::Duration::from_millis(100));
+    }
+    if let Some(n) = effectcraft_engine::text::fonts::poll_rescan() {
+        app.ui.status = format!("{} +{n}", tr("Rescan Fonts"));
+    }
+}
+
 pub(super) fn font_picker(app: &mut EffectcraftApp, ui: &mut egui::Ui, id: egui::Id, rect: Rect, current: &str, auto: &str, enabled: bool) -> Option<String> {
     let state_id = id.with("search-state");
     app.auto.add(auto, rect, "Font family");
@@ -696,6 +779,15 @@ pub(super) fn font_picker(app: &mut EffectcraftApp, ui: &mut egui::Ui, id: egui:
         let filter_h = 22.0;
         let row = ui.add_sized([ui.available_width(), filter_h], widgets::DragCheckbox::new(&mut only_variable, tr("Variable fonts only")));
         app_ref.auto.add(&format!("{auto}.variable"), row.rect, "Variable fonts only");
+        // #1089: fonts installed after launch appear without restarting. The button is its own
+        // row: the popup is only 180 px wide, so a control pinned to the filter row covers
+        // "Variable fonts only". The scan itself runs off the UI thread (`poll_font_rescan`).
+        let rescan_h = 22.0;
+        let (resc, _) = ui.allocate_exact_size(vec2(ui.available_width(), rescan_h), egui::Sense::hover());
+        if widgets::text_button(ui, resc, tr("Rescan Fonts"), false, &t, id.with("rescan")).clicked() && effectcraft_engine::text::fonts::start_rescan() {
+            app_ref.ui.status = format!("{}…", tr("Rescan Fonts"));
+        }
+        app_ref.auto.add(&format!("{auto}.rescan"), resc, "Rescan Fonts");
         let toggled = row.changed();
         if toggled {
             ui.data_mut(|d| d.insert_temp(variable_id, only_variable));
@@ -760,10 +852,11 @@ pub(super) fn font_picker(app: &mut EffectcraftApp, ui: &mut egui::Ui, id: egui:
             let resp = ui.add_sized([row_width, 24.0], egui::Button::selectable(index == selected, ""));
             resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), index == selected, &r.display));
             let label_rect = Rect::from_min_size(resp.rect.min + vec2(5.0, 0.0), vec2(label_width - 5.0, resp.rect.height()));
+            let name = drawn_font_name(ui.ctx(), r);
             ui.painter().with_clip_rect(label_rect.intersect(ui.clip_rect())).text(
                 label_rect.left_center(),
                 Align2::LEFT_CENTER,
-                &r.display,
+                name,
                 Tokens::ui(12.0),
                 t.text,
             );
@@ -797,7 +890,7 @@ pub(super) fn font_picker(app: &mut EffectcraftApp, ui: &mut egui::Ui, id: egui:
             if resp.clicked() {
                 chosen = Some(r.family.clone());
             }
-            resp.on_hover_text(&r.display);
+            resp.on_hover_text(name);
         }
         chosen
     };
@@ -943,6 +1036,13 @@ fn align_glyph(p: &egui::Painter, r: Rect, op: &str, distribute: bool, t: &Token
     }
 }
 
+/// The name a font menu row draws: the font's own-language name when the interface fonts have a
+/// glyph for each of its characters, else its English family name. A Simplified Chinese name
+/// such as 微软雅黑 can have characters that the Han face of an English interface lacks.
+fn drawn_font_name<'a>(ctx: &egui::Context, row: &'a effectcraft_engine::FontRow) -> &'a str {
+    if ctx.fonts_mut(|f| f.has_glyphs(&Tokens::ui(12.0), &row.display)) { &row.display } else { &row.family }
+}
+
 /// Where a font's "Sample" outlines (`lines`, baseline at y = 0) go in `room`: `(scale, origin)`,
 /// a point `p` landing at `origin + p * scale`. At their natural size on `baseline` when they fit;
 /// fonts with large or odd metrics are scaled down (never up) and moved inside, so no preview
@@ -1000,5 +1100,18 @@ mod tests {
         }
         assert!(fit_preview(&[], room, baseline).is_none());
         assert!(fit_preview(&[vec![[f32::NAN, 1.0]]], room, baseline).is_none());
+    }
+
+    /// A font menu row draws the font's own-language name when the interface fonts have its
+    /// glyphs, and the English family name when they do not.
+    #[test]
+    fn font_menu_rows_draw_a_name_the_interface_fonts_have() {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx, &Tokens::for_kind(Default::default()), "en");
+        ctx.run_ui(Default::default(), |_| {}).textures_delta.clear();
+        let row = |display: &str| effectcraft_engine::FontRow { family: "Menu Name Test".into(), display: display.into(), recent: false, variable: false };
+        // U+F1234 is in a private use plane that no interface font maps.
+        assert_eq!(drawn_font_name(&ctx, &row("Menu \u{F1234}")), "Menu Name Test");
+        assert_eq!(drawn_font_name(&ctx, &row("Nom du menu")), "Nom du menu");
     }
 }

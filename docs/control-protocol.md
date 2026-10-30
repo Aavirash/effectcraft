@@ -45,7 +45,7 @@ printf '{"id":1,"method":"engine.execute","params":{"command":"comp.new","params
 
 Useful query commands for `engine.execute` (they aren't journaled or undoable): `project.summary`,
 `comp.info {comp?}`, `layer.tree {layer, comp?, depth?, time?}` (every node has a `path`),
-`prop.get {layer, path, comp?, time?}`, `editor.state`, `command.list {filter?, enabledOnly?, schemas?}`,
+`prop.get {layer, path, comp?, time?}` (a popup (enum) property also lists its `options`, `[{value, label}]`, as `layer.tree` does), `editor.state`, `command.list {filter?, enabledOnly?, schemas?}`,
 `command.describe {command}` (params doc and JSON Schema), `app.capabilities` (version, counts,
 export formats, parity summary), `jobs.list` (Progress panel jobs, e.g. the background
 `footage.check` after File ▸ Open).
@@ -103,7 +103,7 @@ Points are logical window coordinates. A target is `{id}` (the element's centre;
 | `ui.click` | `{id \| x,y, button?: left\|right\|middle, count?, modifiers?}` |
 | `ui.move` | `{id \| x,y}` |
 | `ui.drag` | `{from: target, to: target, steps? (12), modifiers?}`: press, move, release |
-| `ui.scroll` | `{id \| x,y, dx, dy}` |
+| `ui.scroll` | `{id \| x,y, dx?, dy?, unit?: point\|line, source?: wheel\|trackpad, pinch?, modifiers?}`: `line` is a mouse wheel (zooms the viewers); `point` (default) is a pixel-precise scroll; `source: trackpad` pans the viewers (as on macOS); with no `source` the viewers take a scroll in points as a wheel until one moves on both axes (a trackpad: from then on it pans); `pinch` is a trackpad pinch's zoom factor |
 | `ui.key` | `{key}`, for example `Space`, `F9`, `Cmd+Z`, `Cmd+Shift+Z`, `PageDown`, `Escape` |
 | `ui.type` | `{text}`: text input into the focused field |
 
@@ -210,7 +210,9 @@ takes a name, or as `{"Viewer":42}` and `{"ScriptPanel":77}` for viewers and Scr
   `move {target, zone?, before?}`, `setStackOpen {open}`, `resizeStack {height}`,
   `resizeSplit {path, size}`; `rect` is `[x, y, width, height]`). It returns
   `{"docking": workspace}`. `ui.dock.reset` returns the current workspace to its saved or
-  built-in layout and returns the same.
+  built-in layout and returns the same. Raw `Open` and `OpenAt` actions are refused in both
+  `ui.dock {action}` and `window.panel.layout {action}`, as in `window.dockAction`; use the
+  panel open commands instead.
 - `window.dockPanel {panel, anchor?, zone?, before?}` docks as `window.panel.dock`: `zone` is
   `center`, `tab`, `left`, `right`, `top`, `bottom`, `above` or `below`; without an anchor a
   side zone docks along that edge of the whole workspace. `window.floatPanel {panel, rect?}`

@@ -7,7 +7,8 @@
 use crate::i18n::tr;
 use effectcraft_engine::commands::text_edit::active_editor_snapshot;
 use effectcraft_engine::keyframe::Value as KV;
-use effectcraft_engine::project::styles::{BLENDING, STYLES};
+use effectcraft_engine::project::build::Ids;
+use effectcraft_engine::project::styles::{BLENDING, GROUP, STYLES, blending_options};
 use effectcraft_engine::project::{Layer, LayerId, ParamUi, Property};
 use egui::vec2;
 use serde_json::{Value, json};
@@ -24,10 +25,11 @@ pub struct LayerStyleState {
     checkpoint: Option<Checkpoint>,
 }
 
+/// The project and undo history as a dialog found them, for a Cancel that rolls its live edits back.
 #[derive(Clone)]
-struct Checkpoint {
-    project: std::sync::Arc<effectcraft_engine::project::Project>,
-    history: effectcraft_engine::history::History,
+pub(crate) struct Checkpoint {
+    pub(crate) project: std::sync::Arc<effectcraft_engine::project::Project>,
+    pub(crate) history: effectcraft_engine::history::History,
 }
 
 impl std::fmt::Debug for Checkpoint {
@@ -36,7 +38,7 @@ impl std::fmt::Debug for Checkpoint {
     }
 }
 
-fn checkpoint(app: &mut EffectcraftApp) -> Checkpoint {
+pub(crate) fn checkpoint(app: &mut EffectcraftApp) -> Checkpoint {
     app.session.history.merge_key = None;
     Checkpoint { project: app.session.project.clone(), history: app.session.history.clone() }
 }
@@ -134,6 +136,10 @@ pub fn show(app: &mut EffectcraftApp, ctx: &egui::Context, t: &Tokens) {
     };
     let lid = l.id.0;
     let styles = l.layer_styles().cloned();
+    // Shown only: its uids are never stored in the project.
+    let mut next = app.session.project.next_id;
+    let blending_template =
+        if styles.is_none() && l.can_have_styles() { app.session.active_comp().map(|c| blending_options(&mut Ids(&mut next), &c.global_light)) } else { None };
     let sel = app.dialog_state.layer_style.selected.clone();
     let time = app.session.time();
     let lt = l.layer_time(time);
@@ -198,7 +204,10 @@ pub fn show(app: &mut EffectcraftApp, ctx: &egui::Context, t: &Tokens) {
                 let head = ui.label(egui::RichText::new(name).font(Tokens::semibold(13.0)));
                 app.auto.add("dialog.layerStyle.page", head.rect, &sel);
                 ui.add_space(6.0);
-                let Some(g) = styles.as_ref().and_then(|s| s.sub(&sel)) else {
+                // A layer with no styles still shows Blending Options, with the values the Layer
+                // Styles group would start from; the first change creates the group (#1389).
+                let missing = blending_template.as_ref().filter(|_| sel == BLENDING && styles.is_none());
+                let Some(g) = styles.as_ref().and_then(|s| s.sub(&sel)).or(missing) else {
                     ui.label(egui::RichText::new(tr("Not applied: tick it in the list to add it.")).weak());
                     return;
                 };
@@ -220,13 +229,21 @@ pub fn show(app: &mut EffectcraftApp, ctx: &egui::Context, t: &Tokens) {
                                 let lbl = ui.label(&p.name);
                                 let v = p.value_at(lt);
                                 let edit = ui.scope(|ui| control(ui, p, &v));
-                                if let Some(nv) = edit.inner {
-                                    actions.push((
-                                        "prop.set".into(),
-                                        json!({"layer": lid, "prop": p.uid, "value": nv, "merge": format!("layer-style-dialog-{}", p.uid)}),
-                                    ));
-                                }
                                 let path = g.match_path_of(p.uid).unwrap_or_default();
+                                if let Some(nv) = edit.inner {
+                                    // Keyed by path, not uid: the group created by the first
+                                    // change and the rest of the drag stay one undo step.
+                                    let merge = format!("layer-style-dialog-{lid}-{sel}/{path}");
+                                    if missing.is_some() {
+                                        actions.push(("layer.style.add".into(), json!({"layers": [lid], "style": BLENDING, "merge": merge})));
+                                        actions.push((
+                                            "prop.set".into(),
+                                            json!({"layer": lid, "path": format!("{GROUP}/{BLENDING}/{path}"), "value": nv, "merge": merge}),
+                                        ));
+                                    } else {
+                                        actions.push(("prop.set".into(), json!({"layer": lid, "prop": p.uid, "value": nv, "merge": merge})));
+                                    }
+                                }
                                 app.auto.add(&format!("dialog.layerStyle.prop.{sel}/{path}"), lbl.rect, &p.name);
                                 app.auto.add(&format!("dialog.layerStyle.value.{sel}/{path}"), edit.response.rect, &p.name);
                                 ui.end_row();
@@ -258,23 +275,30 @@ pub fn finish(app: &mut EffectcraftApp, ok: bool) {
     if let Some(checkpoint) = app.dialog_state.layer_style.checkpoint.take()
         && !ok
     {
-        let changed = !std::sync::Arc::ptr_eq(&app.session.project, &checkpoint.project);
-        if changed {
-            // Snapshot only when Cancel has something to restore: opening and cancelling without
-            // edits must not copy the whole TextDoc.
-            let edited = active_editor_snapshot(&app.session);
-            app.session.project = checkpoint.project;
-            app.session.history = checkpoint.history;
-            app.session.sanitize_after_replacement(edited.as_ref());
-            app.session.bump();
-        } else {
-            // No edit was committed, so nothing can have become invalid. In particular, do not
-            // call sanitize_state here: its text-edit cleanup clones the whole TextDoc.
-            app.session.history = checkpoint.history;
-        }
+        restore(app, checkpoint);
     }
     app.session.history.merge_key = None;
     app.dialog = None;
+}
+
+/// Put the project and undo history back as `checkpoint` has them (nothing happens when nothing
+/// changed since).
+pub(crate) fn restore(app: &mut EffectcraftApp, checkpoint: Checkpoint) {
+    let changed = !std::sync::Arc::ptr_eq(&app.session.project, &checkpoint.project);
+    if changed {
+        // Snapshot only when Cancel has something to restore: opening and cancelling without
+        // edits must not copy the whole TextDoc.
+        let edited = active_editor_snapshot(&app.session);
+        app.session.project = checkpoint.project;
+        app.session.history = checkpoint.history;
+        app.session.sanitize_after_replacement(edited.as_ref());
+        app.session.bump();
+    } else {
+        // No edit was committed, so nothing can have become invalid. In particular, do not
+        // call sanitize_state here: its text-edit cleanup clones the whole TextDoc.
+        app.session.history = checkpoint.history;
+    }
+    app.session.history.merge_key = None;
 }
 
 #[cfg(test)]
