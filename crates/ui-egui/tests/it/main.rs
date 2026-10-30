@@ -76,6 +76,7 @@ mod ui_text_edit;
 mod ui_text_range_handles;
 mod ui_theme_favorites;
 mod ui_time_zoom_controls;
+mod ui_timeline_audio_levels;
 mod ui_timeline_effect_label;
 mod ui_timeline_pan;
 mod ui_timeline_shapes;

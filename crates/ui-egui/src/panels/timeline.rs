@@ -5683,18 +5683,21 @@ fn vector_editor(app: &mut EffectcraftApp, ui: &mut egui::Ui, ve: &ValueEdit<'_>
     // Mask Feather: two linked values, never negative (as in After Effects, #203).
     let feather = prop.match_id == "feather" && layer.props.parent_of(uid).is_some_and(|g| matches!(g.kind, GroupKind::Mask { .. }));
     let range = if feather { (0.0, 1e9) } else { (-1e9, 1e9) };
+    // Audio Levels link their two channels too, off by default, by the same dB change (#2485).
+    let levels = prop.match_id == "levels" && layer.props.parent_of(uid).is_some_and(|g| g.match_id == "audio");
     // Scale and Mask Feather: the chain link (Constrain Proportions, on by default).
     // Rectangle and Ellipse Path Size have it too, off by default (#2489).
     let size = prop.match_id == "size" && layer.props.parent_of(uid).is_some_and(|g| matches!(g.match_id.as_str(), "rect" | "ellipse"));
-    let linkable = feather || size || (pct && prop.match_id == "scale");
-    let linked = linkable && app.ui.timeline.is_linked(uid, !size);
+    let linkable = feather || size || levels || (pct && prop.match_id == "scale");
+    let linked = linkable && app.ui.timeline.is_linked(uid, !(size || levels));
     if linkable {
         let lr = Rect::from_center_size(pos2(x + 7.0, at.y), vec2(14.0, 14.0));
-        let resp = ui.interact(lr, egui::Id::unique(("tl-link", uid)), Sense::click()).on_hover_text(crate::i18n::tr("Constrain Proportions"));
+        let label = if levels { "Link Channels" } else { "Constrain Proportions" };
+        let resp = ui.interact(lr, egui::Id::unique(("tl-link", uid)), Sense::click()).on_hover_text(crate::i18n::tr(label));
         icons::paint(p, lr, Icon::Link, if linked { t.accent } else { t.text_faint });
-        app.auto.add(&format!("timeline.prop.{uid}.link"), lr, "Constrain Proportions");
+        app.auto.add(&format!("timeline.prop.{uid}.link"), lr, label);
         if resp.clicked() {
-            app.ui.timeline.toggle_link(uid, !size);
+            app.ui.timeline.toggle_link(uid, !(size || levels));
         }
         x += 18.0;
     }
@@ -5715,7 +5718,8 @@ fn vector_editor(app: &mut EffectcraftApp, ui: &mut egui::Ui, ve: &ValueEdit<'_>
             // Alt edits one value of a linked pair (Ctrl+Alt is a proportional scrub).
             let shown = if linked && !ui.input(|i| i.modifiers.alt && !widgets::proportional_scrub(i.modifiers)) { n.min(c.len()) } else { 1 };
             let from = if shown == 1 { d } else { 0 };
-            for (e, v) in widgets::constrained(c.get(from..from + shown).unwrap_or_default(), d - from, nv).into_iter().enumerate() {
+            let link = if levels { widgets::shifted } else { widgets::constrained };
+            for (e, v) in link(c.get(from..from + shown).unwrap_or_default(), d - from, nv).into_iter().enumerate() {
                 if let Some(slot) = nc.get_mut(from + e) {
                     *slot = v;
                 }
@@ -5723,8 +5727,15 @@ fn vector_editor(app: &mut EffectcraftApp, ui: &mut egui::Ui, ve: &ValueEdit<'_>
             ve.set(actions, json!(nc));
             // Typed into these components only: other selected layers keep the rest of
             // their own value (#1434).
+            // Linked Audio Levels: the typed channel, the other following by that layer's own
+            // change, so each keeps its balance (#2485).
             if let Some((_, a)) = actions.last_mut() {
-                a["dims"] = json!((from..from + shown).collect::<Vec<_>>());
+                if levels {
+                    a["dims"] = json!([d]);
+                    a["follow"] = json!((from..from + shown).filter(|&e| e != d).collect::<Vec<_>>());
+                } else {
+                    a["dims"] = json!((from..from + shown).collect::<Vec<_>>());
+                }
             }
         }
         x = r.max.x + if d + 1 < n { 2.0 } else { 0.0 };

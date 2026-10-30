@@ -286,8 +286,13 @@ fn twin_params(p: &Value, lid: LayerId, uid: Uid) -> Value {
 /// The value of property `uid` of `lid` at the CTI as numbers (Position with Separate
 /// Dimensions: its X / Y / Z Position).
 fn current_components(s: &Session, cid: ItemId, lid: LayerId, uid: Uid) -> Option<Vec<f64>> {
+    components_at(s, cid, lid, uid, None)
+}
+
+/// [`current_components`] at layer time `at` (the CTI when `None`).
+fn components_at(s: &Session, cid: ItemId, lid: LayerId, uid: Uid, at: Option<Tick>) -> Option<Vec<f64>> {
     let l = s.project.comp(cid)?.layer(lid)?;
-    let lt = l.layer_time(s.time_of(cid));
+    let lt = at.unwrap_or_else(|| l.layer_time(s.time_of(cid)));
     if let Some(tr) = l.transform()
         && tr.get("position").is_some_and(|q| q.uid == uid)
         && tr.get("positionX").is_some()
@@ -319,7 +324,9 @@ pub(crate) fn proportional_share(index: usize, count: usize) -> f64 {
 /// `prop.set`; with `selected`, also on the other selected layers: the same value, or with
 /// `offset` (a scrub) the same change from each layer's own value. A typed value with `dims`
 /// (the components edited, e.g. `[2]` for Z) sets only those components on the other layers,
-/// which keep the rest of their own value (#1434). With `offset` and
+/// which keep the rest of their own value (#1434); `follow` components move on each layer by the
+/// change its first typed component takes (linked Audio Levels keep each layer's balance, #2485).
+/// With `offset` and
 /// `proportional` (Proportional Scrubbing) each layer takes [`proportional_share`] of the change
 /// by its place in the selection order, the scrubbed layer too. One undo step (with `merge`,
 /// one that a continuing scrub keeps folding into).
@@ -344,10 +351,19 @@ fn set_selected(s: &mut Session, p: &Value) -> Result<Value> {
         (None, Some(a), Some(_)) if !scalar => Some(a.iter().filter_map(Value::as_u64).filter_map(|d| usize::try_from(d).ok()).collect()),
         _ => None,
     };
+    let follow: Vec<usize> =
+        p.get("follow").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_u64).filter_map(|d| usize::try_from(d).ok()).collect();
+    // Each layer's own value where `set` writes it (a `time` other than the CTI keys there).
     let typed = |s: &Session, q: &mut Value, olid: LayerId, ouid: Uid| {
         if let (Some(dims), Some(n)) = (&dims, &new)
-            && let Some(mut c) = current_components(s, cid, olid, ouid)
+            && let Some(mut c) = components_at(s, cid, olid, ouid, snapped_key_time(s, cid, olid, q, "prop.set").ok().flatten())
         {
+            let change = dims.first().and_then(|&d| Some(n.get(d)? - c.get(d)?)).unwrap_or(0.0);
+            for &d in &follow {
+                if let Some(slot) = c.get_mut(d) {
+                    *slot += change;
+                }
+            }
             for &d in dims {
                 if let (Some(slot), Some(v)) = (c.get_mut(d), n.get(d)) {
                     *slot = *v;
@@ -1388,7 +1404,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Set Property Value",
             [],
             None,
-            "{layer?, path|prop, value, time? (layer s by default), timeBase?: layer|comp, merge?, selected? (also the other selected layers), offset? (them by the same change), proportional? (with offset: Proportional Scrubbing, each layer by its share in selection order, the first none, the last all), dims? (with selected, a typed value: the components edited, e.g. [2] for Z; the other layers keep the rest of their own value)}",
+            "{layer?, path|prop, value, time? (layer s by default), timeBase?: layer|comp, merge?, selected? (also the other selected layers), offset? (them by the same change), proportional? (with offset: Proportional Scrubbing, each layer by its share in selection order, the first none, the last all), dims? (with selected, a typed value: the components edited, e.g. [2] for Z; the other layers keep the rest of their own value), follow? (with dims: components that move on each other layer by the change its first typed component takes)}",
             has_layers,
             set_selected
         ),
