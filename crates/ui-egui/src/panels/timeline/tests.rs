@@ -79,7 +79,7 @@ fn a_track_matte_mode_without_a_matte_takes_the_layer_above() {
     let (bottom, matte, top) = (find(&s, "Chain Bottom"), find(&s, "Matte"), find(&s, "Chain Top"));
     let candidates = [top.id, matte.id];
     let pick = |s: &mut effectcraft_engine::Session, name: &str, i: usize, choice: &str| {
-        let (id, params) = track_matte_pick(&find(s, name), &candidates, i, choice).expect("a menu item is an action");
+        let (id, params) = track_matte_pick(&[find(s, name).id.0], &candidates, i, choice).expect("a menu item is an action");
         s.execute(&id, params)
     };
     pick(&mut s, "Chain Bottom", 5, "Alpha Inverted Matte").unwrap();
@@ -97,7 +97,7 @@ fn a_track_matte_mode_without_a_matte_takes_the_layer_above() {
     assert!(pick(&mut s, "Chain Top", 5, "Alpha Matte").is_err());
     pick(&mut s, "Chain Bottom", 0, "No Track Matte").unwrap();
     assert!(find(&s, "Chain Bottom").track_matte.is_none());
-    assert!(track_matte_pick(&bottom, &candidates, 1, "-").is_none(), "a separator does nothing");
+    assert!(track_matte_pick(&[bottom.id.0], &candidates, 1, "-").is_none(), "a separator does nothing");
 }
 
 /// #957: vector footage gets the Continuously Rasterize switch; raster footage does not.
@@ -195,6 +195,11 @@ fn shape_group_inner_contents_is_elided() {
             "        Size",
             "        Position",
             "        Roundness",
+            "        Per-Corner Roundness",
+            "        Top Left Roundness",
+            "        Top Right Roundness",
+            "        Bottom Right Roundness",
+            "        Bottom Left Roundness",
             "      >Fill 1",
             "        Composite",
             "        Fill Rule",
@@ -561,14 +566,14 @@ fn the_key_menu_is_translated_and_cannot_edit_a_locked_layers_keys() {
         !h.get_by_label(label).accesskit_node().is_disabled()
     };
     for label in
-        ["Copy", "Select Equal Keyframes", "Select All Keyframes", "Delete", "Edit Value…", "Easy Ease", "Time-Reverse Keyframes", "Keyframe Velocity…"]
+        ["Copy", "Select Equal Keyframes", "Select All Keyframes", "Delete", "Edit Value…", "Easy Ease", "Time-Reverse Keyframes", "Keyframe Velocity…", "Mute Keyframes"]
     {
         assert!(enabled(false, true, label), "{label} on an unlocked layer");
     }
     for label in ["Copy", "Select Equal Keyframes", "Select All Keyframes"] {
         assert!(enabled(true, true, label), "{label} is still available on a locked layer");
     }
-    for label in ["Delete", "Edit Value…", "Easy Ease", "Time-Reverse Keyframes", "Keyframe Velocity…", "Linear"] {
+    for label in ["Delete", "Edit Value…", "Easy Ease", "Time-Reverse Keyframes", "Keyframe Velocity…", "Mute Keyframes", "Linear"] {
         assert!(!enabled(true, true, label), "{label} is off on a locked layer");
         assert!(!enabled(true, false, label), "{label} is off on an unselected locked key");
     }
@@ -613,4 +618,15 @@ fn a_key_menu_edit_selects_the_clicked_key_before_applying_the_command() {
     assert_eq!(keys[1], prop.keys[1], "the previously selected key was not edited");
     assert_eq!(app.session.state.selected_keys.len(), 1);
     assert_eq!(app.session.state.selected_keys[0].time, prop.keys[0].time);
+}
+
+#[test]
+fn layer_drop_target_skips_moving_layers_beyond_the_viewport() {
+    let mut rows: Vec<Row> = (1..=6).map(|id| Row { layer: LayerId(id), depth: 0, kind: RowKind::Layer }).collect();
+    rows.insert(4, Row { layer: LayerId(4), depth: 1, kind: RowKind::Prop { uid: 0 } });
+    let visible: Vec<_> = (2..=4).map(|id| (Rect::NOTHING, LayerId(id))).collect();
+    for at in [Some(2), None] {
+        assert_eq!(layer_drop_target(&rows, &visible, at, &[1, 4, 5]), Some(LayerId(6)), "skip moving headers and their properties across the viewport edge");
+        assert_eq!(layer_drop_target(&rows, &visible, at, &[1, 4, 5, 6]), None, "the stack ends when no stationary layer follows");
+    }
 }

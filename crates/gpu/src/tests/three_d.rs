@@ -134,6 +134,22 @@ fn lights_specular_transmission_and_shadows() {
 }
 
 #[test]
+fn wide_shadow_diffusion() {
+    // #2444: a wide penumbra takes more than the 3 × 3 kernel's samples; both sides pick the
+    // same count.
+    for depth in [BitDepth::Bpc8, BitDepth::Bpc32] {
+        let mut s = crossing(depth, BlendMode::Normal);
+        for l in &mut s.p.comp_mut(s.cid).unwrap().layers {
+            if l.switches.three_d {
+                set(l, "materialOptions/castsShadows", Value::Enum(1));
+            }
+        }
+        light(&mut s, LightKind::Point, [150.0, 20.0, -80.0], &[("castsShadows", Value::Bool(true)), ("shadowDiffusion", n(60.0))]);
+        check(&format!("wide shadow diffusion {depth:?}"), compare_at(&s, opts(), Tick::ZERO), 0.005);
+    }
+}
+
+#[test]
 fn depth_of_field_and_motion_blur() {
     for depth in [BitDepth::Bpc8, BitDepth::Bpc32] {
         let mut s = crossing(depth, BlendMode::Normal);
@@ -161,7 +177,7 @@ fn mattes_preserve_transparency_precomps_and_adjustment_splits() {
         let mid = s.push(m);
         let layers = &mut s.p.comp_mut(s.cid).unwrap().layers;
         layers[1].track_matte = Some(TrackMatte { layer: mid, kind: MatteKind::Luma });
-        if let Some(far) = layers.iter_mut().find(|l| l.switches.three_d && l.name == "Pattern") {
+        if let Some(far) = layers.find_mut(|l| l.switches.three_d && l.name == "Pattern") {
             far.preserve_transparency = true;
         }
         // Move the matte below the bottom so the 3D run stays one run.
@@ -187,7 +203,7 @@ fn mattes_preserve_transparency_precomps_and_adjustment_splits() {
         a.switches.three_d = true;
         set(&mut a, "transform/rotationX", Value::Scalar(40.0));
         let b = s.solid([0.2, 0.8, 0.4], 30, 20);
-        s.p.comp_mut(inner_id).unwrap().layers = vec![b, a];
+        s.p.comp_mut(inner_id).unwrap().layers = vec![b, a].into();
         let mut pre = build::layer(&mut s.p, &s.comp, "Inner", LayerSource::Comp { item: inner_id }, (80, 60), None);
         pre.switches.collapse = true;
         pre.switches.three_d = true;
@@ -283,7 +299,7 @@ fn two_d_layer_with_a_three_d_track_matte() {
             let layers = &mut s.p.comp_mut(s.cid).unwrap().layers;
             let fi = layers.iter().position(|l| l.id == fid).unwrap();
             layers[fi].track_matte = Some(TrackMatte { layer: mid, kind });
-            if let Some(ml) = layers.iter_mut().find(|l| l.id == mid) {
+            if let Some(ml) = layers.find_mut(|l| l.id == mid) {
                 ml.switches.video = false;
             }
             check(&format!("3d matte {kind:?} {depth:?}"), compare_at(&s, opts(), Tick::ZERO), 0.005);
