@@ -48,7 +48,6 @@ fn with_prop<T>(
     let t = s.time_of(cid);
     let linear = s.prefs.general.default_spatial_linear;
     s.edit(label, merge, |proj, state| {
-        let mut next = proj.next_id;
         let l = layer_mut(proj, cid, lid)?;
         let lt = l.layer_time(t);
         let pr = l.props.find_mut(uid).ok_or_else(|| bad("prop", "property vanished"))?;
@@ -64,15 +63,35 @@ fn with_prop<T>(
             }
         }
         if pr.match_id == "type" {
-            let removed = sync_polystar_type(l, uid, lt, &mut next)?;
-            if !removed.is_empty() {
-                state.selected_props.retain(|(layer, prop)| *layer != lid || !removed.contains(prop));
-                state.selected_keys.retain(|key| key.layer != lid || !removed.contains(&key.prop));
-            }
+            sync_polystar_property(proj, state, cid, lid, uid, t)?;
         }
-        proj.next_id = next;
         Ok(r)
     })
+}
+
+/// Keep Polystar controls and their selection references in the property's edit transaction.
+pub(super) fn sync_polystar_property(
+    proj: &mut effectcraft_project::Project,
+    state: &mut crate::EditorState,
+    cid: ItemId,
+    lid: LayerId,
+    uid: Uid,
+    time: Tick,
+) -> Result<()> {
+    let mut next = proj.next_id;
+    let layer = layer_mut(proj, cid, lid)?;
+    let removed = sync_polystar_type(layer, uid, layer.layer_time(time), &mut next)?;
+    if !removed.is_empty() {
+        if state.active_comp == Some(cid) {
+            state.selected_props.retain(|(layer, prop)| *layer != lid || !removed.contains(prop));
+            state.selected_keys.retain(|key| key.layer != lid || !removed.contains(&key.prop));
+        } else if let Some(selection) = state.comp_selections.get_mut(&cid) {
+            selection.props.retain(|(layer, prop)| *layer != lid || !removed.contains(prop));
+            selection.keys.retain(|key| key.layer != lid || !removed.contains(&key.prop));
+        }
+    }
+    proj.next_id = next;
+    Ok(())
 }
 
 /// A static Polygon has no inner controls; switching to Star creates them in schema order
@@ -664,12 +683,21 @@ fn set_expr(s: &mut Session, p: &Value) -> Result<Value> {
             s.project.comp(*cid).and_then(|c| c.layer(*lid).and_then(|l| super::link::reference(c, l, l, *uid, true))).unwrap_or_else(|| "value".into())
         })
         .collect();
-    let results = s.edit("Expression", merge_p(p), |proj, _| {
+    let times: Vec<_> = targets.iter().map(|(cid, _, _)| s.time_of(*cid)).collect();
+    let results = s.edit("Expression", merge_p(p), |proj, state| {
         let mut out = vec![];
-        for ((cid, lid, uid), def) in targets.iter().zip(&defs) {
+        let mut changed_types = vec![];
+        for (((cid, lid, uid), def), time) in targets.iter().zip(&defs).zip(&times) {
             let pr = layer_mut(proj, *cid, *lid)?.props.find_mut(*uid).ok_or_else(|| bad(C, "property vanished"))?;
             apply_expr(pr, &text, enabled, def);
             out.push(json!(pr.expr.as_ref().map(|e| e.text.clone())));
+            if pr.match_id == "type" {
+                changed_types.push((*cid, *lid, *uid, *time));
+            }
+        }
+        // All selected targets must be edited before a Type change can remove inner controls.
+        for (cid, lid, uid, time) in changed_types {
+            sync_polystar_property(proj, state, cid, lid, uid, time)?;
         }
         Ok(out)
     })?;
@@ -1045,9 +1073,11 @@ fn move_keys(s: &mut Session, p: &Value) -> Result<Value> {
 fn delete_keys(s: &mut Session, _: &Value) -> Result<Value> {
     let cid = s.active_comp_id().ok_or(EngineError::NoComp)?;
     let sel = s.state.selected_keys.clone();
+    let time = s.time();
     s.edit("Delete Keyframes", None, |proj, st| {
         let comp = proj.comp_mut(cid).ok_or(EngineError::NoComp)?;
         let mut removed = 0usize;
+        let mut changed = std::collections::BTreeSet::new();
         for k in &sel {
             if let Some(pr) = comp.layer_mut(k.layer).and_then(|l| l.props.find_mut(k.prop))
                 && let Some(i) = key_at(&pr.keys, k.time)
@@ -1057,9 +1087,15 @@ fn delete_keys(s: &mut Session, _: &Value) -> Result<Value> {
                 }
                 pr.keys.remove(i);
                 removed += 1;
+                if pr.match_id == "type" {
+                    changed.insert((k.layer, k.prop));
+                }
             }
         }
         st.selected_keys.clear();
+        for (layer, prop) in changed {
+            sync_polystar_property(proj, st, cid, layer, prop, time)?;
+        }
         // The keys actually removed: a selected key that is gone (or listed twice) isn't counted,
         // so a caller can tell that a delete changed nothing.
         Ok(json!(removed))
