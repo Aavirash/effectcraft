@@ -57,22 +57,6 @@ fn brand_and_home(app: &mut EffectcraftApp, ui: &mut egui::Ui, p: &egui::Painter
     x + 6.0
 }
 
-/// The `shape.newShape` parameters for a shape that fills a `w` × `h` composition with `tool`: a new
-/// layer, painted with the Tools bar's Fill and Stroke. A polygon or star is round, so it takes the
-/// shorter side; the other kinds take the whole frame.
-pub(crate) fn comp_sized_shape_params(tool: Tool, w: u32, h: u32) -> serde_json::Value {
-    let kind = crate::panels::viewer::shape_kind(tool);
-    let (w, h) = (f64::from(w), f64::from(h));
-    let size = if matches!(kind, "polygon" | "star") { [w.min(h); 2] } else { [w, h] };
-    json!({"kind": kind, "size": size, "position": [w / 2.0, h / 2.0], "newLayer": true})
-}
-
-/// Make the shape layer that fills the composition for a double-clicked shape `tool`.
-fn comp_sized_shape(app: &mut EffectcraftApp, ctx: &egui::Context, tool: Tool) -> Result<serde_json::Value, String> {
-    let (w, h) = app.session.active_comp().map(|c| (c.width, c.height)).ok_or("no composition is open")?;
-    crate::menus::invoke(app, ctx, "shape.newShape", comp_sized_shape_params(tool, w, h))
-}
-
 /// The tool slots (with group separators after camera tools and pan-behind); returns the x after them.
 fn tool_slots(app: &mut EffectcraftApp, ui: &mut egui::Ui, p: &egui::Painter, mut x: f32, cy: f32) -> f32 {
     let t = app.tokens;
@@ -123,14 +107,6 @@ fn tool_slot(app: &mut EffectcraftApp, ui: &mut egui::Ui, p: &egui::Painter, si:
         && resp.double_clicked()
         && ui.input(|i| i.modifiers.command)
         && let Err(e) = crate::menus::invoke(app, ui.ctx(), "layer.centerAnchor", json!({}))
-    {
-        app.ui.status = e;
-    }
-    // Double-click a shape tool: a shape layer filling the composition, centred, for
-    // backgrounds, mattes and overlays (as After Effects does).
-    if cur.is_shape()
-        && resp.double_clicked()
-        && let Err(e) = comp_sized_shape(app, ui.ctx(), cur)
     {
         app.ui.status = e;
     }
@@ -857,103 +833,5 @@ mod tests {
         assert_eq!(app.ui.slot_tools[10], Tool::TypeVertical);
         frame(&mut app, &ctx, 2.1, vec![]);
         assert!(!app.auto.elements.iter().any(|w| w.id == "tools.select.TypeVertical"));
-    }
-
-    /// A polygon or star fills the shorter side; the other kinds fill the frame; all make a new layer.
-    #[test]
-    fn a_comp_sized_shape_fits_the_frame_for_every_kind() {
-        for (tool, size) in [
-            (Tool::Rectangle, [1920.0, 1080.0]),
-            (Tool::RoundedRect, [1920.0, 1080.0]),
-            (Tool::Ellipse, [1920.0, 1080.0]),
-            (Tool::Polygon, [1080.0, 1080.0]),
-            (Tool::Star, [1080.0, 1080.0]),
-        ] {
-            let p = comp_sized_shape_params(tool, 1920, 1080);
-            assert_eq!(p["size"], json!(size), "{tool:?}");
-            assert_eq!(p["position"], json!([960.0, 540.0]));
-            assert_eq!(p["newLayer"], json!(true));
-        }
-    }
-
-    /// The double-click shape takes the Tools bar's Fill, and is a new layer even with a shape layer
-    /// selected (not a group in that layer).
-    #[test]
-    fn the_double_clicked_shape_uses_the_toolbar_paint_on_a_new_layer() {
-        let mut s = effectcraft_engine::Session::default();
-        s.execute("comp.new", json!({"width": 400, "height": 300, "duration": 2})).unwrap();
-        let first = s.execute("layer.newShape", json!({"kind": "rect"})).unwrap()["layer"].as_u64().unwrap();
-        s.execute("shape.fillStroke", json!({"layers": [first], "fill": "#00ff00", "stroke": false})).unwrap();
-        s.execute("shape.toolOptions", json!({"fill": "#00ff00", "stroke": false})).unwrap();
-        let mut app = EffectcraftApp::new(s);
-        let ctx = egui::Context::default();
-        assert_eq!(app.session.state.selected_layers.first().map(|l| l.0), Some(first), "a shape layer is selected");
-        crate::theme::install(&ctx, &app.tokens, crate::i18n::language(&app));
-        frame(&mut app, &ctx, 0.0, vec![]);
-        frame(&mut app, &ctx, 0.1, vec![]);
-        assert_eq!(app.session.state.shape_tool.fill.color, [0.0, 1.0, 0.0], "the visible toolbar paint");
-        let [x, y, w, h] = app.auto.find("tools.Rectangle").unwrap().rect;
-        let at = egui::pos2(x + w / 2.0, y + h / 2.0);
-        let pointer = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
-        frame(&mut app, &ctx, 1.0, vec![egui::Event::PointerMoved(at), pointer(true)]);
-        frame(&mut app, &ctx, 1.05, vec![pointer(false)]);
-        assert_eq!(app.session.active_comp().unwrap().layers.len(), 1, "a single click only selects the tool");
-        // A separate double-click must route through the toolbar response, not just its helper.
-        for (time, pressed) in [(2.0, true), (2.05, false), (2.1, true), (2.15, false)] {
-            frame(&mut app, &ctx, time, vec![pointer(pressed)]);
-        }
-        let comp = app.session.active_comp().unwrap();
-        assert_eq!(comp.layers.len(), 2, "a new layer, not a group in the selected one");
-        let layer = comp.layers.iter().find(|l| l.id.0 != first).unwrap();
-        assert_eq!(layer.props.prop("transform/position").unwrap().value.components(), vec![200.0, 150.0, 0.0]);
-        let mut fill = None;
-        let mut size = None;
-        layer.props.walk("", &mut |_, pr| {
-            if pr.name == "Size" {
-                size = Some(pr.value.clone());
-            }
-            if fill.is_none() && matches!(pr.value, effectcraft_engine::keyframe::Value::Color(_)) {
-                fill = Some(pr.value.clone());
-            }
-        });
-        let fill = fill.expect("a fill colour");
-        assert_eq!(size, Some(effectcraft_engine::keyframe::Value::Vec2([400.0, 300.0])));
-        assert_eq!(fill, effectcraft_engine::keyframe::Value::Color([0.0, 1.0, 0.0, 1.0]), "the Tools bar's Fill, not the default blue");
-    }
-
-    #[test]
-    fn double_clicked_shapes_keep_the_selected_gradient_stroke_width() {
-        for kind in ["solid", "linear", "radial"] {
-            let mut s = effectcraft_engine::Session::default();
-            s.execute("comp.new", json!({"width": 400, "height": 300, "duration": 2})).unwrap();
-            s.execute("layer.newShape", json!({"kind": "rect"})).unwrap();
-            s.execute("shape.fillStroke", json!({"fill": false, "strokeType": kind, "strokeWidth": 9})).unwrap();
-            let mut app = EffectcraftApp::new(s);
-            let ctx = egui::Context::default();
-            crate::theme::install(&ctx, &app.tokens, crate::i18n::language(&app));
-            frame(&mut app, &ctx, 0.0, vec![]);
-            frame(&mut app, &ctx, 0.1, vec![]);
-            assert_eq!(app.session.state.shape_tool.stroke_width, 9.0, "selected {kind} stroke");
-            let [x, y, w, h] = app.auto.find("tools.Rectangle").unwrap().rect;
-            let at = egui::pos2(x + w / 2.0, y + h / 2.0);
-            for (time, pressed) in [(1.0, true), (1.05, false), (1.1, true), (1.15, false)] {
-                frame(
-                    &mut app,
-                    &ctx,
-                    time,
-                    vec![
-                        egui::Event::PointerMoved(at),
-                        egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() },
-                    ],
-                );
-            }
-            let comp = app.session.active_comp().unwrap();
-            assert_eq!(comp.layers.len(), 2);
-            let layer = comp.layer(app.session.state.selected_layers[0]).unwrap();
-            let (_, _, width) = effectcraft_engine::commands::shape_stroke::first_paint(layer, effectcraft_engine::time::Tick::ZERO);
-            assert_eq!(width, Some(9.0), "new {kind} stroke");
-            let (_, stroke_kind) = effectcraft_engine::commands::shape_stroke::first_paint_kinds(layer, effectcraft_engine::time::Tick::ZERO);
-            assert_eq!(stroke_kind.id(), kind);
-        }
     }
 }
