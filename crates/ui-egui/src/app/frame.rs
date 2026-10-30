@@ -127,7 +127,7 @@ impl EffectcraftApp {
         self.now = self.clock.now();
         // The compositor exists before the first paint and while hidden (device-loss handling
         // must run there too).
-        self.init_gpu(frame);
+        self.init_gpu(ctx, frame);
         self.apply_gpu_failure(ctx);
         if self.gpu_failure_applied == Some(true) {
             self.close_after_device_loss(ctx);
@@ -468,6 +468,13 @@ impl EffectcraftApp {
             if resp.clicked() {
                 self.ui.status.clear();
                 self.toast = None;
+            }
+            // "Preparing the GPU compositor…" stays until the compositor is attached (tens of
+            // seconds on a cold shader cache), not 5 s: `finish_gpu_build` clears it, and the
+            // worker's repaint brings that frame, so nothing needs to tick meanwhile. A click
+            // still dismisses it.
+            if self.ui.status == crate::GPU_PREPARING && self.gpu_initializing() {
+                return;
             }
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(500));
             if !self.ui.status.is_empty() {
