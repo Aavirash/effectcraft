@@ -17,6 +17,7 @@ mod include;
 mod panels;
 #[cfg(not(windows))]
 mod services;
+mod startup;
 mod tasks;
 mod ui;
 mod ui_more;
@@ -369,6 +370,31 @@ fn match_names_and_lookups() {
     let sh = c.layers.iter().find(|l| l.props.sub("contents").is_some()).unwrap();
     assert_eq!(sh.props.prop("contents/#1/contents/rect/size").unwrap().value, KV::Vec2([50.0, 60.0]));
     assert_eq!(sh.props.prop("contents/#1/contents/fill/color").unwrap().value, KV::Color([1.0, 0.0, 0.0, 1.0]));
+}
+
+/// Scripts add a Wiggle Transform by its match name or display name and reach its properties.
+#[test]
+fn wiggle_transform_by_match_name() {
+    let mut s = session();
+    let o = ok(
+        &mut s,
+        r#"
+        var c = app.project.items.addComp("W", 200, 200, 1, 2, 30);
+        var sh = c.layers.addShape();
+        var root = sh.property("ADBE Root Vectors Group");
+        var w = root.addProperty("ADBE Vector Filter - Wiggler");
+        var byName = root.addProperty("Wiggle Transform");
+        w.property("ADBE Vector Wiggler Transform").property("Position").setValue([20, 10]);
+        [
+          w.matchName, w.name, byName.matchName, w.property("ADBE Vector Xform Temporal Freq").value,
+          w.property("ADBE Vector Spatial Phase").name, w.property("ADBE Vector Wiggler Transform").name
+        ]
+        "#,
+    );
+    assert_eq!(o.result, json!(["ADBE Vector Filter - Wiggler", "Wiggle Transform 1", "ADBE Vector Filter - Wiggler", 2, "Spatial Phase", "Transform"]));
+    let (_, c) = comp_named(&s, "W");
+    let sh = c.layers.iter().find(|l| l.props.sub("contents").is_some()).unwrap();
+    assert_eq!(sh.props.prop("contents/wiggler/transform/position").unwrap().value, KV::Vec2([20.0, 10.0]));
 }
 
 #[test]
