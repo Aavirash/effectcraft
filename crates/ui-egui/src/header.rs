@@ -226,7 +226,9 @@ fn snapping_toggle(app: &mut EffectcraftApp, ui: &mut egui::Ui, p: &egui::Painte
     let snap = Rect::from_min_size(pos2(x, cy - 10.0), vec2(20.0, 20.0));
     // The engine owns snapping (View ▸ Snapping); the checkbox mirrors it.
     app.ui.snapping = app.session.state.snapping;
-    if widgets::checkbox(ui, snap, app.ui.snapping, &t, egui::Id::unique("snapping")).changed() {
+    let snap_resp = widgets::checkbox(ui, snap, app.ui.snapping, &t, egui::Id::unique("snapping"));
+    crate::a11y::check_box(&snap_resp, tr("Snapping"), app.ui.snapping, true);
+    if snap_resp.changed() {
         let _ = app.session.execute("view.snapping", serde_json::json!({}));
         app.ui.snapping = app.session.state.snapping;
     }

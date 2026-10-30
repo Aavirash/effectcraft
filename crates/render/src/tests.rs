@@ -206,6 +206,32 @@ fn track_matte_limits_an_adjustment_layer() {
     }
 }
 
+/// An adjustment layer's blend mode blends the adjusted comp onto the comp below, inside its
+/// footprint: with no effects, Screen screens a 0.25 grey with itself, Multiply darkens it,
+/// Normal leaves it, and Opacity mixes toward the result (#2618).
+#[test]
+fn adjustment_layer_blends_in_its_mode() {
+    for (mode, opacity, want) in
+        [(BlendMode::Normal, 100.0, 0.25), (BlendMode::Screen, 100.0, 0.4375), (BlendMode::Multiply, 100.0, 0.0625), (BlendMode::Screen, 50.0, 0.34375)]
+    {
+        let (mut p, cid, comp) = setup();
+        let mut adj = solid(&mut p, &comp, [1.0, 1.0, 1.0], 100, 100);
+        adj.props.prop_mut("transform/position").unwrap().value = Value::Vec3([50.0, 50.0, 0.0]);
+        adj.props.prop_mut("transform/opacity").unwrap().value = Value::Scalar(opacity);
+        adj.switches.adjustment = true;
+        adj.blend_mode = mode;
+        let bg = solid(&mut p, &comp, [0.25, 0.25, 0.25], 200, 100);
+        let c = p.comp_mut(cid).unwrap();
+        c.layers.push(adj);
+        c.layers.push(bg);
+        let img = render_frame(&p, cid, Tick::ZERO, 1.0);
+        let (inside, outside) = (img.get(50, 50), img.get(150, 50));
+        assert!((inside[0] - want).abs() < 1e-4, "{mode:?} {opacity}: {inside:?}");
+        assert!((outside[0] - 0.25).abs() < 1e-4, "{mode:?} {opacity}: outside the footprint {outside:?}");
+        assert_eq!(inside[3], 1.0, "{mode:?} keeps the comp opaque");
+    }
+}
+
 #[test]
 fn shape_layer_draws_fill_and_stroke() {
     let (mut p, cid, comp) = setup();

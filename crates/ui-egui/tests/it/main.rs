@@ -69,6 +69,7 @@ mod ui_render_queue;
 mod ui_script_console;
 mod ui_scriptui;
 mod ui_scrolling;
+mod ui_self_drop;
 mod ui_settings_info;
 mod ui_tabs;
 mod ui_tail;

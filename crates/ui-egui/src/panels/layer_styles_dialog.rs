@@ -23,6 +23,8 @@ pub struct LayerStyleState {
     pub selected: String,
     pub undo_mark: usize,
     checkpoint: Option<Checkpoint>,
+    /// The Gradient Editor opened from this dialog: closing it comes back here (#2057).
+    pub gradient_open: bool,
 }
 
 /// The project and undo history as a dialog found them, for a Cancel that rolls its live edits back.
@@ -58,7 +60,8 @@ pub fn open(app: &mut EffectcraftApp, params: &Value) -> Result<(), String> {
         return Err(format!("unknown layer style `{style}`"));
     }
     let checkpoint = checkpoint(app);
-    app.dialog_state.layer_style = LayerStyleState { layer, selected: style, undo_mark: app.session.history.undo.len(), checkpoint: Some(checkpoint) };
+    app.dialog_state.layer_style =
+        LayerStyleState { layer, selected: style, undo_mark: app.session.history.undo.len(), checkpoint: Some(checkpoint), gradient_open: false };
     app.dialog = Some(Dialog::LayerStyles);
     Ok(())
 }
@@ -117,10 +120,6 @@ fn control(ui: &mut egui::Ui, p: &Property, v: &KV) -> Option<Value> {
             let mut rgb = [c[0] as f32, c[1] as f32, c[2] as f32];
             let changed = crate::widgets::srgb_color_button(ui, &mut rgb).changed();
             changed.then(|| json!(rgb))
-        }
-        (KV::Gradient(_), _) => {
-            ui.label(egui::RichText::new(tr("Edit in the Timeline")).weak());
-            None
         }
         _ => {
             ui.label(egui::RichText::new(format!("{v:?}").chars().take(24).collect::<String>()).weak());
@@ -228,6 +227,19 @@ pub fn show(app: &mut EffectcraftApp, ctx: &egui::Context, t: &Tokens) {
                                 }
                                 let lbl = ui.label(&p.name);
                                 let v = p.value_at(lt);
+                                if matches!(v, KV::Gradient(_)) {
+                                    // The Gradient Editor, over this dialog (a style the dialog
+                                    // only shows has no property to edit yet).
+                                    let path = g.match_path_of(p.uid).unwrap_or_default();
+                                    let r = ui.add_enabled(missing.is_none(), egui::Button::new(tr("Edit Gradient…")));
+                                    if r.clicked() {
+                                        actions.push(("prop.editGradient".into(), json!({"layer": lid, "prop": p.uid})));
+                                        app.dialog_state.layer_style.gradient_open = true;
+                                    }
+                                    app.auto.add(&format!("dialog.layerStyle.value.{sel}/{path}"), r.rect, &p.name);
+                                    ui.end_row();
+                                    return;
+                                }
                                 let edit = ui.scope(|ui| control(ui, p, &v));
                                 let path = g.match_path_of(p.uid).unwrap_or_default();
                                 if let Some(nv) = edit.inner {
