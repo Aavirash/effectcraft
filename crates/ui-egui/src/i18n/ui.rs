@@ -173,6 +173,7 @@ pub(crate) fn tr_args(text: &str, args: &[&dyn Display]) -> String {
 
 /// Japanese: the same rows, in the same order, as the Chinese catalogs below.
 const JAPANESE: &[(&str, &str)] = &[
+    ("Click to sample color", "クリックして色をサンプル"),
     ("Appearance Settings…", "外観設定…"),
     ("Add to favorites", "お気に入りに追加"),
     ("Remove from favorites", "お気に入りから削除"),
@@ -1222,6 +1223,7 @@ const JAPANESE: &[(&str, &str)] = &[
 ];
 
 const SIMPLIFIED_CHINESE: &[(&str, &str)] = &[
+    ("Click to sample color", "单击以取样颜色"),
     ("Appearance Settings…", "外观设置…"),
     ("Add to favorites", "添加到收藏"),
     ("Remove from favorites", "从收藏中移除"),
@@ -2330,6 +2332,7 @@ const SIMPLIFIED_CHINESE: &[(&str, &str)] = &[
 ];
 
 const TRADITIONAL_CHINESE: &[(&str, &str)] = &[
+    ("Click to sample color", "按一下以取樣顏色"),
     ("Appearance Settings…", "外觀設定…"),
     ("Add to favorites", "加入最愛"),
     ("Remove from favorites", "從最愛移除"),
@@ -3386,6 +3389,7 @@ const TRADITIONAL_CHINESE: &[(&str, &str)] = &[
 /// Ukrainian (uk): original translations of the same interface rows as the Chinese catalogs.
 /// Technical names, key names and substituted project content keep their original spelling.
 const UKRAINIAN: &[(&str, &str)] = &[
+    ("Click to sample color", "Клацніть, щоб узяти зразок кольору"),
     ("Appearance Settings…", "Налаштування вигляду…"),
     ("Add to favorites", "Додати до вибраного"),
     ("Remove from favorites", "Видалити з вибраного"),
@@ -3962,6 +3966,7 @@ const UKRAINIAN: &[(&str, &str)] = &[
 
 // Brazilian Portuguese.
 const PORTUGUESE: &[(&str, &str)] = &[
+    ("Click to sample color", "Clique para obter uma amostra de cor"),
     ("Export Scene to Blender...", "Exportar cena para o Blender..."),
     ("   OK   ", "   OK   "),
     ("  Delete  ", "  Excluir  "),
@@ -4715,6 +4720,7 @@ const PORTUGUESE: &[(&str, &str)] = &[
 
 /// Polish (pl): original translations covering every row in the Chinese panel catalogs.
 const POLISH: &[(&str, &str)] = &[
+    ("Click to sample color", "Kliknij, aby pobrać próbkę koloru"),
     ("Appearance Settings…", "Ustawienia wyglądu…"),
     ("Add to favorites", "Dodaj do ulubionych"),
     ("Remove from favorites", "Usuń z ulubionych"),
@@ -5462,6 +5468,7 @@ const POLISH: &[(&str, &str)] = &[
 
 /// Czech (cs): original translations covering every row in the Chinese panel catalogs.
 const CZECH: &[(&str, &str)] = &[
+    ("Click to sample color", "Kliknutím naberete barvu"),
     ("   OK   ", "   OK   "),
     ("  Delete  ", "  Odstranit  "),
     (" Open Auto-Save ", " Otevřít automatickou zálohu "),
@@ -6018,6 +6025,7 @@ const CZECH: &[(&str, &str)] = &[
 /// order. Terms follow the Spanish menu catalog (composición, material de archivo, cola de procesamiento,
 /// ajuste preestablecido, método abreviado). Written from the English source.
 const SPANISH: &[(&str, &str)] = &[
+    ("Click to sample color", "Haz clic para tomar una muestra de color"),
     ("Copy Source Path", "Copiar ruta de origen"),
     ("Appearance Settings…", "Ajustes de apariencia…"),
     ("Add to favorites", "Añadir a favoritos"),
@@ -6576,6 +6584,7 @@ const SPANISH: &[(&str, &str)] = &[
 
 /// Georgian (ka): every row of the Chinese catalogs, in the same order (the tests keep them in step).
 const GEORGIAN: &[(&str, &str)] = &[
+    ("Click to sample color", "დააწკაპუნეთ ფერის ნიმუშის ასაღებად"),
     ("Appearance Settings…", "იერსახის პარამეტრები…"),
     ("Add to favorites", "რჩეულებში დამატება"),
     ("Remove from favorites", "რჩეულებიდან ამოშლა"),
