@@ -79,6 +79,8 @@ impl EffectcraftApp {
             gpu_build: None,
             gpu_failures: None,
             gpu_failure_applied: None,
+            footage_watcher: None,
+            footage_watch_key: None,
             device_lost_close: None,
             dialog_answers: std::sync::mpsc::channel(),
             file_dialogs: FileDialogsUp::default(),
