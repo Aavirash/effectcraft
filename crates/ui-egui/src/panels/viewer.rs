@@ -1674,8 +1674,9 @@ fn phase_clicked(app: &mut EffectcraftApp, ectx: &EvalCtx, resp: &egui::Response
                     let _ = app.session.execute("mask.convertVertex", json!({"layer": h.layer.0, "mask": h.mask, "index": h.index}));
                 } else if let Some(k) = ov::motion_key_at(&key_hits, pos) {
                     // A key showing direction handles becomes Linear; one without, Auto Bezier.
+                    // Separated X / Y Position have no spatial interpolation to convert.
                     let curved = key_hits.iter().any(|h| h.tangent.is_some() && h.layer == k.layer && h.prop == k.prop && h.time == k.time);
-                    if select_motion_key(app, &k) {
+                    if k.axes.is_none() && select_motion_key(app, &k) {
                         let spatial = if curved { "linear" } else { "autoBezier" };
                         let _ = app.session.execute("keys.interpolation", json!({"spatial": spatial}));
                     }
