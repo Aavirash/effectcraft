@@ -439,6 +439,8 @@ fn comp_settings(app: &mut EffectcraftApp, ctx: &egui::Context, t: &Tokens, exis
     let mut result = None;
     let custom = app.session.prefs.comp_presets.clone();
     let mut cmds = Vec::new();
+    // The title keys the modal id and its drag offset; `modal_fit` translates the heading itself,
+    // so passing the source keeps the dialog in place when the interface language changes.
     let live = existing && super::live_preview::active(app);
     let place = super::live_preview::place(app);
     let mut preview = app.dialog_state.live.on;
