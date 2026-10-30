@@ -135,8 +135,9 @@ pub(crate) fn project_drop_items(app: &EffectcraftApp, dragged: u64, target: Opt
         selected.iter().map(|id| id.0).collect()
     } else {
         // One unselected item goes through as is, so a folder or data file still gets the
-        // engine's error instead of a silent no-op.
-        return vec![dragged];
+        // engine's error instead of a silent no-op. The composition the drop lands in is the
+        // one case that never reaches it, selected or not (#2589).
+        return if Some(ItemId(dragged)) == target { Vec::new() } else { vec![dragged] };
     };
     candidates
         .into_iter()
