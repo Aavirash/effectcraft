@@ -695,6 +695,19 @@ fn possible_storage_overflow_destinations_cannot_replace_footage() {
     assert_eq!(f.read("overflow/Main.mp4"), SOURCE);
 }
 
+#[test]
+fn default_names_avoid_protected_storage_overflow_destinations() {
+    let mut f = Fixture::new("overflow-protected-default");
+    f.comp("Main");
+    with_overflow(&mut f);
+    f.footage("overflow/Main.mp4");
+    f.add(json!({"storageOverflow": true}));
+    assert_eq!(f.output(0), f.path("Main_1.mp4"));
+    f.render(json!({})).unwrap();
+    assert_eq!(f.exported().len(), 1);
+    assert_eq!(f.read("overflow/Main.mp4"), SOURCE);
+}
+
 /// After Effects numbers the second item of one composition (`Comp 1_1.mov`). A default output
 /// name that another item of the queue already has is numbered the same way.
 #[test]

@@ -621,18 +621,20 @@ impl Session {
             let Ok(outputs) = self.outputs_of(item, None) else { break };
             let mut in_the_way = false;
             for (module, path) in &outputs {
-                match self.check_output(&protected, module, path) {
-                    Ok(Some(_)) => in_the_way = true,
-                    Err(_) => {
-                        item.output.output = template;
-                        return;
-                    }
-                    Ok(None) => {}
-                }
                 let Ok(paths) = self.write_paths(module, path) else {
                     item.output.output = template;
                     return;
                 };
+                for destination in &paths {
+                    match self.check_output(&protected, module, destination) {
+                        Ok(Some(_)) => in_the_way = true,
+                        Err(_) => {
+                            item.output.output = template;
+                            return;
+                        }
+                        Ok(None) => {}
+                    }
+                }
                 in_the_way |= paths.iter().any(|path| queue.clash(&self.write_of(module, path, false)).is_some());
             }
             if !in_the_way {
