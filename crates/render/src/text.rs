@@ -510,6 +510,7 @@ pub struct PlacedGlyph {
     pub fill: [f32; 4],
     pub stroke: [f32; 4],
     pub stroke_width: f64,
+    pub join: effectcraft_path::Join,
     /// Faux Bold (or synthetic bold for a family without a bold face): how far the outline grows
     /// on every side, in character space (0 when not bold).
     pub bold: f64,
@@ -838,6 +839,7 @@ pub fn text_geom(ctx: &EvalCtx, layer: &Layer) -> Option<TextGeom> {
             fill,
             stroke,
             stroke_width: (base_stroke_w + x.stroke_width).max(0.0),
+            join: path_join(doc.line_join),
             bold: if g.synth_bold { FAUX_BOLD_RADIUS * g.size } else { 0.0 },
             apply_fill: st.apply_fill,
             char_index: g.char_index,
@@ -851,6 +853,15 @@ pub fn text_geom(ctx: &EvalCtx, layer: &Layer) -> Option<TextGeom> {
 /// and hit testing).
 pub fn glyph_paths(ctx: &EvalCtx, layer: &Layer) -> Vec<(BezPath, CharXf)> {
     text_geom(ctx, layer).map(|t| t.glyphs.iter().map(|g| (g.path(), g.xf)).collect()).unwrap_or_default()
+}
+
+fn path_join(j: effectcraft_keyframe::LineJoin) -> effectcraft_path::Join {
+    use effectcraft_keyframe::LineJoin;
+    match j {
+        LineJoin::Miter => effectcraft_path::Join::Miter,
+        LineJoin::Round => effectcraft_path::Join::Round,
+        LineJoin::Bevel => effectcraft_path::Join::Bevel,
+    }
 }
 
 /// One paint pass of a glyph: fill (false) or stroke (true).
@@ -919,7 +930,7 @@ fn raster_pass(g: &PlacedGlyph, stroke: bool, paths: &[BezPath], m: &Mat3, rect:
         }
         outer
     } else if stroke {
-        let st = StrokeStyle { width: g.stroke_width, join: effectcraft_path::Join::Round, ..Default::default() };
+        let st = StrokeStyle { width: g.stroke_width, join: g.join, ..Default::default() };
         effectcraft_path::stroke_coverage(paths, &st, &mm, w, h)
     } else {
         grown_coverage(paths, &mm, w, h, bold)
