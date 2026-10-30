@@ -1219,6 +1219,19 @@ const JAPANESE: &[(&str, &str)] = &[
     ("Blend Mode", "描画モード"),
     ("Show mesh", "メッシュを表示"),
     ("Record Options...", "記録オプション..."),
+    ("Apply", "適用"),
+    ("Analyze", "分析"),
+    ("Add Point", "ポイントを追加"),
+    ("Remove Point", "ポイントを削除"),
+    ("Render", "レンダリング"),
+    ("Save Current as Template…", "テンプレートとして保存…"),
+    ("New Composition From Footage", "フッテージから新規コンポジション"),
+    ("Search project", "プロジェクトを検索"),
+    ("Search", "検索"),
+    ("(no composition)", "（コンポジションなし）"),
+    ("per second", "毎秒"),
+    ("Waveform", "波形"),
+    ("steps", "ステップ"),
 ];
 
 const SIMPLIFIED_CHINESE: &[(&str, &str)] = &[
