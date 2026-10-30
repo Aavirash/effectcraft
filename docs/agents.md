@@ -5,7 +5,7 @@ panel gestures, the CLI, the control channel and MCP all go through the same com
 user can do, an agent can do too. There are three ways in:
 
 Render-queue outputs cannot replace footage, proxies or the project file. See
-[render source protection](render-source-protection.md) for aliases, default names and sequence
+[render source protection](file-format-parity.md#render-source-protection) for aliases, default names and sequence
 limits. This guard does not change ordinary-file overwrite defaults or add another confirmation API.
 
 | Interface | Best for | Needs a window |
