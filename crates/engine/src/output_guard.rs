@@ -17,7 +17,9 @@
 //!
 
 use std::collections::{HashMap, HashSet};
-use std::path::{Component, Path, PathBuf};
+#[cfg(not(target_arch = "wasm32"))]
+use std::path::Component;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use effectcraft_project::render_queue::{RenderQueueItem, log_path, numbered_template, sequence_frame, sequence_parts, sequence_path};
@@ -181,6 +183,7 @@ fn identity(path: &Path) -> Option<String> {
 }
 
 /// `path` made absolute, with `.` and `..` resolved by name alone (no file is looked at).
+#[cfg(not(target_arch = "wasm32"))]
 fn lexical(path: &Path) -> PathBuf {
     let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
     let mut out = PathBuf::new();
@@ -201,9 +204,22 @@ fn lexical(path: &Path) -> PathBuf {
 }
 
 /// The name a path is compared by: absolute, resolved by name, without case where volumes ignore it.
+#[cfg(not(target_arch = "wasm32"))]
 fn key(path: &Path) -> String {
     let parts: Vec<String> = lexical(path).components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect();
     fold(&parts.join("/"))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn key(path: &Path) -> String {
+    browser_key(path)
+}
+
+/// Match the browser file table: one optional leading slash, with literal case and dot segments.
+#[cfg(any(target_arch = "wasm32", test))]
+fn browser_key(path: &Path) -> String {
+    let path = path.to_string_lossy();
+    if path.starts_with('/') { path.into_owned() } else { format!("/{path}") }
 }
 
 fn fold(name: &str) -> String {
@@ -681,6 +697,14 @@ mod tests {
     }
 
     #[test]
+    fn browser_output_names_match_the_virtual_file_table() {
+        assert_eq!(browser_key(Path::new("renders/a.png")), browser_key(Path::new("/renders/a.png")));
+        assert_ne!(browser_key(Path::new("renders/A.png")), browser_key(Path::new("renders/a.png")));
+        assert_ne!(browser_key(Path::new("renders/../a.png")), browser_key(Path::new("a.png")));
+        assert_ne!(browser_key(Path::new("//a.png")), browser_key(Path::new("/a.png")));
+    }
+
+    #[test]
     fn output_plan_path_budget_returns_an_error() {
         let mut job = Writes::default();
         let path = "x".repeat(1024 * 1024);
@@ -873,6 +897,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_arch = "wasm32"))]
     fn paths_compare_by_name_once_resolved() {
         let here = std::env::current_dir().unwrap();
         assert_eq!(key(Path::new("a/b/../c.mp4")), key(Path::new("a/c.mp4")));
