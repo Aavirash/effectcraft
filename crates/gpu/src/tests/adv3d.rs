@@ -5,7 +5,7 @@
 //! edges may be covered by the other neighbour. Interior pixels agree within 2/255; at most
 //! 1.5 % of pixels (silhouettes) may differ more. Skipped without an adapter.
 
-use effectcraft_keyframe::Value;
+use effectcraft_keyframe::{Gradient, Value};
 use effectcraft_project::build;
 use effectcraft_project::{Comp, ItemId, ItemKind, LayerSource, LightKind, PrimitiveKind, Project, Renderer as R3, Solid};
 use effectcraft_render::three_d::adv::{self, Scene};
@@ -38,7 +38,8 @@ fn set(l: &mut effectcraft_project::Layer, path: &str, v: Value) {
 }
 
 /// Primitives with metal/dielectric materials, a shadow-casting spot light and a point light,
-/// an environment light, a semi-transparent textured card.
+/// a shadow-casting Environment light over a sky-gradient environment layer, a semi-transparent
+/// textured card.
 pub(crate) fn scene_project() -> (Project, ItemId) {
     let mut p = Project::default();
     let mut c = Comp::new(240, 160, FrameRate::FPS_30, Tick::from_seconds_f64(1.0));
@@ -73,12 +74,29 @@ pub(crate) fn scene_project() -> (Project, ItemId) {
         set(l, "transform/position", Value::Vec3([120.0, 80.0, -60.0]));
         set(l, "transform/rotationY", Value::Scalar(30.0));
     });
-    let env = p.add_item("E", Default::default(), None, ItemKind::Solid(Solid { color: [0.6, 0.7, 1.0], width: 32, height: 16, pixel_aspect: 1.0 }));
-    add(&mut p, cid, LayerSource::Solid { item: env }, |l| {
-        l.environment = true;
+    // The Environment Layer: a sky-to-ground gradient (its dominant region, the bright sky,
+    // shadows the scene from above).
+    add(&mut p, cid, LayerSource::Shape, |l| {
         l.switches.three_d = true;
+        let mut next = 10_000u64;
+        let ids = &mut build::Ids(&mut next);
+        let rect = build::shape_rect(ids, [240.0, 160.0], [0.0, 0.0], 0.0);
+        let gfill = build::shape_gradient_fill(
+            ids,
+            false,
+            [0.0, -80.0],
+            [0.0, 80.0],
+            Gradient { colors: vec![(0.0, [1.0, 1.0, 1.0, 1.0]), (1.0, [0.04, 0.05, 0.08, 1.0])], opacities: vec![(0.0, 1.0), (1.0, 1.0)] },
+        );
+        let g = build::shape_group(ids, "Sky", vec![rect, gfill]);
+        l.props.sub_mut("contents").unwrap().children.push(g.into());
+        l.environment = true;
     });
-    add(&mut p, cid, LayerSource::Light { kind: LightKind::Environment }, |l| set(l, "lightOptions/intensity", Value::Scalar(50.0)));
+    add(&mut p, cid, LayerSource::Light { kind: LightKind::Environment }, |l| {
+        set(l, "lightOptions/intensity", Value::Scalar(50.0));
+        set(l, "lightOptions/castsShadows", Value::Bool(true));
+        set(l, "lightOptions/shadowDiffusion", Value::Scalar(6.0));
+    });
     add(&mut p, cid, LayerSource::Light { kind: LightKind::Spot }, |l| {
         set(l, "transform/position", Value::Vec3([40.0, -120.0, -200.0]));
         set(l, "transform/poi", Value::Vec3([120.0, 100.0, 0.0]));
@@ -144,6 +162,8 @@ fn gpu_matches_cpu_lit_scene() {
     let (p, cid) = scene_project();
     let s = scene(&p, cid);
     assert!(!s.shadows.is_empty() && s.env.is_some() && s.opaque_count < s.indices.len() as u32);
+    // The Environment light casts its shadow (the sky gradient's dominant direction).
+    assert!(s.env.is_some_and(|e| e.shadow >= 0 && e.sun != [0.0; 3]), "the environment shadow map is built");
     compare(&s, &g);
 }
 

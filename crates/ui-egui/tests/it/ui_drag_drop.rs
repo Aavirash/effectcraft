@@ -632,6 +632,27 @@ fn import_dialog_offers_the_image_sequence_option() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// #2573: the empty Composition viewer's New Composition From Footage imports the picked file
+/// (through the Import Image Sequence question a numbered still asks) and makes a composition
+/// of it, as in After Effects.
+#[test]
+fn new_composition_from_footage_makes_a_comp_of_the_picked_file() {
+    let mut h = Harness::builder().with_size(vec2(1600.0, 1000.0)).build_eframe(|_| EffectcraftApp::new(Session::default()));
+    h.run_steps(3);
+    let dir = frames("fromfootage", 2);
+    let pick = dir.join("frame_0002.png").to_string_lossy().to_string();
+    h.state_mut().session.importer = Some(Arc::new(Stills));
+    h.state_mut().hooks.pick_files = Some(Box::new(move |_: &[&str]| vec![pick.clone()]));
+    click_id(&mut h, "viewer.empty.import");
+    assert_eq!(h.state().dialog, Some(effectcraft_ui_egui::Dialog::Form));
+    click_id(&mut h, "form.ok");
+    step_until(&mut h, |h| h.state().session.active_comp().is_some());
+    let comp = h.state().session.active_comp().unwrap();
+    assert_eq!((comp.width, comp.height), (64, 32));
+    assert_eq!(comp.layers.iter().map(|l| l.name.as_str()).collect::<Vec<_>>(), ["frame_0002.png"]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// #297: a folder of frames dropped on the window arrives as one image sequence, and Interpret
 /// Footage shows its frames and Start Timecode (missing frames always show colour bars, as in
 /// After Effects: there is no Missing Frames choice). #431: dropped files import as stills, one
