@@ -407,7 +407,7 @@ fn base() -> Psd {
     let mut masked = WLayer::solid("Masked", Rect::new(20, 10, 12, 12), [0.0, 0.5, 1.0, 1.0]);
     let data = (0..144).map(|i| if i % 12 < 6 { 1.0 } else { 0.25 }).collect();
     masked.mask = Some(WMask { rect: Rect::new(20, 10, 12, 12), data, default_color: 0, disabled: false });
-    d.layers = vec![bg, red, masked].into();
+    d.layers = vec![bg, red, masked];
     Psd::parse(write(&d)).unwrap()
 }
 

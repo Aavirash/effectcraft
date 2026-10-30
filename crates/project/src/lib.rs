@@ -39,8 +39,8 @@ mod settings;
 pub use comp::{Comp, Guide, Renderer, Resolution};
 pub use footage::{AlphaMode, CineonSettings, CineonUnits, FieldOrder, Footage, FootageKind, Proxy, Solid, SourceLayer, cineon_log_to_lin};
 pub use item::{Item, ItemId, ItemKind, LayerId};
-pub use layers::Layers;
 pub use layer::{AutoOrient, FrameBlend, Layer, LayerSource, LightKind, MatteKind, PrimitiveKind, Quality, Sampling, Switches, TrackMatte};
+pub use layers::Layers;
 pub use settings::{
     APP_VERSION, BitDepth, ColorEngine, CuePoint, HdrMode, Marker, ProjectError, ProjectSettings, SCHEMA_EFFECT_SPACE, SCHEMA_VERSION, SavedView,
     TimeDisplayStyle, is_newer_version, saved_by, saved_view,

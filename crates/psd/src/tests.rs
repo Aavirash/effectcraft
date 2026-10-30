@@ -25,7 +25,7 @@ fn doc_with_layers(depth: u16, mode: ColorMode, rle: bool) -> WDoc {
     // Mask: left half opaque, right half transparent; default (outside) black.
     let mrect = Rect::new(20, 10, 12, 12);
     masked.mask = Some(WMask { rect: mrect, data: (0..144).map(|i| if i % 12 < 6 { 1.0 } else { 0.0 }).collect(), default_color: 0, disabled: false });
-    d.layers = vec![bg, red, masked].into();
+    d.layers = vec![bg, red, masked];
     d
 }
 

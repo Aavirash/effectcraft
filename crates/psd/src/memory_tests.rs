@@ -255,7 +255,7 @@ fn doc(depth: u16, mode: ColorMode, rle: bool) -> WDoc {
     let mut masked = WLayer::pixels("masked", Rect::new(10, 8, 12, 12), grad(12, 12));
     masked.mask =
         Some(WMask { rect: Rect::new(12, 10, 12, 12), data: (0..144).map(|i| (i % 12) as f32 / 11.0).collect(), default_color: 255, disabled: false });
-    d.layers = vec![bg, off, solid, masked].into();
+    d.layers = vec![bg, off, solid, masked];
     d
 }
 

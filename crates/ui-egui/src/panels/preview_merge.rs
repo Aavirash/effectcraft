@@ -124,7 +124,7 @@ fn comp(before: &Comp, after: &Comp, now: &Comp) -> Comp {
             layers.insert(at.min(layers.len()), back);
         }
     }
-    merged.layers = layers;
+    merged.layers = layers.into();
     merged
 }
 

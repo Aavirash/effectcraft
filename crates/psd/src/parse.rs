@@ -184,7 +184,7 @@ impl Psd {
                 r.skip(c.len)?;
             }
         }
-        self.layers = layers.into();
+        self.layers = layers;
         Ok(())
     }
 

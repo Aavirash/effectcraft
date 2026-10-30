@@ -24,7 +24,7 @@ const BLUE: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
 /// A one-colour document; `extra` adds a hidden layer, so the file's size changes too.
 fn flat(rgba: [f32; 4], extra: bool) -> Vec<u8> {
     let mut d = WDoc::new(64, 48);
-    d.layers = vec![WLayer::solid("Background", Rect::new(0, 0, 64, 48), rgba)].into();
+    d.layers = vec![WLayer::solid("Background", Rect::new(0, 0, 64, 48), rgba)];
     if extra {
         let mut hidden = WLayer::solid("Hidden", Rect::new(0, 0, 8, 8), RED);
         hidden.hidden = true;
@@ -86,7 +86,7 @@ fn reload_footage_shows_the_new_pixels() {
 fn reload_keeps_a_photoshop_layer_item_on_its_layer() {
     let path = tmp("layers.psd");
     let mut d = WDoc::new(64, 48);
-    d.layers = vec![WLayer::solid("Background", Rect::new(0, 0, 64, 48), RED), WLayer::solid("Patch", Rect::new(0, 0, 32, 48), BLUE)].into();
+    d.layers = vec![WLayer::solid("Background", Rect::new(0, 0, 64, 48), RED), WLayer::solid("Patch", Rect::new(0, 0, 32, 48), BLUE)];
     std::fs::write(&path, write(&d)).unwrap();
     let mut s = effectcraft_host::session();
     let r = s.execute_checked("file.import", json!({"paths": [path], "importAs": "compositionLayerSizes"})).unwrap();
@@ -100,7 +100,7 @@ fn reload_keeps_a_photoshop_layer_item_on_its_layer() {
         WLayer::solid("Background", Rect::new(0, 0, 64, 48), RED),
         WLayer::solid("Added", Rect::new(40, 0, 8, 8), RED),
         WLayer::solid("Patch", Rect::new(0, 0, 24, 48), GREEN),
-    ].into();
+    ];
     save(&path, &write(&d));
     let footage_items: Vec<u64> = items.iter().filter(|i| matches!(s.project.item(**i).map(|x| &x.kind), Some(ItemKind::Footage(_)))).map(|i| i.0).collect();
     s.execute_checked("file.reloadFootage", json!({"items": footage_items})).unwrap();
