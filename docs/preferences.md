@@ -120,9 +120,11 @@ Commands (CLI, MCP, control channel):
 - `import.reportMissingFrames`: gaps in an image sequence's numbering are reported on import
   (they show as colour-bar placeholders, as in After Effects; see [footage.md](footage.md))
 - `import.autoReloadFootage`: Automatically Reload Footage, `off`, `nonSequence` (the default, as
-  in After Effects) or `all` (image sequences too). Every two seconds,
-  and as soon as the window comes back to the front, the desktop app compares each footage file's
-  size and modification time with what they were, and reloads what another app saved: a
+  in After Effects) or `all` (image sequences too). Every two seconds while its window is in
+  front (every ten seconds while another app has the front), and as soon as the window comes back
+  to the front, the desktop app compares each footage file's size and modification time with what
+  they were, on a worker thread that only wakes the interface when something changed, and reloads
+  what another app saved: a
   Photoshop file edited in PhotoCraft or Photoshop shows its new pixels without File ▸ Reload
   Footage. It is not an undo step and doesn't modify the project; a layer item stays on its layer
   (found again by name), and a file that can't be read yet (still being written) is tried again once it changes again.
@@ -190,7 +192,8 @@ Effect Controls uses compact, fixed 20 pt parameter rows, as After Effects does:
 Edit ▸ Keyboard Shortcuts (`Cmd+Alt+'`) opens the shortcut editor: an on-screen keyboard showing
 which keys are assigned for the held modifiers (purple: application-wide, green: panel-specific,
 both: split), modifier toggles, a searchable list of every command (all engine commands, menu
-entries with bound parameters and the frontend's tool / panel commands), and a preset menu.
+entries with bound parameters, the scripts File ▸ Scripts lists and the frontend's tool / panel
+commands), and a preset menu.
 
 - **Presets.** "EffectCraft Default" is After Effects' default layout and is read-only; editing
   it creates a "Custom" copy. Custom presets store only their differences from the default and
