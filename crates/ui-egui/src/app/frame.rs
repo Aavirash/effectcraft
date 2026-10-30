@@ -90,7 +90,7 @@ impl EffectcraftApp {
 
     /// Apply the engine events drained this tick: open a comp, show a toast, open a URL, run a frontend command,
     /// purge frame caches or copy an image; command and clipboard failures go to `app.ui.status`.
-    pub(super) fn handle_events(&mut self, ctx: &egui::Context) {
+    pub(crate) fn handle_events(&mut self, ctx: &egui::Context) {
         for ev in self.session.drain_events() {
             match ev {
                 effectcraft_engine::Event::OpenComp(c) => {
@@ -411,6 +411,8 @@ impl EffectcraftApp {
         header::show(self, ui, header);
         let body = egui::Rect::from_min_max(egui::pos2(full.min.x + 4.0, header.max.y + 2.0), egui::pos2(full.max.x - 4.0, full.max.y - 4.0));
         crate::color_picker::note_dialog(&ctx, self.dialog);
+        // After the shortcuts, menus and header, which can replace the project (New, Open).
+        self.ui.timeline.scope_links(self.session.script_ui.project_epoch);
         self.dock_area(ui, body);
         #[cfg(not(target_arch = "wasm32"))]
         prefs_live::dropped_files(self, ui, full);
