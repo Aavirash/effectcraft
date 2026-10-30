@@ -114,3 +114,6 @@ sync_github_name = false
 
 [people.ashokram-si]
 real_name = "Ashok Ram"
+
+[people.dylanmtaylor]
+sync_github_name = true
