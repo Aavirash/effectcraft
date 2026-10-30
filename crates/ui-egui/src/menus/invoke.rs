@@ -168,7 +168,7 @@ fn vertex_delta(app: &EffectcraftApp, layer: effectcraft_engine::project::LayerI
     })
 }
 
-fn no_params(p: &Value) -> bool {
+pub(super) fn no_params(p: &Value) -> bool {
     p.as_object().is_none_or(|m| m.is_empty())
 }
 
@@ -222,6 +222,21 @@ pub fn invoke(app: &mut EffectcraftApp, ctx: &egui::Context, id: &str, params: V
             }
             _ => {}
         }
+    }
+    // Close follows panel focus too: with the Render Queue active, Cmd+W closes that panel and
+    // leaves the active composition open (it used to close the composition next to it).
+    if id == "file.close" && no_params(&params) && app.ui.focused == PanelKind::RenderQueue {
+        app.apply_dock(craft_ui::docking::Action::Close { panel: PanelKind::RenderQueue })?;
+        // The focus goes to a panel that is still there, so the next Close acts on the composition
+        // instead of on the queue that is gone.
+        let next = [PanelKind::Timeline, PanelKind::Composition, PanelKind::Project].into_iter().find(|p| panel_shown(app, *p)).unwrap_or(PanelKind::Project);
+        app.show_panel(next);
+        app.focus_panel(ctx, next);
+        // Activating a passive viewer emits OpenComp, which raises Timeline. Finish that routing
+        // before restoring the destination panel, including when they share the same tab group.
+        app.handle_events(ctx);
+        app.show_panel(next);
+        return Ok(Value::Null);
     }
     // Edit ▸ Paste with SVG markup on the system clipboard pastes it as a shape layer (After
     // Effects 26.3). Copying in the app replaces the system clipboard with a note naming what

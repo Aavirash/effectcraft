@@ -90,7 +90,7 @@ impl EffectcraftApp {
 
     /// Apply the engine events drained this tick: open a comp, show a toast, open a URL, run a frontend command,
     /// purge frame caches or copy an image; command and clipboard failures go to `app.ui.status`.
-    pub(super) fn handle_events(&mut self, ctx: &egui::Context) {
+    pub(crate) fn handle_events(&mut self, ctx: &egui::Context) {
         for ev in self.session.drain_events() {
             match ev {
                 effectcraft_engine::Event::OpenComp(c) => {

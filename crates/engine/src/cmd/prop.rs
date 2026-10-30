@@ -930,6 +930,15 @@ fn select_keys(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(out)
 }
 
+/// References that can be edited, including explicit key lists supplied by commands.
+pub(crate) fn editable_keys(comp: &effectcraft_project::Comp, selected: &[KeyRef]) -> Vec<KeyRef> {
+    selected.iter().filter(|key| key_layer_editable(comp, key.layer)).copied().collect()
+}
+
+pub(crate) fn key_layer_editable(comp: &effectcraft_project::Comp, layer: LayerId) -> bool {
+    comp.layer(layer).is_some_and(|layer| !layer.switches.locked)
+}
+
 /// Apply `f` to every selected key; keeps the selection pointing at moved keys.
 pub(crate) fn edit_keys(s: &mut Session, label: &str, merge: Option<&str>, f: impl Fn(&mut Vec<Keyframe>, usize, &mut Tick) -> bool) -> Result<Value> {
     let cid = s.active_comp_id().ok_or(EngineError::NoComp)?;
@@ -942,7 +951,16 @@ pub(crate) fn edit_keys(s: &mut Session, label: &str, merge: Option<&str>, f: im
             groups.entry((k.layer, k.prop)).or_default().push(k.time);
         }
         for ((lid, uid), times) in groups {
-            let Some(pr) = comp.layer_mut(lid).and_then(|l| l.props.find_mut(uid)) else { continue };
+            let Some(layer) = comp.layer_mut(lid) else { continue };
+            // A locked layer's keys stay as they are, and stay selected.
+            if layer.switches.locked {
+                for time in times {
+                    let r = KeyRef { layer: lid, prop: uid, time };
+                    remapped.insert(r, r);
+                }
+                continue;
+            }
+            let Some(pr) = layer.props.find_mut(uid) else { continue };
             // Process each stored key once, in an order that avoids collisions when moving.
             let mut idx: Vec<(usize, Tick)> = times.iter().filter_map(|t| key_at(&pr.keys, *t).map(|i| (i, *t))).collect();
             idx.sort_by_key(|x| x.0);
@@ -1095,6 +1113,10 @@ fn delete_keys(s: &mut Session, _: &Value) -> Result<Value> {
         let mut removed = 0usize;
         let mut changed = std::collections::BTreeSet::new();
         for k in &sel {
+            // A layer locked after its keys were selected keeps them (the selection stays too).
+            if comp.layer(k.layer).is_some_and(|l| l.switches.locked) {
+                continue;
+            }
             if let Some(pr) = comp.layer_mut(k.layer).and_then(|l| l.props.find_mut(k.prop))
                 && let Some(i) = key_at(&pr.keys, k.time)
             {
@@ -1108,7 +1130,7 @@ fn delete_keys(s: &mut Session, _: &Value) -> Result<Value> {
                 }
             }
         }
-        st.selected_keys.clear();
+        st.selected_keys.retain(|k| comp.layer(k.layer).is_some_and(|l| l.switches.locked));
         for (layer, prop) in changed {
             sync_polystar_property(proj, st, cid, layer, prop, time)?;
         }

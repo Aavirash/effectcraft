@@ -15,6 +15,7 @@ mod ui_blank_context_menus;
 mod ui_camera_tracker;
 mod ui_character_eyedropper;
 mod ui_character_stroke_order;
+mod ui_checkbox_drag;
 mod ui_color_hex;
 mod ui_comp_presets;
 mod ui_control_modifiers;
