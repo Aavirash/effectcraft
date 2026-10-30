@@ -265,7 +265,6 @@ pub fn shape_paths(ctx: &EvalCtx, layer: &Layer) -> Vec<(u64, effectcraft_keyfra
     out
 }
 
-
 /// A shape layer's parametric primitives as Bezier paths, in contents order (the topmost first).
 /// Converting one to a Path (After Effects' Convert to Bezier Path) makes it point-editable.
 pub fn shape_primitives(ctx: &EvalCtx, layer: &Layer) -> Vec<(u64, ShapePath)> {

@@ -1586,3 +1586,4 @@ fn multi_selection_pick_whip_links_every_selected_layer() {
     s.execute("layer.select", json!({"layers": [a, c]})).unwrap();
     s.execute("prop.pickWhip", json!({"layer": a, "path": "transform/position", "target": {"layer": c, "prop": target}, "layers": [a, c]})).unwrap();
     assert!(prop(&s, c, "transform/position").expr.is_none(), "no self reference");
+}
