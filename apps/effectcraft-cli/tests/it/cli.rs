@@ -419,6 +419,38 @@ fn render_out_is_relative_to_the_working_directory() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// Two queue items on one file are refused by the render before anything is written, with the
+/// file as it was.
+#[test]
+fn render_refuses_two_items_on_one_file() {
+    let root = tmp("render-clash");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let out = root.join("clash.mp4");
+    std::fs::write(&out, b"EARLIER").unwrap();
+    let project = root.join("p.ecproj");
+    let p = project.to_str().unwrap();
+    let add = json!({"output": out.to_str().unwrap()}).to_string();
+    ok_json(&[
+        "run",
+        "comp.new",
+        r#"{"name":"T","width":64,"height":36,"duration":1}"#,
+        "renderQueue.add",
+        &add,
+        "renderQueue.add",
+        &add,
+        "--empty",
+        "--save-as",
+        p,
+    ]);
+    let (code, v) = run_json(&["render", "--queue", "--project", p]);
+    assert_eq!(code, 1, "{v}");
+    let error = v["error"].as_str().unwrap();
+    assert!(error.contains("#1") && error.contains("#2") && error.contains("clash.mp4"), "{v}");
+    assert_eq!(std::fs::read(&out).unwrap(), b"EARLIER");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// A real stdio client: each edit's reply is read before disconnecting or killing the server.
 struct McpChild {
     child: std::process::Child,
