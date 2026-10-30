@@ -1230,12 +1230,9 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
         }
         icons::paint(&lp, Rect::from_center_size(pos2(x0 + 18.0, r.center().y), vec2(14.0, 14.0)), item_icon(it), t.text_dim);
         proxy_indicator(app, ui, &g, it, &mut actions);
-        // Footage that can't be decoded (no decoder for its codec / profile): a warning marker
-        // at the end of the name cell, the reason on hover.
-        let problem = match &it.kind {
-            ItemKind::Footage(f) => app.session.footage.problem(f),
-            _ => None,
-        };
+        // Footage (or the proxy in use) that can't be decoded (no decoder for its codec /
+        // profile): a warning marker at the end of the name cell, the reason on hover.
+        let problem = app.session.footage.item_problem(it);
         let name_clip =
             Rect::from_min_max(pos2(x0 + 30.0, r.min.y), pos2(r.min.x + name_w + 4.0 - if problem.is_some() { 16.0 } else { 0.0 }, r.max.y)).intersect(list);
         if let Some(why) = &problem {
