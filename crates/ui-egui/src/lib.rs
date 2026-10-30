@@ -51,6 +51,7 @@ mod app;
 mod clock;
 mod hooks;
 
+pub use app::{GPU_PREPARING, GpuBuild};
 #[cfg(test)]
 use app::{MAX_PENDING_SHOTS, SCREENSHOT_SETTLE_PASSES, SCREENSHOT_SETTLE_S, SCREENSHOT_TIMEOUT_S};
 pub use clock::AppClock;
@@ -310,8 +311,17 @@ pub struct EffectcraftApp {
     /// The GPU compositor on that device (None: no usable adapter → CPU only).
     pub(crate) gpu: Option<effectcraft_gpu::Gpu>,
     gpu_checked: bool,
+    /// The GPU compositor being built on a worker thread (desktop): the window opens at once and
+    /// composites on the CPU until the worker's result lands ([`Self::init_gpu`]).
+    #[cfg(not(target_arch = "wasm32"))]
+    gpu_build: Option<Receiver<GpuBuild>>,
     gpu_failures: Option<gpu_failure::GpuFailureBridge>,
     gpu_failure_applied: Option<bool>,
+    /// Settings ▸ Import ▸ Reload Footage Changed on Disk: the worker that stamps the footage
+    /// files, started with the first project that has items ([`Self::tick_footage_reload`]).
+    footage_watcher: Option<effectcraft_engine::footage_reload::Watcher>,
+    /// The project revision and preference the watched set was last computed for.
+    footage_watch_key: Option<(u64, String)>,
     /// The graphics device was lost and the window is closing (see `close_after_device_loss`);
     /// `true` keeps crash recovery for the next launch.
     device_lost_close: Option<bool>,

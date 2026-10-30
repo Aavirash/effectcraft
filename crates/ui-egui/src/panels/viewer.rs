@@ -178,7 +178,16 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
     phase_frame(app, &mut v);
     let snap_project = app.session.project.clone();
     let snap_expr = app.session.expr.clone();
-    let ectx = EvalCtx { project: &snap_project, comp_id: cid, comp: &comp, time: v.time, expr: snap_expr.as_deref(), footage: None };
+    let ectx = EvalCtx {
+        project: &snap_project,
+        comp_id: cid,
+        comp: &comp,
+        time: v.time,
+        expr: snap_expr.as_deref(),
+        footage: None,
+        property_overrides: &[],
+        media_overrides: &[],
+    };
     phase_guides(app, &ectx, &mut v);
     phase_layers(app, ui, &ectx, &mut v);
     phase_scene(app, &ectx, &mut v);
@@ -690,16 +699,9 @@ fn phase_scene(app: &mut EffectcraftApp, ectx: &EvalCtx, v: &mut Vw<'_>) {
         app.auto.add("viewer.warpBanner", r, &text);
     }
 
-    // Footage that can't be decoded (no decoder for its codec / profile): say why on the layer
-    // instead of leaving a black picture.
-    let mut notices = 0;
-    for layer in comp.layers.iter().filter(|l| l.is_active_at(time) && l.switches.video) {
-        let effectcraft_engine::project::LayerSource::Footage { item } = &layer.source else { continue };
-        let Some(effectcraft_engine::project::ItemKind::Footage(f)) = app.session.project.item(*item).map(|i| &i.kind) else { continue };
-        let Some(why) = app.session.footage.problem(f) else { continue };
-        if notices >= 3 {
-            break;
-        }
+    // Footage (or the proxy in use for footage or a precomp) that can't be decoded (no decoder
+    // for its codec / profile): say why on the layer instead of leaving a black picture.
+    for (notices, (layer, why)) in footage_problems(app, ectx, comp, time).into_iter().enumerate() {
         let (m, _) = l2c(ectx, layer);
         let (w, h) = effectcraft_engine::render::source_size(&app.session.project, layer);
         let c = m.apply(effectcraft_engine::geom::vec2(w as f64 / 2.0, h as f64 / 2.0));
@@ -711,12 +713,25 @@ fn phase_scene(app: &mut EffectcraftApp, ectx: &EvalCtx, v: &mut Vw<'_>) {
         painter.rect_stroke(r, 3.0, Stroke::new(1.0, t.warning), StrokeKind::Inside);
         painter.galley(pos2(r.min.x + 12.0, r.center().y - galley.size().y / 2.0), galley, Color32::WHITE);
         app.auto.add(&format!("viewer.footageProblem.{}", layer.id.0), r, &text);
-        notices += 1;
     }
     v.vertex_marks = vertex_marks;
     v.track_hits = track_hits;
     v.track_cur = track_cur;
     v.has_3d = has_3d;
+}
+
+/// Up to three layers active at `time` whose footage, or the proxy in use for footage or a
+/// precomp, can't be decoded, each with the reason.
+fn footage_problems<'c>(app: &EffectcraftApp, ectx: &EvalCtx, comp: &'c Comp, time: Tick) -> Vec<(&'c Layer, String)> {
+    comp.layers
+        .iter()
+        .filter(|l| l.is_active_at(time) && l.switches.video)
+        .filter_map(|layer| {
+            let (LayerSource::Footage { item } | LayerSource::Comp { item }) = &layer.source else { return None };
+            Some((layer, ectx.project.item(*item).and_then(|i| app.session.footage.item_problem(i))?))
+        })
+        .take(3)
+        .collect()
 }
 
 fn phase_rigs(app: &mut EffectcraftApp, ui: &mut egui::Ui, ectx: &EvalCtx, v: &mut Vw<'_>) {
@@ -1255,6 +1270,39 @@ fn phase_dragstart(app: &mut EffectcraftApp, ui: &mut egui::Ui, ectx: &EvalCtx, 
     v.puppet_layers = puppet_layers;
 }
 
+/// Auto-pan (#999): a mask vertex, tangent or Pen drag held at (or past) the edge of the view
+/// pans it, as in After Effects, so the point moves on past what was visible. Returns the map
+/// of the panned view.
+fn edge_pan(app: &mut EffectcraftApp, ctx: &egui::Context, g: &Gesture, map: ViewerMap, pos: Pos2) -> ViewerMap {
+    if !matches!(g, Gesture::Vertices { .. } | Gesture::Tangent { .. } | Gesture::Pen { .. }) {
+        return map;
+    }
+    let d = edge_pan_speed(map.area, pos) * ctx.input(|i| i.stable_dt).min(0.1);
+    if d == egui::Vec2::ZERO {
+        return map;
+    }
+    app.ui.viewer.pan = [app.ui.viewer.pan[0] + d.x, app.ui.viewer.pan[1] + d.y];
+    ctx.request_repaint();
+    ViewerMap { origin: map.origin + d, ..map }
+}
+
+/// How fast (points per second, per axis) the view pans under a drag at `pos`: within 24 points
+/// of an edge of `area`, or past it, toward that edge and faster the further out.
+fn edge_pan_speed(area: Rect, pos: Pos2) -> egui::Vec2 {
+    const ZONE: f32 = 24.0;
+    let axis = |p: f32, lo: f32, hi: f32| {
+        let depth = if p < lo + ZONE {
+            lo + ZONE - p
+        } else if p > hi - ZONE {
+            hi - ZONE - p
+        } else {
+            0.0
+        };
+        (depth / ZONE).clamp(-3.0, 3.0) * 400.0
+    };
+    vec2(axis(pos.x, area.min.x, area.max.x), axis(pos.y, area.min.y, area.max.y))
+}
+
 fn phase_drag(app: &mut EffectcraftApp, ui: &mut egui::Ui, ectx: &EvalCtx, resp: &egui::Response, v: &mut Vw<'_>) {
     let t = v.t;
     let zoom = v.zoom;
@@ -1265,6 +1313,7 @@ fn phase_drag(app: &mut EffectcraftApp, ui: &mut egui::Ui, ectx: &EvalCtx, resp:
     let painter = v.painter.clone();
     let gesture: Option<Gesture> = ui.data(|d| d.get_temp(gid));
     if let (Some(g), Some(pos)) = (gesture.clone(), resp.interact_pointer_pos()) {
+        let map = edge_pan(app, &ctx, &g, map, pos);
         let cpt = map.to_comp(pos);
         let merge = format!("viewer-drag-{}", ui.data(|d| d.get_temp::<u64>(egui::Id::unique("viewer-drag-n")).unwrap_or(0)));
         match g {
@@ -1812,7 +1861,7 @@ use geometry::{
 pub(crate) use geometry::{from_effect_space, fx2c, l2c, layer_outline, layer_quad};
 use gesture::{Gesture, HANDLE, ROTO_HINT, pen_id, roi_drag, roi_handles, vertex_grab_radius};
 use shapes::{create_shape, draw_shape_ghost, shape_drag};
-pub(crate) use shapes::{layer_at, layers_at, pick, selectable_layers};
+pub(crate) use shapes::{layer_at, layer_at_including_locked, layers_at, pick, selectable_layers};
 #[cfg(test)]
 use tools::constrain_45;
 use tools::{add_motion_key, axis_at, axis_drag, drag_axes, draw_rigs, parent_world_inverse, pen_cursor, pen_cursor_icon, pen_press, select_motion_key};

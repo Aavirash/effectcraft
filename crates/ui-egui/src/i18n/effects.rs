@@ -87,6 +87,13 @@ pub(crate) fn name(id: &str, english: &str) -> String {
     catalog(current()).and_then(|c| c.row(id)).map_or_else(|| english.to_string(), |(_, translated)| translated.to_string())
 }
 
+/// The number of effect-name rows `language` translates, for the row-count report; 0 when it has
+/// no catalog or when it is English.
+#[cfg(test)]
+pub(super) fn translated_rows(language: &str) -> usize {
+    catalog(language).map_or(0, |c| c.rows.len())
+}
+
 /// The name to draw for an effect group the property tree stores as `stored`: the catalog name,
 /// plus the instance index the engine appends to a repeat (`Gaussian Blur 2` → `高斯模糊 2`).
 ///
@@ -143,6 +150,7 @@ const SIMPLIFIED_CHINESE: &[Row] = &[
     ("ec.3d.fog3d", "Fog 3D", "雾 3D"),
     ("ec.3d.identifier", "IDentifier", "IDentifier"),
     ("ec.3d.idmatte", "ID Matte", "ID 遮罩"),
+    ("ec.3d.instance3d", "3D Layer Instance", "3D 图层实例"),
     ("ec.audio.backwards", "Backwards", "倒放"),
     ("ec.audio.basstreble", "Bass & Treble", "低音和高音"),
     ("ec.audio.compressor", "Compressor", "压缩程序"),
@@ -802,6 +810,7 @@ const GEORGIAN: &[Row] = &[
     ("ec.3d.fog3d", "Fog 3D", "3D ნისლი"),
     ("ec.3d.identifier", "IDentifier", "IDentifier"),
     ("ec.3d.idmatte", "ID Matte", "ID მატი"),
+    ("ec.3d.instance3d", "3D Layer Instance", "3D Layer Instance"),
     ("ec.audio.backwards", "Backwards", "უკუღმა"),
     ("ec.audio.basstreble", "Bass & Treble", "ბასი და ტრებლი"),
     ("ec.audio.compressor", "Compressor", "კომპრესორი"),
