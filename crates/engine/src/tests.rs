@@ -40,6 +40,7 @@ mod render_overwrite;
 mod replace_source;
 mod rig3d;
 pub(crate) mod roto;
+mod scale_comp;
 mod sequence;
 mod session;
 mod settings;
