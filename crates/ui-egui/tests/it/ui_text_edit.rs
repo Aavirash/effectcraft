@@ -1734,3 +1734,19 @@ fn same_caret_application_text_replacement_rejects_the_previous_context_fence() 
     h.run_steps(1);
     assert_eq!(edited(&h).1, "Aがbcd");
 }
+
+/// #2077: the Character panel's Line Join buttons set the stroke's corner style (Miter for new text).
+#[test]
+fn character_panel_line_join_buttons_set_the_join() {
+    let mut s = Session::default();
+    s.execute("comp.new", json!({"name": "Type", "width": 640, "height": 360, "duration": 2})).unwrap();
+    let lid = s.execute("layer.newText", json!({"text": "Join", "size": 80, "applyStroke": true, "strokeWidth": 8})).unwrap()["layer"].as_u64().unwrap();
+    let mut h = harness(EffectcraftApp::new(s));
+    h.state_mut().show_panel(PanelKind::Character);
+    h.run_steps(3);
+    let join = |h: &Harness<'_, EffectcraftApp>| layer_doc(&h.state().session, LayerId(lid)).unwrap().line_join;
+    assert_eq!(join(&h), effectcraft_engine::keyframe::LineJoin::Miter);
+    let bevel = rect(&h, "character.lineJoin.bevel").center();
+    click(&mut h, bevel, Modifiers::NONE);
+    assert_eq!(join(&h), effectcraft_engine::keyframe::LineJoin::Bevel);
+}
