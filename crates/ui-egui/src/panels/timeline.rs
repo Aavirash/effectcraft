@@ -3058,7 +3058,7 @@ fn layer_mode_cell(app: &mut EffectcraftApp, ui: &mut egui::Ui, g: &mut Rw, rc: 
     }
     let tr = Rect::from_center_size(pos2(cw.mode + 76.0 + 6.0, cy), vec2(14.0, 14.0));
     app.auto.add(&format!("timeline.layer.{}.preserveTransparency", layer.id.0), tr, "Preserve Transparency");
-    if widgets::checkbox(ui, tr, layer.preserve_transparency, &t, egui::Id::unique(("pt", layer.id.0))).clicked() {
+    if widgets::checkbox(ui, tr, layer.preserve_transparency, &t, egui::Id::unique(("pt", layer.id.0))).changed() {
         // The click gives the selection the state the clicked row toggles to,
         // whatever the first selected layer's value (as the switches do).
         actions.push((
@@ -3565,7 +3565,7 @@ fn group_mask_mode(ui: &mut egui::Ui, g: &mut Rw, rc: &RowCtx<'_>) {
             actions.push(("layer.setMask".into(), json!({"layer": layer.id.0, "mask": uid, "mode": opts[i]})));
         }
         let ir = Rect::from_min_size(pos2(mr.max.x + 8.0, cy - 8.0), vec2(16.0, 16.0));
-        if widgets::checkbox(ui, ir, inverted, &t, egui::Id::unique(("minv", uid))).clicked() {
+        if widgets::checkbox(ui, ir, inverted, &t, egui::Id::unique(("minv", uid))).changed() {
             actions.push(("layer.setMask".into(), json!({"layer": layer.id.0, "mask": uid, "inverted": !inverted})));
         }
         lp.text(pos2(ir.max.x + 4.0, cy), Align2::LEFT_CENTER, crate::i18n::tr("Inverted"), Tokens::ui(11.0), t.text_dim);
@@ -4100,72 +4100,91 @@ fn key_double_click(g: &mut Rw, rc: &RowCtx<'_>, prop: &Property, kh: &KeyHit<'_
 /// The keyframe right-click menu.
 fn key_context_menu(app: &mut EffectcraftApp, g: &mut Rw, rc: &RowCtx<'_>, prop: &Property, kh: &KeyHit<'_>) {
     let KeyHit { k, ks, ref kresp, .. } = *kh;
-    let t = g.tl.t;
     let actions = &mut g.tl.actions;
     let layer = rc.layer;
-    let uid = &prop.uid;
+    crate::widgets::context_menu(kresp, |ui| key_menu(ui, app, layer, prop, k, ks, actions));
+}
 
-    crate::widgets::context_menu(kresp, |ui| {
-        for (lbl, cmd, params) in [
-            ("Edit Value…", "keys.set", json!({"layer": layer.id.0, "prop": uid, "time": k.time.seconds()})),
-            ("-", "", json!({})),
-            ("Copy", "keys.copy", json!({})),
-            ("Paste", "keys.paste", json!({})),
-            ("-", "", json!({})),
-            ("Select Equal Keyframes", "keys.selectEqual", json!({})),
-            ("Select Previous Keyframes", "keys.selectPrevious", json!({})),
-            ("Select Following Keyframes", "keys.selectFollowing", json!({})),
-            ("-", "", json!({})),
-            ("Keyframe Interpolation…", "keys.interpolation", json!({})),
-            ("Keyframe Velocity…", "keys.velocity", json!({})),
-            ("Toggle Hold Keyframe", "keys.toggleHold", json!({})),
-            (if k.muted { "Unmute Keyframes" } else { "Mute Keyframes" }, "keys.setMuted", json!({"muted": !k.muted})),
-            ("Rove Across Time", "keys.interpolation", json!({"roving": !k.roving})),
-            ("-", "", json!({})),
-            ("Easy Ease", "keys.easyEase", json!({})),
-            ("Easy Ease In", "keys.easyEaseIn", json!({})),
-            ("Easy Ease Out", "keys.easyEaseOut", json!({})),
-            ("Time-Reverse Keyframes", "keys.timeReverse", json!({})),
-            ("-", "", json!({})),
-            ("Linear", "keys.interpolation", json!({"interpolation": "linear"})),
-            ("Bezier", "keys.interpolation", json!({"interpolation": "bezier"})),
-            ("Auto Bezier", "keys.interpolation", json!({"interpolation": "autoBezier"})),
-            ("Select All Keyframes", "keys.selectAll", json!({})),
-            ("Delete", "keys.delete", json!({})),
-        ] {
-            if lbl == "Select All Keyframes" {
-                // Keyframe colour labels.
+/// The commands of a keyframe's right-click menu, for the Timeline and the Graph Editor alike. They act
+/// on the selected keys, so a menu opened on an unselected key selects it first. A locked layer's keys
+/// can still be copied and selected, but not edited.
+pub(crate) fn key_menu(
+    ui: &mut egui::Ui,
+    app: &EffectcraftApp,
+    layer: &Layer,
+    prop: &Property,
+    k: &effectcraft_engine::keyframe::Keyframe,
+    selected: bool,
+    actions: &mut Vec<(String, serde_json::Value)>,
+) {
+    let t = app.tokens;
+    let locked = layer.switches.locked;
+    let uid = &prop.uid;
+    let this_key = json!({"layer": layer.id.0, "prop": uid, "time": k.time.seconds()});
+    for (lbl, cmd, params) in [
+        ("Edit Value…", "keys.set", this_key.clone()),
+        ("-", "", json!({})),
+        ("Copy", "keys.copy", json!({})),
+        ("Paste", "keys.paste", json!({})),
+        ("-", "", json!({})),
+        ("Select Equal Keyframes", "keys.selectEqual", json!({})),
+        ("Select Previous Keyframes", "keys.selectPrevious", json!({})),
+        ("Select Following Keyframes", "keys.selectFollowing", json!({})),
+        ("-", "", json!({})),
+        ("Keyframe Interpolation…", "keys.interpolation", json!({})),
+        ("Keyframe Velocity…", "keys.velocity", json!({})),
+        ("Toggle Hold Keyframe", "keys.toggleHold", json!({})),
+        (if k.muted { "Unmute Keyframes" } else { "Mute Keyframes" }, "keys.setMuted", json!({"muted": !k.muted})),
+        ("Rove Across Time", "keys.interpolation", json!({"roving": !k.roving})),
+        ("-", "", json!({})),
+        ("Easy Ease", "keys.easyEase", json!({})),
+        ("Easy Ease In", "keys.easyEaseIn", json!({})),
+        ("Easy Ease Out", "keys.easyEaseOut", json!({})),
+        ("Time-Reverse Keyframes", "keys.timeReverse", json!({})),
+        ("-", "", json!({})),
+        ("Linear", "keys.interpolation", json!({"interpolation": "linear"})),
+        ("Bezier", "keys.interpolation", json!({"interpolation": "bezier"})),
+        ("Auto Bezier", "keys.interpolation", json!({"interpolation": "autoBezier"})),
+        ("Select All Keyframes", "keys.selectAll", json!({})),
+        ("Delete", "keys.delete", json!({})),
+    ] {
+        if lbl == "Select All Keyframes" {
+            // Keyframe colour labels.
+            ui.add_enabled_ui(!locked, |ui| {
                 ui.menu_button(crate::i18n::tr("Label"), |ui| {
                     for (i, l) in effectcraft_engine::color::Label::ALL.into_iter().enumerate() {
                         if widgets::label_entry(ui, l, &app.session.prefs.label_name(l), k.label as usize == i, &t).clicked() {
-                            if !ks {
-                                actions.push(("keys.select".into(), json!({"keys": [{"layer": layer.id.0, "prop": uid, "time": k.time.seconds()}]})));
+                            if !selected {
+                                actions.push(("keys.select".into(), json!({"keys": [this_key.clone()]})));
                             }
                             actions.push(("keys.setLabel".into(), json!({"label": i})));
                             ui.close();
                         }
                     }
                 });
-            }
-            if lbl == "-" {
-                ui.separator();
-                continue;
-            }
-            if lbl == "Rove Across Time" && !prop.spatial {
-                continue;
-            }
-            if lbl == "Edit Value…" && !matches!(k.value, Value::Scalar(_) | Value::Vec2(_) | Value::Vec3(_)) {
-                continue;
-            }
-            if ui.button(lbl).clicked() {
-                if !ks {
-                    actions.push(("keys.select".into(), json!({"keys": [{"layer": layer.id.0, "prop": uid, "time": k.time.seconds()}]})));
-                }
-                actions.push((cmd.into(), params));
-                ui.close();
-            }
+            });
         }
-    });
+        if lbl == "-" {
+            ui.separator();
+            continue;
+        }
+        if lbl == "Rove Across Time" && !prop.spatial {
+            continue;
+        }
+        if lbl == "Edit Value…" && !matches!(k.value, Value::Scalar(_) | Value::Vec2(_) | Value::Vec3(_)) {
+            continue;
+        }
+        let edits = !matches!(cmd, "keys.copy" | "keys.selectEqual" | "keys.selectPrevious" | "keys.selectFollowing" | "keys.selectAll");
+        // An unselected key is selected before the command runs, and locked keys cannot be selected.
+        let unselectable = locked && !selected && cmd != "keys.selectAll";
+        if ui.add_enabled(!(unselectable || locked && edits), egui::Button::new(crate::i18n::context_item(cmd, &params, lbl))).clicked() {
+            if !selected {
+                actions.push(("keys.select".into(), json!({"keys": [this_key.clone()]})));
+            }
+            actions.push((cmd.into(), params));
+            ui.close();
+        }
+    }
 }
 
 /// Starts a key drag (or Alt-scale).
@@ -5754,7 +5773,7 @@ fn bool_editor(app: &mut EffectcraftApp, ui: &mut egui::Ui, ve: &ValueEdit<'_>, 
     let t = app.tokens;
     let x = at.x;
     let r = Rect::from_min_size(pos2(x, at.y - 8.0), vec2(16.0, 16.0));
-    if widgets::checkbox(ui, r, *b, &t, egui::Id::unique(("cb", uid))).clicked() {
+    if widgets::checkbox(ui, r, *b, &t, egui::Id::unique(("cb", uid))).changed() {
         ve.set(actions, json!(!b));
     }
     app.auto.add(&format!("timeline.prop.{uid}.value"), r, &prop.name);
