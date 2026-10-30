@@ -565,9 +565,17 @@ fn the_key_menu_is_translated_and_cannot_edit_a_locked_layers_keys() {
         h.run();
         !h.get_by_label(label).accesskit_node().is_disabled()
     };
-    for label in
-        ["Copy", "Select Equal Keyframes", "Select All Keyframes", "Delete", "Edit Value…", "Easy Ease", "Time-Reverse Keyframes", "Keyframe Velocity…", "Mute Keyframes"]
-    {
+    for label in [
+        "Copy",
+        "Select Equal Keyframes",
+        "Select All Keyframes",
+        "Delete",
+        "Edit Value…",
+        "Easy Ease",
+        "Time-Reverse Keyframes",
+        "Keyframe Velocity…",
+        "Mute Keyframes",
+    ] {
         assert!(enabled(false, true, label), "{label} on an unlocked layer");
     }
     for label in ["Copy", "Select Equal Keyframes", "Select All Keyframes"] {
