@@ -196,8 +196,9 @@ pub fn build(app: &EffectcraftApp) -> NativeMenu {
                             label: e.label.clone(),
                             command: e.command.clone(),
                             params: e.params.clone(),
-                            shortcut: None,
-                            accelerator: None,
+                            // File ▸ Scripts entries show the key a script was given.
+                            shortcut: crate::menus::entry_shortcut(app, e),
+                            accelerator: crate::menus::entry_shortcut(app, e).as_deref().and_then(accelerator),
                             enabled: crate::menus::entry_enabled(app, e),
                             checked: crate::menus::entry_checked(app, e),
                         }));
@@ -360,7 +361,12 @@ pub fn state_key(app: &EffectcraftApp) -> u64 {
     s.history.undo.iter().for_each(|(l, _)| l.hash(&mut h));
     s.state.open_comps.hash(&mut h);
     s.active_comp_id().and_then(|c| s.state.views3d.get(&c)).map(|v| format!("{:?}", v.current)).hash(&mut h);
-    s.shortcuts().keys.len().hash(&mut h);
+    // Each binding's keys: a key changed to another one gives the item a new accelerator.
+    let shortcuts = s.shortcuts();
+    for b in &shortcuts.bindables {
+        b.key.hash(&mut h);
+        shortcuts.keys.get(&b.key).hash(&mut h);
+    }
     s.keymaps.active.hash(&mut h);
     let v = &app.ui.viewer;
     (v.rulers, v.guides, v.snap_guides, v.lock_guides, v.grid, v.snap_grid, v.show_layer_controls, v.pasteboard).hash(&mut h);
@@ -720,6 +726,24 @@ mod tests {
         let spec2 = build(&app);
         assert_ne!(spec1.structure(), spec2.structure());
         assert!(spec2.items().iter().any(|i| i.command == "file.openRecent" && i.label == "Recent Test.ecproj"));
+    }
+
+    /// A script's key changed to another key changes the key, so the File ▸ Scripts entry gets
+    /// the new accelerator even though the number of bindings stays the same.
+    #[test]
+    fn a_changed_shortcut_changes_the_state_key() {
+        let mut app = app();
+        let script = json!({"name": "Rename Layers.jsx"});
+        let b = app.session.shortcuts().find(&effectcraft_engine::shortcuts::binding_key("file.runScript", &script)).cloned().unwrap();
+        app.session.keymaps.set(&b, &["Cmd+Alt+Shift+F7".to_string()]).unwrap();
+        app.session.shortcuts_changed();
+        let k0 = state_key(&app);
+        app.session.keymaps.set(&b, &["Cmd+Alt+Shift+F8".to_string()]).unwrap();
+        app.session.shortcuts_changed();
+        assert_ne!(state_key(&app), k0);
+        let spec = build(&app);
+        let entry = spec.items().into_iter().find(|i| i.command == "file.runScript" && i.params == script).unwrap();
+        assert_eq!(entry.shortcut.as_deref(), Some("Cmd+Alt+Shift+F8"));
     }
 
     /// #1630: a checked Window menu entry closes its panel; an unchecked one opens it.

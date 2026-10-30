@@ -97,7 +97,7 @@ UI strings translated out of ≈ 4,200 (detail: [localization-parity.md](docs/lo
 | Korean | none | 0% |
 | Vietnamese | none | 0% |
 
-Also shipped: Traditional Chinese (partial, 38%), Ukrainian (partial, 29%), Czech (partial, 29%), Georgian (partial, 39%; native-speaker reviewed) and Russian (menus only, 15%). No other language has had
+Also shipped: Traditional Chinese (partial, 38%), Ukrainian (partial, 29%), Czech (partial, 29%), Polish (partial, 34%), Georgian (partial, 39%; native-speaker reviewed) and Russian (menus only, 15%). No other language has had
 native-speaker review.
 
 ## Upcoming
@@ -120,6 +120,11 @@ Come tell us what matters most to you on [Discord](https://discord.gg/artcraft).
 - 2026-10-28: A shape layer's Rectangle and Ellipse Size get the Constrain Proportions chain
   that Scale has, so a circle stays a circle while its size is typed, scrubbed or keyed; it
   starts off, so existing shapes behave as before (#2489).
+- 2026-10-24: Shape layers have the Wiggle Transform path operation (Contents ▸ Add, or
+  `layer.addShapeItem {kind: "wiggler"}`): it wiggles the anchor point, position, scale and
+  rotation of the paths above it by random amounts that change over time, up to the Transform
+  values it holds. The copies of a Repeater above it wiggle independently as far as its
+  Correlation allows; with the Repeater below it, they wiggle together.
 - 2026-10-22: Localization: the panel/dialog catalogs gain 303 rows in Japanese, Simplified
   Chinese and Traditional Chinese — panel tabs, form and dialog labels, panel context menus,
   tracker/graph/text-panel controls, File-panel footers and credits. Recounted after #1774:
