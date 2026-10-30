@@ -1688,6 +1688,32 @@ const SIMPLIFIED_CHINESE: &[(&str, &str)] = &[
     ("Pre-roll", "预卷"),
     ("Post-roll", "后卷"),
     ("If caching, play cached frames", "缓存时播放已缓存帧"),
+    ("Apply", "应用"),
+    ("Analyze", "分析"),
+    ("Create Camera", "创建摄像机"),
+    ("Add Point", "添加点"),
+    ("Remove Point", "移除点"),
+    ("Render", "渲染"),
+    ("Save Current as Template…", "将当前项存为模板…"),
+    ("New Composition From Footage", "从素材新建合成"),
+    ("Search effects and presets", "搜索效果和预设"),
+    ("Search project", "搜索项目"),
+    ("Search", "搜索"),
+    ("(no composition)", "没有合成"),
+    ("per second", "每秒"),
+    ("Waveform", "波形"),
+    ("steps", "步"),
+    ("Building waveform…", "正在生成波形…"),
+    ("No effects. Drag one from Effects & Presets.", "没有效果。从效果和预设中拖入一个。"),
+    ("Click the ring to add a colour; Alt-click a stop (or drag it off) to remove it", "点击色环添加颜色；按住 Alt 点击色标（或将其拖出）可移除"),
+    ("Start from a ready-made project. Opening a template makes an untitled copy.", "从现成项目开始。打开模板会创建一份未命名副本。"),
+    ("Square Pixels", "方形像素"),
+    ("Basic", "基本"),
+    ("Advanced", "高级"),
+    ("3D Renderer", "3D 渲染器"),
+    ("Black", "黑色"),
+    ("White", "白色"),
+    ("Composition Settings", "合成设置"),
 ];
 
 const TRADITIONAL_CHINESE: &[(&str, &str)] = &[
@@ -2419,6 +2445,32 @@ const TRADITIONAL_CHINESE: &[(&str, &str)] = &[
     ("Pre-roll", "預卷"),
     ("Post-roll", "後卷"),
     ("If caching, play cached frames", "快取時播放已快取影格"),
+    ("Apply", "套用"),
+    ("Analyze", "分析"),
+    ("Create Camera", "建立攝影機"),
+    ("Add Point", "添加點"),
+    ("Remove Point", "移除點"),
+    ("Render", "算圖"),
+    ("Save Current as Template…", "將目前項目存為範本…"),
+    ("New Composition From Footage", "從素材新增合成"),
+    ("Search effects and presets", "搜尋效果與預設"),
+    ("Search project", "搜尋專案"),
+    ("Search", "搜尋"),
+    ("(no composition)", "沒有合成"),
+    ("per second", "每秒"),
+    ("Waveform", "波形"),
+    ("steps", "步驟"),
+    ("Building waveform…", "正在產生波形…"),
+    ("No effects. Drag one from Effects & Presets.", "沒有效果。從效果與預設集中拖入一個。"),
+    ("Click the ring to add a colour; Alt-click a stop (or drag it off) to remove it", "點擊色環新增顏色；按住 Alt 點擊色標（或將其拖出）即可移除"),
+    ("Start from a ready-made project. Opening a template makes an untitled copy.", "從現成專案開始。開啟範本會建立一份未命名副本。"),
+    ("Square Pixels", "方形像素"),
+    ("Basic", "基本"),
+    ("Advanced", "高級"),
+    ("3D Renderer", "3D 算圖引擎"),
+    ("Black", "黑色"),
+    ("White", "白色"),
+    ("Composition Settings", "合成設置"),
 ];
 
 /// Ukrainian (uk): original translations of the same interface rows as the Chinese catalogs.
@@ -6028,6 +6080,293 @@ mod tests {
     /// English source changed or went away. A string a helper draws for the panel (a toolbar
     /// tooltip, a popup item, a checkbox label) is looked up inside that helper, so its English
     /// source only appears as a literal there.
+    #[test]
+    fn helper_and_painter_labels_are_translated() {
+        /// The `widgets.rs` helpers that draw a label, and which argument holds it.
+        const HELPER_LABELS: &[(&str, usize)] =
+            &[("text_button", 2), ("search_field", 3), ("text_field", 3), ("dropdown", 2), ("dropdown_tip", 2), ("text_fit", 3), ("check_label", 1)];
+        /// Literals that draw as they are: a brand, a value, a separator, a unit, and the kerning
+        /// sample pair the Character panel shows.
+        const VERBATIM: &[&str] = &["EffectCraft", "32", "dB", "···", "×", "V/A"];
+
+        /// The top-level arguments of a call, given the text after its `(`. A call split over
+        /// several lines is still one argument list, so this walks past newlines until the
+        /// parenthesis closes. It understands the two string forms a label can be written in - a
+        /// plain one with escapes and a raw one (`r"…"`, `r#"…"#`) - so a comma or parenthesis
+        /// inside either is not mistaken for code.
+        fn args_of(s: &str) -> Vec<&str> {
+            #[derive(Clone, Copy)]
+            enum Mode {
+                Code,
+                Str(bool),
+                Raw(usize),
+            }
+            let cs: Vec<(usize, char)> = s.char_indices().collect();
+            let (mut out, mut depth, mut start, mut end) = (Vec::new(), 0i32, None, s.len());
+            let mut mode = Mode::Code;
+            let mut k = 0;
+            while k < cs.len() {
+                let (i, c) = cs[k];
+                match mode {
+                    Mode::Raw(hashes) => {
+                        if c == '"' {
+                            let mut n = 0;
+                            while cs.get(k + 1 + n).is_some_and(|(_, h)| *h == '#') {
+                                n += 1;
+                            }
+                            if n >= hashes {
+                                mode = Mode::Code;
+                                k += n;
+                            }
+                        }
+                    }
+                    Mode::Str(escaped) => {
+                        mode = if c == '"' && !escaped { Mode::Code } else { Mode::Str(c == '\\' && !escaped) };
+                    }
+                    Mode::Code => match c {
+                        '"' => {
+                            mode = Mode::Str(false);
+                            if start.is_none() {
+                                start = Some(i);
+                            }
+                        }
+                        'r' if start.is_none() && cs.get(k + 1).is_some_and(|(_, n)| *n == '#' || *n == '"') => {
+                            let mut n = 0;
+                            while cs.get(k + 1 + n).is_some_and(|(_, h)| *h == '#') {
+                                n += 1;
+                            }
+                            if cs.get(k + 1 + n).is_some_and(|(_, q)| *q == '"') {
+                                mode = Mode::Raw(n);
+                                start = Some(i);
+                                k += n + 1;
+                            }
+                        }
+                        '(' | '[' | '{' => depth += 1,
+                        ')' | ']' | '}' => {
+                            if depth == 0 {
+                                end = i;
+                                break;
+                            }
+                            depth -= 1;
+                        }
+                        ',' if depth == 0 => {
+                            if let Some(st) = start {
+                                out.push(s[st..i].trim());
+                            }
+                            start = None;
+                        }
+                        c if !c.is_whitespace() && start.is_none() => start = Some(i),
+                        _ => {}
+                    },
+                }
+                k += 1;
+            }
+            if let Some(st) = start {
+                out.push(s[st..end].trim());
+            }
+            out
+        }
+
+        /// The text a literal argument draws: a plain string with its escapes undone, or a raw
+        /// string with none. `None` when the argument is not one literal (a concatenation, a call).
+        fn literal_text(arg: &str) -> Option<String> {
+            if let Some(rest) = arg.strip_prefix('r') {
+                let hashes = rest.chars().take_while(|c| *c == '#').count();
+                // An identifier that starts with `r` (`result`) is not a raw string: the quote has
+                // to follow the `#`s.
+                if rest.chars().nth(hashes) != Some('"') {
+                    return None;
+                }
+                let close = format!("\"{}", "#".repeat(hashes));
+                return arg.get(1 + hashes + 1..)?.strip_suffix(&close).map(str::to_string);
+            }
+            let body = arg.strip_prefix('"')?.strip_suffix('"')?;
+            // Decode the escapes that matter for the exemption: a literal written as `"\u{bb}"` is
+            // one character (`»`), not six.
+            let mut out = String::new();
+            let mut it = body.chars().peekable();
+            while let Some(c) = it.next() {
+                if c != '\\' {
+                    if c == '"' {
+                        return None; // two literals side by side
+                    }
+                    out.push(c);
+                    continue;
+                }
+                match it.next()? {
+                    '"' => out.push('"'),
+                    '\\' => out.push('\\'),
+                    'n' => out.push('\n'),
+                    't' => out.push('\t'),
+                    'x' => {
+                        let hex: String = it.by_ref().take(2).collect();
+                        let byte = u8::from_str_radix(&hex, 16).ok()?;
+                        out.push(char::from(byte));
+                    }
+                    'u' => {
+                        if it.next() != Some('{') {
+                            return None;
+                        }
+                        let hex: String = it.by_ref().take_while(|c| *c != '}').collect();
+                        out.push(char::from_u32(u32::from_str_radix(&hex, 16).ok()?)?);
+                    }
+                    other => {
+                        out.push('\\');
+                        out.push(other);
+                    }
+                }
+            }
+            Some(out)
+        }
+
+        /// `source` with comments blanked and the *contents* of every string literal blanked too,
+        /// with offsets, newlines and the quotes kept. Call tokens are looked for in this text, so a
+        /// `widgets::…(` or `.text(` that only appears inside a doc string or a sample is not
+        /// mistaken for a call; the argument list is then read from the original at that offset.
+        fn code_only(source: &str) -> String {
+            #[derive(Clone, Copy)]
+            enum Mode {
+                Code,
+                Str(bool),
+                Raw(usize),
+                Comment,
+            }
+            let cs: Vec<(usize, char)> = source.char_indices().collect();
+            // Byte-for-byte: a blanked character becomes as many spaces as its UTF-8 length, so
+            // every offset found here indexes the original source as well.
+            let mut out: Vec<u8> = Vec::with_capacity(source.len());
+            let keep = |out: &mut Vec<u8>, c: char| out.extend_from_slice(c.encode_utf8(&mut [0; 4]).as_bytes());
+            let blank = |out: &mut Vec<u8>, c: char| out.extend(std::iter::repeat_n(b' ', c.len_utf8()));
+            let mut mode = Mode::Code;
+            let mut k = 0;
+            while k < cs.len() {
+                let (_, c) = cs[k];
+                match mode {
+                    Mode::Comment => {
+                        if c == '\n' {
+                            mode = Mode::Code;
+                            keep(&mut out, c);
+                        } else {
+                            blank(&mut out, c);
+                        }
+                    }
+                    Mode::Raw(hashes) => {
+                        if c == '"' {
+                            let mut n = 0;
+                            while cs.get(k + 1 + n).is_some_and(|(_, h)| *h == '#') {
+                                n += 1;
+                            }
+                            if n >= hashes {
+                                keep(&mut out, c);
+                                for j in 1..=n {
+                                    keep(&mut out, cs[k + j].1);
+                                }
+                                mode = Mode::Code;
+                                k += n;
+                            } else {
+                                blank(&mut out, c);
+                            }
+                        } else {
+                            blank(&mut out, c);
+                        }
+                    }
+                    Mode::Str(escaped) => {
+                        if c == '"' && !escaped {
+                            mode = Mode::Code;
+                            keep(&mut out, c);
+                        } else {
+                            mode = Mode::Str(c == '\\' && !escaped);
+                            blank(&mut out, c);
+                        }
+                    }
+                    Mode::Code => match c {
+                        '"' => {
+                            mode = Mode::Str(false);
+                            keep(&mut out, c);
+                        }
+                        '/' if out.last() == Some(&b'/') => {
+                            // The first `/` stays; this one becomes a space. Both are one byte, so
+                            // the mask keeps its length and every offset still indexes the source.
+                            blank(&mut out, c);
+                            mode = Mode::Comment;
+                        }
+                        'r' if matches!(cs.get(k + 1), Some((_, n)) if *n == '#' || *n == '"') => {
+                            let mut n = 0;
+                            while cs.get(k + 1 + n).is_some_and(|(_, h)| *h == '#') {
+                                n += 1;
+                            }
+                            if cs.get(k + 1 + n).is_some_and(|(_, q)| *q == '"') {
+                                keep(&mut out, c);
+                                for j in 1..=n {
+                                    keep(&mut out, cs[k + j].1);
+                                }
+                                keep(&mut out, '"');
+                                mode = Mode::Raw(n);
+                                k += n + 1;
+                            } else {
+                                keep(&mut out, c);
+                            }
+                        }
+                        _ => keep(&mut out, c),
+                    },
+                }
+                k += 1;
+            }
+            debug_assert_eq!(out.len(), source.len(), "the mask must keep every byte offset");
+            String::from_utf8(out).expect("mask keeps UTF-8 boundaries")
+        }
+
+        for (path, source) in CONVERTED {
+            // The test module draws nothing; it holds sample strings. A test-only helper above it
+            // (`#[cfg(test)] pub(crate) fn press_key` in `dialogs.rs`) is kept in the scanned range,
+            // because production code follows it.
+            let cut = source
+                .match_indices("#[cfg(test)]")
+                .find(|(at, _)| source[at + "#[cfg(test)]".len()..].lines().take(3).any(|l| l.trim_start().starts_with("mod ")))
+                .map_or(source.len(), |(at, _)| at);
+            let source = &source[..cut];
+            let code = code_only(source);
+            let line_of = |at: usize| code[..at].matches('\n').count() + 1;
+            let check = |at: usize, arg: &str, what: &str| {
+                // A single character is a symbol or a glyph, not interface text - the same exemption
+                // the call-shape scan above makes. A call that already asks the catalog is not a
+                // literal here at all.
+                if let Some(text) = literal_text(arg)
+                    && text.chars().count() >= 2
+                    && !VERBATIM.contains(&text.as_str())
+                {
+                    panic!("{path}:{}: the interface text {arg} that {what} draws is not in the catalog", line_of(at));
+                }
+            };
+            for (call, index) in HELPER_LABELS {
+                let marker = format!("widgets::{call}(");
+                for (at, _) in code.match_indices(&marker) {
+                    if let Some(arg) = args_of(&source[at + marker.len()..]).get(*index) {
+                        check(at, arg, &format!("widgets::{call}"));
+                    }
+                }
+            }
+            for (at, _) in code.match_indices(".text(") {
+                if let Some(arg) = args_of(&source[at + ".text(".len()..]).get(2) {
+                    check(at, arg, "Painter::text");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_composition_settings_labels_are_translated() {
+        // The Composition Settings dialog (and New Composition) draws these from a `(label, value)`
+        // table, a tab array and a `match` arm, which the call-shape scan cannot see (#1451). They
+        // used to have no row in any catalog, so every interface drew them in English.
+        for key in ["Square Pixels", "Basic", "Advanced", "3D Renderer", "Black", "White", "Composition Settings"] {
+            for (name, table) in [("Simplified", SIMPLIFIED_CHINESE), ("Traditional", TRADITIONAL_CHINESE)] {
+                let value = table.iter().find(|(k, _)| *k == key).map(|(_, v)| *v);
+                assert!(value.is_some_and(|v| !v.is_empty()), "{key} has an empty {name} row");
+            }
+        }
+    }
+
     #[test]
     fn every_row_is_used_by_a_converted_panel() {
         for (en, _) in catalogs() {
