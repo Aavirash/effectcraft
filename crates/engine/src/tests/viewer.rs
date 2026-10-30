@@ -766,3 +766,58 @@ fn deleting_the_last_polystar_type_key_removes_stale_controls_and_selection() {
         assert_eq!(group(&s), polygon);
     }
 }
+
+#[test]
+fn polystar_sync_cleans_the_edited_compositions_parked_selection() {
+    let mut s = comp();
+    let first = s.active_comp_id().unwrap();
+    let lid = s.execute("layer.newShape", json!({"kind": "polygon"})).unwrap()["layer"].as_u64().unwrap();
+    let path = "contents/group/contents/star";
+    let type_uid = layer(&s, lid).props.group(path).unwrap().get("type").unwrap().uid;
+    s.execute("prop.addKey", json!({"layer": lid, "prop": type_uid, "time": 0, "value": 1})).unwrap();
+    let before = layer(&s, lid).props.group(path).unwrap().clone();
+    let inner = before.get("innerRadius").unwrap().uid;
+    s.state.selected_props = vec![(LayerId(lid), inner)];
+    s.state.selected_keys = vec![crate::KeyRef { layer: LayerId(lid), prop: inner, time: Tick::ZERO }];
+    s.execute("comp.new", json!({"width": 100, "height": 100, "duration": 2})).unwrap();
+    let second = s.active_comp_id().unwrap();
+    let other = s.execute("layer.newSolid", json!({})).unwrap()["layer"].as_u64().unwrap();
+    let other_prop = layer(&s, other).props.prop("transform/rotation").unwrap().uid;
+    s.execute("prop.addKey", json!({"layer": other, "prop": other_prop, "time": 0, "value": 15})).unwrap();
+    s.state.selected_props = vec![(LayerId(other), other_prop)];
+    s.state.selected_keys = vec![crate::KeyRef { layer: LayerId(other), prop: other_prop, time: Tick::ZERO }];
+    let live = (s.state.selected_props.clone(), s.state.selected_keys.clone());
+    s.execute("prop.toggleAnimation", json!({"comp": first.0, "layer": lid, "prop": type_uid, "value": false})).unwrap();
+    assert_eq!(s.active_comp_id(), Some(second));
+    assert_eq!((s.state.selected_props.clone(), s.state.selected_keys.clone()), live);
+    let parked = s.state.comp_selections.get(&first).unwrap();
+    assert!(parked.props.is_empty() && parked.keys.is_empty(), "the inactive composition must not keep removed control references");
+    let after = s.project.comp(first).unwrap().layer(LayerId(lid)).unwrap().props.group(path).unwrap().clone();
+    assert!(after.get("innerRadius").is_none());
+    assert!(s.undo());
+    assert_eq!(s.project.comp(first).unwrap().layer(LayerId(lid)).unwrap().props.group(path).unwrap(), &before);
+    assert!(s.redo());
+    assert_eq!(s.project.comp(first).unwrap().layer(LayerId(lid)).unwrap().props.group(path).unwrap(), &after);
+}
+
+#[test]
+fn polystar_multi_property_expression_clear_resolves_targets_before_removing_controls() {
+    let mut s = comp();
+    let lid = s.execute("layer.newShape", json!({"kind": "polygon"})).unwrap()["layer"].as_u64().unwrap();
+    let group = |s: &Session| layer(s, lid).props.group("contents/group/contents/star").unwrap().clone();
+    let type_uid = group(&s).get("type").unwrap().uid;
+    s.execute("prop.setExpression", json!({"layer": lid, "prop": type_uid, "expression": "1"})).unwrap();
+    let inner = group(&s).get("innerRadius").unwrap().uid;
+    s.execute("prop.setExpression", json!({"layer": lid, "prop": inner, "expression": "37"})).unwrap();
+    let before = group(&s);
+    s.state.selected_props = vec![(LayerId(lid), type_uid), (LayerId(lid), inner)];
+    assert_eq!(s.execute("prop.setExpression", json!({"expression": ""})).unwrap(), json!([null, null]));
+    let after = group(&s);
+    assert!(after.get("type").unwrap().expr.is_none());
+    assert!(after.get("innerRadius").is_none());
+    assert_eq!(s.state.selected_props, vec![(LayerId(lid), type_uid)]);
+    assert!(s.undo());
+    assert_eq!(group(&s), before);
+    assert!(s.redo());
+    assert_eq!(group(&s), after);
+}

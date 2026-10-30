@@ -82,8 +82,13 @@ pub(super) fn sync_polystar_property(
     let layer = layer_mut(proj, cid, lid)?;
     let removed = sync_polystar_type(layer, uid, layer.layer_time(time), &mut next)?;
     if !removed.is_empty() {
-        state.selected_props.retain(|(layer, prop)| *layer != lid || !removed.contains(prop));
-        state.selected_keys.retain(|key| key.layer != lid || !removed.contains(&key.prop));
+        if state.active_comp == Some(cid) {
+            state.selected_props.retain(|(layer, prop)| *layer != lid || !removed.contains(prop));
+            state.selected_keys.retain(|key| key.layer != lid || !removed.contains(&key.prop));
+        } else if let Some(selection) = state.comp_selections.get_mut(&cid) {
+            selection.props.retain(|(layer, prop)| *layer != lid || !removed.contains(prop));
+            selection.keys.retain(|key| key.layer != lid || !removed.contains(&key.prop));
+        }
     }
     proj.next_id = next;
     Ok(())
@@ -678,13 +683,18 @@ fn set_expr(s: &mut Session, p: &Value) -> Result<Value> {
     let times: Vec<_> = targets.iter().map(|(cid, _, _)| s.time_of(*cid)).collect();
     let results = s.edit("Expression", merge_p(p), |proj, state| {
         let mut out = vec![];
+        let mut changed_types = vec![];
         for (((cid, lid, uid), def), time) in targets.iter().zip(&defs).zip(&times) {
             let pr = layer_mut(proj, *cid, *lid)?.props.find_mut(*uid).ok_or_else(|| bad(C, "property vanished"))?;
             apply_expr(pr, &text, enabled, def);
             out.push(json!(pr.expr.as_ref().map(|e| e.text.clone())));
             if pr.match_id == "type" {
-                sync_polystar_property(proj, state, *cid, *lid, *uid, *time)?;
+                changed_types.push((*cid, *lid, *uid, *time));
             }
+        }
+        // All selected targets must be edited before a Type change can remove inner controls.
+        for (cid, lid, uid, time) in changed_types {
+            sync_polystar_property(proj, state, cid, lid, uid, time)?;
         }
         Ok(out)
     })?;
