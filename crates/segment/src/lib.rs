@@ -143,6 +143,8 @@ pub struct ModelInfo {
     pub homepage: &'static str,
     /// App download URL; empty when only Install from File is available.
     pub url: &'static str,
+    /// Checkpoint source for manual installation and notices; never used by the app downloader.
+    pub source: &'static str,
     pub file_name: &'static str,
     pub size: u64,
     /// SHA-256 of the weights file (lower-case hex).
@@ -162,6 +164,7 @@ pub const MOBILE_SAM: ModelInfo = ModelInfo {
     licence_url: "https://github.com/ChaoningZhang/MobileSAM/blob/master/LICENSE",
     homepage: "https://github.com/ChaoningZhang/MobileSAM",
     url: "https://raw.githubusercontent.com/ChaoningZhang/MobileSAM/master/weights/mobile_sam.pt",
+    source: "https://raw.githubusercontent.com/ChaoningZhang/MobileSAM/master/weights/mobile_sam.pt",
     file_name: "mobile_sam.pt",
     size: 40_728_226,
     sha256: "6dbb90523a35330fedd7f1d3dfc66f995213d81b29a5ca8108dbcdd4e37d6c2f",
@@ -180,6 +183,7 @@ pub const SAM2_TINY: ModelInfo = ModelInfo {
     licence_url: "https://github.com/facebookresearch/sam2/blob/main/LICENSE",
     homepage: "https://github.com/facebookresearch/sam2",
     url: "",
+    source: "https://huggingface.co/facebook/sam2.1-hiera-tiny/blob/de431c4043854a71d8101e17995dfe596bf101a5/model.safetensors",
     file_name: "sam2.1-hiera-tiny.safetensors",
     size: 155_908_064,
     sha256: "48c14467e5cf9e51870511feb72c89688e82dd74523142c0538b663e193ac2a7",
@@ -196,6 +200,7 @@ pub const SAM2_SMALL: ModelInfo = ModelInfo {
     licence_url: "https://github.com/facebookresearch/sam2/blob/main/LICENSE",
     homepage: "https://github.com/facebookresearch/sam2",
     url: "",
+    source: "https://huggingface.co/facebook/sam2.1-hiera-small/blob/ee5bba1d82bb8749febdf90f45e84b687142ba03/model.safetensors",
     file_name: "sam2.1-hiera-small.safetensors",
     size: 184_305_280,
     sha256: "0a4067b11ce1e23d5229203f11c718a823060d15a4b23fa2372a7d4b77cbbc60",
@@ -212,6 +217,7 @@ pub const SAM2_BASE_PLUS: ModelInfo = ModelInfo {
     licence_url: "https://github.com/facebookresearch/sam2/blob/main/LICENSE",
     homepage: "https://github.com/facebookresearch/sam2",
     url: "",
+    source: "https://huggingface.co/facebook/sam2.1-hiera-base-plus/blob/b7320756a13354e7530a63935656d35b2f91a290/model.safetensors",
     file_name: "sam2.1-hiera-base-plus.safetensors",
     size: 323_476_296,
     sha256: "2012733a0de5d03efd1bba550a2847c4551be9ef2e0d497c83074df66189f780",
@@ -228,6 +234,7 @@ pub const SAM2_LARGE: ModelInfo = ModelInfo {
     licence_url: "https://github.com/facebookresearch/sam2/blob/main/LICENSE",
     homepage: "https://github.com/facebookresearch/sam2",
     url: "",
+    source: "https://huggingface.co/facebook/sam2.1-hiera-large/blob/665f8e2ad61cf5f53d65644ff27c8ee525124610/model.safetensors",
     file_name: "sam2.1-hiera-large.safetensors",
     size: 897_897_416,
     sha256: "dc407dce21301fd94abb395c5099b4f2c455fdc8a8f261ac3d0ea6d4cd197230",
@@ -243,6 +250,7 @@ pub const FACE_LANDMARKER: ModelInfo = ModelInfo {
     licence_url: "https://storage.googleapis.com/mediapipe-assets/Model%20Card%20MediaPipe%20Face%20Mesh%20V2.pdf",
     homepage: "https://developers.google.com/edge/mediapipe/solutions/vision/face_landmarker",
     url: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
+    source: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
     file_name: "face_landmarker.task",
     size: 3_758_596,
     sha256: "64184e229b263107bc2b804c6625db1341ff2bb731874b0bcc2fe6544e0bc9ff",
@@ -314,10 +322,9 @@ fn loader(id: &str) -> Option<Loader> {
 
 /// The notice kept next to installed weights: what they are, who made them, their licence.
 pub fn notice(m: &ModelInfo) -> String {
-    let source = if m.url.is_empty() { m.homepage } else { m.url };
     format!(
-        "{}\n\nAuthors: {}\nLicence: {} (full text: https://spdx.org/licenses/{}.html; as stated by the authors: {})\nSource: {}\nProject: {}\n\nInstalled unmodified. EffectCraft runs it with its own implementation\nand is not affiliated with or endorsed by its authors.\n",
-        m.name, m.authors, m.licence, m.licence, m.licence_url, source, m.homepage
+        "{}\n\nAuthors: {}\nLicence: {} (full text: https://spdx.org/licenses/{}.html; as stated by the authors: {})\nSource: {}\nSHA-256: {}\nProject: {}\n\nInstalled unmodified. EffectCraft runs it with its own implementation\nand is not affiliated with or endorsed by its authors.\n",
+        m.name, m.authors, m.licence, m.licence, m.licence_url, m.source, m.sha256, m.homepage
     )
 }
 
@@ -420,6 +427,7 @@ mod tests {
             assert!(ALLOWED_LICENCES.contains(&m.licence), "{}", m.id);
             assert_eq!(m.sha256.len(), 64);
             assert!(m.url.is_empty() || m.url.starts_with("https://"));
+            assert!(m.source.starts_with("https://"));
             assert!(m.licence_url.starts_with("https://") && m.homepage.starts_with("https://"));
             assert!(!m.authors.is_empty() && notice(m).contains(m.authors));
         }
@@ -430,7 +438,9 @@ mod tests {
         for model in [SAM2_TINY, SAM2_SMALL, SAM2_BASE_PLUS, SAM2_LARGE] {
             assert!(model.url.is_empty(), "SAM 2 has no app download until a storytold mirror is available");
             assert!(model.file_name.ends_with(".safetensors"));
-            assert!(notice(&model).contains(&format!("Source: {}", model.homepage)));
+            assert!(model.source.contains("/blob/") && model.source.ends_with("/model.safetensors"));
+            assert!(notice(&model).contains(&format!("Source: {}", model.source)));
+            assert!(notice(&model).contains(model.sha256));
         }
         assert_eq!(models(Task::Face).map(|m| m.id).collect::<Vec<_>>(), ["mediapipe-face"]);
         assert!(load("mediapipe-face", b"nope").err().is_some_and(|e| e.contains("does not match")));

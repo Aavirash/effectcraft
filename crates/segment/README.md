@@ -14,6 +14,8 @@ Trained models for Roto Brush and face tracking, each kind behind one swappable 
   EffectCraft's MIT OR Apache-2.0 (`ALLOWED_LICENCES`), with its task, authors, homepage, licence
   URL, an app download URL when available, size and SHA-256. `load` refuses anything else.
   SAM 2 is Install from File only until a storytold-controlled mirror is available.
+  The checkpoint `source` stays separate from the app download URL, so file-install guidance and
+  licence notices identify the verified artifact even when app downloads are unavailable.
 - **Weights are never bundled.** They are downloaded on demand (or installed from a file) by the
   engine (`roto.model.*` / `face.model.*`, Settings ▸ Roto Brush / Face Tracking), verified
   against the registry's SHA-256 (`sha256`, dependency-free) and kept with a notice naming their

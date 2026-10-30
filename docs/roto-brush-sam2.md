@@ -8,7 +8,10 @@ Apache-2.0). It is optional: nothing changes until you install the model and cho
    (155.9 MB). The file's size and SHA-256 are checked and the licence notice is kept next to it.
    Agents: `roto.model.install {id: "sam2.1-hiera-tiny", path: "model.safetensors"}`.
    SAM 2 has no in-app download until the weights are mirrored under storytold control.
-2. Choose it (`roto.model.select {id: "sam2.1-hiera-tiny"}`).
+   Each model card links its pinned Hugging Face `model.safetensors` checkpoint, rather than the
+   project's different `.pt` files. Its checkpoint source and SHA-256 are retained in the notice.
+2. Choose it (`roto.model.select {id: "sam2.1-hiera-tiny", wait: true}` for agents). Installing an
+   unselected model does not activate it, even with `wait: true` on installation.
 3. Paint strokes on the base frame as usual, then **Propagate**. One tracking pass follows the object through the
    whole span in both directions, using SAM 2's streaming memory, so it keeps tracking through occlusion and when the
    object leaves the frame and returns. Each frame's probability map is then refined by the same graph cut as every other

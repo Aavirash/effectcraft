@@ -508,6 +508,13 @@ fn models_ui(app: &mut EffectcraftApp, ui: &mut egui::Ui, t: &Tokens, acts: &mut
                         }
                     }
                 }
+                if let (Some(source), Some(file)) = (m["source"].as_str(), m["sourceFile"].as_str()) {
+                    let response = ui.link(file).on_hover_text(crate::i18n::tr("Source"));
+                    reg(app, &format!("settings.{prefix}.source.{id}"), &response, file);
+                    if response.clicked() {
+                        ui.ctx().open_url(egui::OpenUrl::new_tab(source));
+                    }
+                }
             });
             if classic {
                 return;
@@ -944,6 +951,7 @@ mod tests {
         for id in ["sam2.1-hiera-tiny", "sam2.1-hiera-small", "sam2.1-hiera-base-plus", "sam2.1-hiera-large"] {
             assert!(app.auto.find(&format!("settings.roto.download.{id}")).is_none());
             assert!(app.auto.find(&format!("settings.roto.install.{id}")).is_some());
+            assert_eq!(app.auto.find(&format!("settings.roto.source.{id}")).unwrap().label, "model.safetensors");
         }
         assert!(actions.is_empty());
     }

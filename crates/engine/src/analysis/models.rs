@@ -575,6 +575,8 @@ fn list(s: &mut Session, task: Task) -> Result<Value> {
             "licenceUrl": m.licence_url,
             "homepage": m.homepage,
             "url": m.url,
+            "source": m.source,
+            "sourceFile": m.source.rsplit('/').next().unwrap_or(m.file_name),
             "size": m.size,
             "sha256": m.sha256,
             "installed": s.model_path(m).is_some(),
@@ -600,6 +602,9 @@ fn select(s: &mut Session, p: &Value, task: Task) -> Result<Value> {
         model_p(p, &cmd, task)?;
     }
     let wait = b_p(p, "wait").unwrap_or(false);
+    if wait && id != seg::CLASSICAL && s.models.status(task).active.as_deref() != Some(id) {
+        s.wait_model_worker(task, id).map_err(|error| bad(&cmd, error))?;
+    }
     s.choose_model(task, id);
     if wait {
         s.apply_model(task, true);
@@ -756,11 +761,38 @@ mod availability_tests {
     #[test]
     fn sam2_is_install_from_file_only() {
         let mut session = Session::default();
+        let listed = session.execute("roto.models", json!({})).unwrap();
         for model in [seg::SAM2_TINY, seg::SAM2_SMALL, seg::SAM2_BASE_PLUS, seg::SAM2_LARGE] {
             let error = session.execute("roto.model.download", json!({"id": model.id})).unwrap_err();
             assert!(error.to_string().contains("Install from File"));
             assert!(session.models.status(Task::Mask).busy.is_none());
             assert!(install_bytes(Path::new("unused"), &model, b"invalid weights").unwrap_err().contains("SHA-256 differs"));
+            let row = listed["models"].as_array().unwrap().iter().find(|row| row["id"] == model.id).unwrap();
+            assert_eq!(row["source"], model.source);
+            assert_eq!(row["sourceFile"], "model.safetensors");
+        }
+    }
+
+    /// A waiting selection cannot claim completion while unrelated work prevents its model loading.
+    #[test]
+    fn waiting_selection_refuses_an_unrelated_worker_unless_the_model_is_active() {
+        crate::tests::roto::hold_roto_cache_test_lock();
+        for active in [false, true] {
+            let mut session = Session::default();
+            session.choose_model(Task::Mask, if active { "mobilesam" } else { seg::CLASSICAL });
+            set(session.models.lane(Task::Mask), |status| {
+                status.active = active.then(|| "mobilesam".into());
+                status.busy = Some("Downloading SAM 2".into());
+                status.busy_model = Some("sam2.1-hiera-tiny");
+            });
+            let result = session.execute("roto.model.select", json!({"id": "mobilesam", "wait": true}));
+            if active {
+                assert_eq!(result.unwrap()["active"], "mobilesam");
+            } else {
+                assert!(result.unwrap_err().to_string().contains("another model operation"));
+                assert_eq!(session.chosen_model(Task::Mask), seg::CLASSICAL, "a refused selection must not change settings");
+            }
+            assert!(session.models.status(Task::Mask).busy.is_some());
         }
     }
 
