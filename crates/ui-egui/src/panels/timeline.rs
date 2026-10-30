@@ -3591,7 +3591,15 @@ fn group_row_click(app: &mut EffectcraftApp, ui: &mut egui::Ui, g: &mut Rw, rc: 
     }
     app.auto.add(&format!("timeline.group.{uid}.name"), gr_rect, name);
     if gr.clicked() && uid & (WAVE_BIT | GEOM_BIT) == 0 {
-        actions.push(("prop.select".into(), json!({"layer": layer.id.0, "prop": uid, "selectKeys": false})));
+        // Shift or Cmd/Ctrl adds the group to the selection, or takes a selected one out, as
+        // property rows and Effect Controls headers do (#2552: several effects and styles for
+        // one animation preset).
+        let add = ui.input(|i| i.modifiers.shift || i.modifiers.command);
+        if add && app.session.state.selected_props.contains(&(layer.id, *uid)) {
+            actions.push(("prop.deselect".into(), json!({"layer": layer.id.0, "prop": uid})));
+        } else {
+            actions.push(("prop.select".into(), json!({"layer": layer.id.0, "prop": uid, "selectKeys": false, "add": add})));
+        }
     }
     if gr.double_clicked() {
         if fx.is_some() {
