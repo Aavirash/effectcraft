@@ -243,7 +243,7 @@ fn add_keyframe(s: &mut Session, _: &Value) -> Result<Value> {
     }
     let cid = s.active_comp_id().ok_or(EngineError::NoComp)?;
     let t = s.time();
-    let n = s.edit("Add Keyframe", None, |proj, _| {
+    let n = s.edit("Add Keyframe", None, |proj, state| {
         let mut n = 0;
         for (lid, uid) in &targets {
             let l = layer_mut(proj, cid, *lid)?;
@@ -259,6 +259,9 @@ fn add_keyframe(s: &mut Session, _: &Value) -> Result<Value> {
                 pr.set_value_at(lt, v);
             }
             n += 1;
+            if pr.match_id == "type" {
+                super::prop::sync_polystar_property(proj, state, cid, *lid, *uid, t)?;
+            }
         }
         Ok(n)
     })?;

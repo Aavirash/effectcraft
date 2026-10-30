@@ -697,3 +697,72 @@ fn polystar_animated_type_keeps_the_inner_controls_needed_by_other_frames() {
     assert_eq!(star.get("type").unwrap().value_at(Tick::from_seconds_f64(1.0)), KV::Enum(1));
     assert_eq!(star.get("innerRadius").unwrap().value, KV::Scalar(27.0));
 }
+
+#[test]
+fn polystar_expression_routes_synchronize_controls_in_the_same_undo_step() {
+    for explicit in [false, true] {
+        let mut s = comp();
+        let lid = s.execute("layer.newShape", json!({"kind": "polygon"})).unwrap()["layer"].as_u64().unwrap();
+        let group = |s: &Session| layer(s, lid).props.group("contents/group/contents/star").unwrap().clone();
+        let before = group(&s);
+        let uid = before.get("type").unwrap().uid;
+        s.state.selected_props = vec![(LayerId(lid), uid)];
+        let params = if explicit { json!({"layer": lid, "prop": uid, "expression": "1"}) } else { json!({"expression": "1"}) };
+        s.execute("prop.setExpression", params).unwrap();
+        let animated = group(&s);
+        assert!(animated.get("innerRadius").is_some() && animated.get("innerRoundness").is_some());
+        assert!(s.undo());
+        assert_eq!(group(&s), before);
+        assert!(s.redo());
+        assert_eq!(group(&s), animated);
+        let inner = animated.get("innerRadius").unwrap().uid;
+        s.state.selected_props = vec![(LayerId(lid), inner)];
+        s.execute("prop.setExpression", json!({"layer": lid, "prop": uid, "expression": ""})).unwrap();
+        assert!(group(&s).get("innerRadius").is_none());
+        assert!(s.state.selected_props.is_empty());
+        assert!(s.undo());
+        assert_eq!(group(&s), animated);
+        assert!(s.redo());
+        assert!(group(&s).get("innerRadius").is_none());
+    }
+}
+
+#[test]
+fn polystar_animation_menu_adds_inner_controls_and_undoes() {
+    let mut s = comp();
+    let lid = s.execute("layer.newShape", json!({"kind": "polygon"})).unwrap()["layer"].as_u64().unwrap();
+    let group = |s: &Session| layer(s, lid).props.group("contents/group/contents/star").unwrap().clone();
+    let before = group(&s);
+    s.state.selected_props = vec![(LayerId(lid), before.get("type").unwrap().uid)];
+    s.execute("anim.addKeyframe", json!({})).unwrap();
+    let animated = group(&s);
+    assert_eq!(animated.get("type").unwrap().keys.len(), 1);
+    assert!(animated.get("innerRadius").is_some() && animated.get("innerRoundness").is_some());
+    assert!(s.undo());
+    assert_eq!(group(&s), before);
+    assert!(s.redo());
+    assert_eq!(group(&s), animated);
+}
+
+#[test]
+fn deleting_the_last_polystar_type_key_removes_stale_controls_and_selection() {
+    for command in ["keys.delete", "edit.clear"] {
+        let mut s = comp();
+        let lid = s.execute("layer.newShape", json!({"kind": "polygon"})).unwrap()["layer"].as_u64().unwrap();
+        let group = |s: &Session| layer(s, lid).props.group("contents/group/contents/star").unwrap().clone();
+        let type_uid = group(&s).get("type").unwrap().uid;
+        s.execute("prop.addKey", json!({"layer": lid, "prop": type_uid, "time": 0, "value": 1})).unwrap();
+        let animated = group(&s);
+        let inner = animated.get("innerRadius").unwrap().uid;
+        s.state.selected_props = vec![(LayerId(lid), inner)];
+        s.state.selected_keys = vec![crate::KeyRef { layer: LayerId(lid), prop: type_uid, time: Tick::ZERO }];
+        s.execute(command, json!({})).unwrap();
+        let polygon = group(&s);
+        assert!(polygon.get("innerRadius").is_none() && polygon.get("innerRoundness").is_none());
+        assert!(s.state.selected_props.is_empty() && s.state.selected_keys.is_empty());
+        assert!(s.undo());
+        assert_eq!(group(&s), animated);
+        assert!(s.redo());
+        assert_eq!(group(&s), polygon);
+    }
+}
