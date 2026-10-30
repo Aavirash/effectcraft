@@ -812,7 +812,7 @@ fn footer(app: &mut EffectcraftApp, ui: &mut egui::Ui, p: &egui::Painter, foot: 
         (Icon::NewComp, "newComp", "Create a new Composition"),
     ] {
         let r = Rect::from_min_size(pos2(x, foot.min.y + 3.0), vec2(22.0, 22.0));
-        let resp = widgets::icon_button(ui, r, icon, false, &t, egui::Id::unique(("pfoot", id))).on_hover_text(tip);
+        let resp = widgets::icon_button(ui, r, icon, false, &t, egui::Id::unique(("pfoot", id))).on_hover_text(crate::i18n::tr(tip));
         app.auto.add(&format!("project.{id}"), r, tip);
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, crate::i18n::tr(tip)));
         if resp.clicked() {
@@ -1230,12 +1230,9 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
         }
         icons::paint(&lp, Rect::from_center_size(pos2(x0 + 18.0, r.center().y), vec2(14.0, 14.0)), item_icon(it), t.text_dim);
         proxy_indicator(app, ui, &g, it, &mut actions);
-        // Footage that can't be decoded (no decoder for its codec / profile): a warning marker
-        // at the end of the name cell, the reason on hover.
-        let problem = match &it.kind {
-            ItemKind::Footage(f) => app.session.footage.problem(f),
-            _ => None,
-        };
+        // Footage (or the proxy in use) that can't be decoded (no decoder for its codec /
+        // profile): a warning marker at the end of the name cell, the reason on hover.
+        let problem = app.session.footage.item_problem(it);
         let name_clip =
             Rect::from_min_max(pos2(x0 + 30.0, r.min.y), pos2(r.min.x + name_w + 4.0 - if problem.is_some() { 16.0 } else { 0.0 }, r.max.y)).intersect(list);
         if let Some(why) = &problem {
@@ -1344,7 +1341,7 @@ fn column_menu(app: &mut EffectcraftApp, resp: &egui::Response) {
         ui.label(egui::RichText::new(crate::i18n::tr("Columns")).weak());
         for (key, label, _) in COLUMNS {
             let mut on = app.ui.project_columns.iter().any(|c| c == key);
-            if ui.checkbox(&mut on, crate::i18n::tr(label)).changed() {
+            if crate::widgets::labelled_checkbox(ui, &mut on, crate::i18n::tr(label)).changed() {
                 set_column(&mut app.ui.project_columns, key, on);
             }
         }
