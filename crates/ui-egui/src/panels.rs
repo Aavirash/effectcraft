@@ -124,8 +124,10 @@ impl PresetRef {
 
 /// Layers carried by a Project item drag. Dragging a selected item uses the
 /// complete selection, while dragging an unselected item uses only that item.
-/// Folders and data files are not composition layers.
-pub(crate) fn project_drop_items(app: &EffectcraftApp, dragged: u64) -> Vec<u64> {
+/// Folders and data files are not composition layers, and the composition the
+/// drop lands in is left out of a selection: it cannot contain itself, and one
+/// such item would make the engine refuse the whole drop (#2589).
+pub(crate) fn project_drop_items(app: &EffectcraftApp, dragged: u64, target: Option<effectcraft_engine::project::ItemId>) -> Vec<u64> {
     use effectcraft_engine::project::{FootageKind, ItemId, ItemKind};
 
     let selected = &app.session.state.project_selection;
@@ -139,6 +141,9 @@ pub(crate) fn project_drop_items(app: &EffectcraftApp, dragged: u64) -> Vec<u64>
     candidates
         .into_iter()
         .filter(|id| {
+            if Some(ItemId(*id)) == target {
+                return false;
+            }
             app.session.project.item(ItemId(*id)).is_some_and(|item| match &item.kind {
                 ItemKind::Comp(_) | ItemKind::Solid(_) => true,
                 ItemKind::Footage(f) => f.kind != FootageKind::Data,
