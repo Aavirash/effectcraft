@@ -17,6 +17,7 @@ mod include;
 mod panels;
 #[cfg(not(windows))]
 mod services;
+mod startup;
 mod tasks;
 mod ui;
 mod ui_more;
