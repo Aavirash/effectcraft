@@ -1,5 +1,6 @@
 mod anim_presets;
 mod anim_tools;
+mod blender;
 mod camera_track;
 mod codec_options;
 mod color_view;
