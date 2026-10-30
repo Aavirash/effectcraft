@@ -7,6 +7,14 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+/// EffectCraft as craft-update knows it, with its 128 px icon: the update prompt shows the icon,
+/// and an AppImage's menu entry gets it.
+#[cfg(not(target_arch = "wasm32"))]
+pub const UPDATE_APP: craft_update::app::App = craft_update::app::App {
+    icon_png: Some(include_bytes!("../../../assets/app-icon/hicolor/128x128/apps/ai.storyteller.effectcraft.png")),
+    ..craft_update::suite::EFFECTCRAFT
+};
+
 pub mod audio;
 pub mod automation;
 pub mod bench;
