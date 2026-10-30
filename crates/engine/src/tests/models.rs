@@ -101,37 +101,8 @@ fn models_are_listed_chosen_and_verified() {
         s.execute_checked("roto.model.select", json!({"id": "classical"})).unwrap();
         assert!(crate::effects::roto::model_for(&params).is_none());
     }
-    // The SAM 2.1 sizes, each from its own file (EFFECTCRAFT_SAM2, _SAM2_SMALL, _SAM2_BASE_PLUS, _SAM2_LARGE =
-    // path/to/model.safetensors of facebook/sam2.1-hiera-*): installed with its notice, loaded (verified, native
-    // only) and used by Roto Brush 3.0, then dropped and removed.
     #[cfg(not(target_arch = "wasm32"))]
-    for (var, id) in [
-        ("EFFECTCRAFT_SAM2", "sam2.1-hiera-tiny"),
-        ("EFFECTCRAFT_SAM2_SMALL", "sam2.1-hiera-small"),
-        ("EFFECTCRAFT_SAM2_BASE_PLUS", "sam2.1-hiera-base-plus"),
-        ("EFFECTCRAFT_SAM2_LARGE", "sam2.1-hiera-large"),
-    ] {
-        let Ok(path) = std::env::var(var) else { continue };
-        let r = s.execute_checked("roto.model.install", json!({"path": path})).unwrap();
-        assert_eq!(r["id"], id, "{var}");
-        let dir = s.models_dir().unwrap();
-        let notice = std::fs::read_to_string(dir.join(format!("{id}.safetensors.NOTICE.txt"))).unwrap();
-        assert!(notice.contains("Meta AI") && notice.contains("Apache-2.0"), "{notice}");
-        s.execute_checked("roto.model.select", json!({"id": id})).unwrap();
-        wait_loaded(&mut s, Task::Mask);
-        assert_eq!(s.models.status(Task::Mask).active.as_deref(), Some(id), "{var}");
-        let params = crate::effects::Params { values: [("version".to_string(), effectcraft_keyframe::Value::Enum(2))].into_iter().collect() };
-        assert_eq!(crate::effects::roto::model_for(&params).map(|m| m.info().id), Some(id));
-        // the list says it is installed, and exactly one size is recommended
-        let list = s.execute_checked("roto.models", json!({})).unwrap();
-        let entry = list["models"].as_array().unwrap().iter().find(|m| m["id"] == id).unwrap();
-        assert_eq!(entry["installed"], true);
-        assert_eq!(list["models"].as_array().unwrap().iter().filter(|m| m["recommended"] == true).count(), 1);
-        s.execute_checked("roto.model.select", json!({"id": "classical"})).unwrap();
-        assert!(crate::effects::roto::model_for(&params).is_none());
-        assert_eq!(s.execute_checked("roto.model.remove", json!({"id": id})).unwrap()["removed"], true);
-        assert!(!dir.join(format!("{id}.safetensors")).exists(), "{id} removed");
-    }
+    verify_installed_sam2_sizes(&mut s);
     // EFFECTCRAFT_FACE_LANDMARKER=path/to/face_landmarker.task: installed with its notice,
     // loaded for face tracking, dropped when the classic tracker is chosen, removed.
     if let Ok(path) = std::env::var("EFFECTCRAFT_FACE_LANDMARKER") {
@@ -148,6 +119,40 @@ fn models_are_listed_chosen_and_verified() {
         assert!(!dir.join("face_landmarker.task").exists() && !dir.join("face_landmarker.task.NOTICE.txt").exists());
     }
     let _ = std::fs::remove_dir_all(d);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn verify_installed_sam2_sizes(s: &mut Session) {
+    // The SAM 2.1 sizes, each from its own file (EFFECTCRAFT_SAM2, _SAM2_SMALL, _SAM2_BASE_PLUS, _SAM2_LARGE =
+    // path/to/model.safetensors of facebook/sam2.1-hiera-*): installed with its notice, loaded (verified, native
+    // only) and used by Roto Brush 3.0, then dropped and removed.
+    for (var, id) in [
+        ("EFFECTCRAFT_SAM2", "sam2.1-hiera-tiny"),
+        ("EFFECTCRAFT_SAM2_SMALL", "sam2.1-hiera-small"),
+        ("EFFECTCRAFT_SAM2_BASE_PLUS", "sam2.1-hiera-base-plus"),
+        ("EFFECTCRAFT_SAM2_LARGE", "sam2.1-hiera-large"),
+    ] {
+        let Ok(path) = std::env::var(var) else { continue };
+        let r = s.execute_checked("roto.model.install", json!({"path": path})).unwrap();
+        assert_eq!(r["id"], id, "{var}");
+        let dir = s.models_dir().unwrap();
+        let notice = std::fs::read_to_string(dir.join(format!("{id}.safetensors.NOTICE.txt"))).unwrap();
+        assert!(notice.contains("Meta AI") && notice.contains("Apache-2.0"), "{notice}");
+        s.execute_checked("roto.model.select", json!({"id": id})).unwrap();
+        wait_loaded(s, Task::Mask);
+        assert_eq!(s.models.status(Task::Mask).active.as_deref(), Some(id), "{var}");
+        let params = crate::effects::Params { values: [("version".to_string(), effectcraft_keyframe::Value::Enum(2))].into_iter().collect() };
+        assert_eq!(crate::effects::roto::model_for(&params).map(|m| m.info().id), Some(id));
+        // the list says it is installed, and exactly one size is recommended
+        let list = s.execute_checked("roto.models", json!({})).unwrap();
+        let entry = list["models"].as_array().unwrap().iter().find(|m| m["id"] == id).unwrap();
+        assert_eq!(entry["installed"], true);
+        assert_eq!(list["models"].as_array().unwrap().iter().filter(|m| m["recommended"] == true).count(), 1);
+        s.execute_checked("roto.model.select", json!({"id": "classical"})).unwrap();
+        assert!(crate::effects::roto::model_for(&params).is_none());
+        assert_eq!(s.execute_checked("roto.model.remove", json!({"id": id})).unwrap()["removed"], true);
+        assert!(!dir.join(format!("{id}.safetensors")).exists(), "{id} removed");
+    }
 }
 
 /// A Roto Brush model that has been idle for ten minutes is unloaded (the choice stays), one in use is not,
@@ -167,7 +172,7 @@ fn an_idle_roto_model_is_unloaded() {
             self.0
         }
     }
-    crate::tests_roto::hold_roto_cache_test_lock();
+    crate::tests::roto::hold_roto_cache_test_lock();
     let (mut s, d) = session("idle");
     for (idle, unloaded) in [(Some(5.0), false), (None, false), (Some(601.0), true)] {
         let m: Arc<dyn MaskModel> = Arc::new(Fake(idle));
@@ -256,7 +261,7 @@ fn reloading_for_a_stroke_does_not_block_or_retry_a_failed_load() {
 #[test]
 fn downloading_a_size_installs_and_loads_it() {
     let Ok(id) = std::env::var("EFFECTCRAFT_DOWNLOAD_SIZE") else { return };
-    crate::tests_roto::hold_roto_cache_test_lock();
+    crate::tests::roto::hold_roto_cache_test_lock();
     let (mut s, d) = session("download");
     let info = effectcraft_segment::info(&id).unwrap();
     if info.url.is_empty() {

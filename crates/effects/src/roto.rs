@@ -696,7 +696,7 @@ impl Chain {
                 let strokes = self.data.strokes_of(f, obj);
                 let p = match frame(f) {
                     Some(img) => rb::tracker_prompt_boxed(&strokes, self.opts.scale, &rb::segment(&img, &strokes, None, &self.opts, self.refine_radius)),
-                    None => rb::tracker_prompt(&strokes, self.opts.scale),
+                    None => return Err(format!("cannot read Roto Brush prompt frame {f}")),
                 };
                 if p.points.iter().any(|(_, fg)| *fg) {
                     prompts.push((f, p));

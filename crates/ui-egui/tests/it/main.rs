@@ -72,6 +72,8 @@ mod ui_quick_offset;
 mod ui_ram_preview;
 mod ui_render_queue;
 mod ui_render_queue_keyboard;
+mod ui_roto_objects;
+mod ui_roto_span_confidence;
 mod ui_script_console;
 mod ui_scriptui;
 mod ui_scrolling;

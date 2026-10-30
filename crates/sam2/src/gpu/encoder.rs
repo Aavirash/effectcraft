@@ -237,7 +237,7 @@ impl GpuEncoder {
         let px = g.upload(&pixels.contiguous()?.flatten_all()?.to_vec1::<f32>()?);
         let (mut h, mut w) = (ph / 4, pw / 4);
         let tokens = g.zeros(h * w * hidden)?;
-        g.patch_embed(&px, &self.patch_w, &self.patch_b, &tokens, ph, pw, hidden)?;
+        g.patch_embed(&px, &self.patch_w, &self.patch_b, &tokens, (ph, pw, hidden))?;
         let mut x = g.zeros(h * w * hidden)?;
         g.add(&tokens, &self.pos_buffer(h, w)?, &x, h * w * hidden)?;
         let mut stages: Vec<(Buf, usize, usize, usize)> = vec![];

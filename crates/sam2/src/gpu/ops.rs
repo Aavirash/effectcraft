@@ -169,7 +169,7 @@ impl Gpu {
     }
 
     /// The patch embedding: `[3, h, w]` pixels, weight `[co, 3, 7, 7]`, bias `[co]`; output `[h/4, w/4, co]`.
-    pub fn patch_embed(&self, pixels: &Buf, weight: &Buf, bias: &Buf, out: &Buf, h: usize, w: usize, co: usize) -> Result<()> {
+    pub fn patch_embed(&self, pixels: &Buf, weight: &Buf, bias: &Buf, out: &Buf, (h, w, co): (usize, usize, usize)) -> Result<()> {
         let (ho, wo) = ((h + 6 - 7) / 4 + 1, (w + 6 - 7) / 4 + 1);
         need(pixels, 3 * h * w, "patch_embed pixels")?;
         need(weight, co * 3 * 49, "patch_embed weight")?;

@@ -340,7 +340,7 @@ fn patch_embed_rope_and_upsample_match_the_cpu_definitions() {
     let (gp, gw, gb) = (g.upload(&px), g.upload(&wt), g.upload(&bias));
     let (ho, wo) = (h / 4, w / 4);
     let out = g.zeros(ho * wo * co).unwrap();
-    g.patch_embed(&gp, &gw, &gb, &out, h, w, co).unwrap();
+    g.patch_embed(&gp, &gw, &gb, &out, (h, w, co)).unwrap();
     let t = Tensor::from_vec(px, (1, 3, h, w), &Device::Cpu).unwrap();
     let k = Tensor::from_vec(wt, (co, 3, 7, 7), &Device::Cpu).unwrap();
     let want =

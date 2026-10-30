@@ -950,18 +950,18 @@ fn points_along(s: &Stroke, scale: f64, max: usize) -> Vec<[f32; 2]> {
 /// SAM 2 was trained on a handful of clicks: with sixteen or more points it doubts its own mask
 /// (measured: confidence 0.25 with 16 points, 0.00 with 32, 0.99 with 1 to 7), so this picks at
 /// most [`TRACKER_FG_POINTS`] foreground and [`TRACKER_BG_POINTS`] background points, spread
-/// along the strokes.
-pub fn tracker_prompt(strokes: &[&Stroke], scale: f64) -> Prompt {
+/// along the strokes. Like [`stroke_prompt`], later corrections win over earlier paint.
+pub fn tracker_prompt(strokes: &[&Stroke], scale: f64, w: usize, h: usize) -> Prompt {
+    let hard = resolve(strokes, StrokeKind::Fg, StrokeKind::Bg, scale, w, h);
+    let prompt = stroke_prompt(strokes, &hard, scale, w, h);
     let mut points = vec![];
-    for (kind, fg, max) in [(StrokeKind::Fg, true, TRACKER_FG_POINTS), (StrokeKind::Bg, false, TRACKER_BG_POINTS)] {
-        let all: Vec<[f32; 2]> = strokes.iter().filter(|s| s.kind == kind).flat_map(|s| points_along(s, scale, 3)).collect();
+    for (fg, max) in [(true, TRACKER_FG_POINTS), (false, TRACKER_BG_POINTS)] {
+        let all: Vec<[f32; 2]> = prompt.points.iter().filter_map(|(p, label)| (*label == fg).then_some(*p)).collect();
         let n = all.len().min(max);
         // evenly spaced picks, keeping the first and the last
         points.extend((0..n).filter_map(|i| all.get(if n > 1 { i * (all.len() - 1) / (n - 1) } else { all.len() / 2 }).map(|p| (*p, fg))));
     }
-    // a box the user drew on the frame prompts the tracker too
-    let bbox = strokes.iter().filter(|s| s.kind == StrokeKind::Box).find_map(|s| box_of(s, scale));
-    Prompt { points, bbox, ..Default::default() }
+    Prompt { points, ..prompt }
 }
 
 /// [`tracker_prompt`] plus a box around the classic engine's matte of the same strokes. Clicks alone
@@ -969,7 +969,7 @@ pub fn tracker_prompt(strokes: &[&Stroke], scale: f64) -> Prompt {
 /// multi-part figure, against 1.00 with the box); the box says how far the object reaches. A box
 /// stroke the user drew wins over the matte's.
 pub fn tracker_prompt_boxed(strokes: &[&Stroke], scale: f64, classic: &FrameSeg) -> Prompt {
-    let mut p = tracker_prompt(strokes, scale);
+    let mut p = tracker_prompt(strokes, scale, classic.w, classic.h);
     if p.bbox.is_none() {
         let (w, h) = (classic.w, classic.h);
         let (mut x0, mut y0, mut x1, mut y1) = (usize::MAX, usize::MAX, 0usize, 0usize);

@@ -452,7 +452,7 @@ pub fn bar_buttons(app: &mut EffectcraftApp, ui: &mut egui::Ui, p: &egui::Painte
     let r = Rect::from_min_size(pos2(x, bar.center().y - 10.0), vec2(104.0, 20.0));
     let strokes = fx::data(&params).strokes.iter().filter(|st| st.object == current && st.kind.is_segmentation()).count();
     let label = if strokes == 0 { tr_args("Object {}", &[&(current + 1)]) } else { tr_args("Object {} ({})", &[&(current + 1), &strokes]) };
-    if widgets::text_button(ui, r, &label, false, &t, egui::Id::new(("roto-object", uid))).clicked() {
+    if widgets::text_button(ui, r, &label, false, &t, egui::Id::unique(("roto-object", uid))).clicked() {
         // cycle through the objects that have strokes (and the empty one being drawn)
         let mut all = objects.clone();
         if !known {
@@ -466,7 +466,7 @@ pub fn bar_buttons(app: &mut EffectcraftApp, ui: &mut egui::Ui, p: &egui::Painte
     app.auto.add("layerPanel.roto.object", r, &label);
     x += 108.0;
     let r = Rect::from_min_size(pos2(x, bar.center().y - 10.0), vec2(26.0, 20.0));
-    if widgets::text_button(ui, r, "+", false, &t, egui::Id::new(("roto-object-new", uid))).clicked() {
+    if widgets::text_button(ui, r, "+", false, &t, egui::Id::unique(("roto-object-new", uid))).clicked() {
         let next = objects.iter().copied().chain([current]).max().map_or(0, |m| m + 1);
         let _ = app.session.execute("roto.options", json!({"object": next}));
     }
@@ -475,7 +475,7 @@ pub fn bar_buttons(app: &mut EffectcraftApp, ui: &mut egui::Ui, p: &egui::Painte
     // remove the current object's strokes (the object stays selected; with none left it is simply empty)
     if strokes > 0 {
         let r = Rect::from_min_size(pos2(x, bar.center().y - 10.0), vec2(26.0, 20.0));
-        let c = widgets::text_button(ui, r, "×", false, &t, egui::Id::new(("roto-object-clear", uid))).on_hover_text(tr("Remove this object's strokes"));
+        let c = widgets::text_button(ui, r, "×", false, &t, egui::Id::unique(("roto-object-clear", uid))).on_hover_text(tr("Remove this object's strokes"));
         if c.clicked()
             && let Err(e) = app.session.execute("roto.clearStrokes", json!({"layer": layer.id.0, "effect": uid, "object": current}))
         {

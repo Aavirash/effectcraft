@@ -64,6 +64,7 @@ fn close(got: [u8; 4], want: [u8; 3]) -> bool {
 
 #[test]
 fn the_span_bar_shows_the_trackers_confidence() {
+    let _gpu = crate::gpu_test::lock();
     let mut s = Session::default();
     s.execute("comp.new", json!({"name": "View", "width": 640, "height": 360, "duration": 4})).unwrap();
     s.execute("layer.newSolid", json!({"name": "Box", "color": "#e04020", "width": 80, "height": 80})).unwrap();

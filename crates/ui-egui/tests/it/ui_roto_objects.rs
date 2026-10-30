@@ -59,6 +59,7 @@ fn count(image: &image::RgbaImage, want: [u8; 3]) -> usize {
 
 #[test]
 fn the_boundary_view_outlines_each_object_and_show_object_picks_one() {
+    let _gpu = crate::gpu_test::lock();
     let mut s = Session::default();
     s.execute("comp.new", json!({"name": "View", "width": 640, "height": 360, "duration": 4})).unwrap();
     s.execute("layer.newSolid", json!({"name": "Box", "color": "#e04020", "width": 80, "height": 80})).unwrap();
