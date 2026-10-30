@@ -44,7 +44,7 @@ C++ build tools installed, the commands above work as they are.
 
 The GNU toolchain (`x86_64-pc-windows-gnu`) needs a current mingw-w64 GCC and binutils first on
 `PATH`. They provide the linker and the Windows import libraries, such as `libshlwapi.a` for
-opening links from the app. With [MSYS2](https://www.msys2.org/):
+opening links from the app. With MSYS2:
 
 ```powershell
 C:\msys64\usr\bin\pacman.exe -S --needed mingw-w64-x86_64-gcc
