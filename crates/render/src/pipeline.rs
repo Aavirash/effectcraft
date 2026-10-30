@@ -1,6 +1,6 @@
 use super::accel::{Accelerator, Backend, CpuFx, FxStep, FxTarget};
 use super::footage::{FootageSource, is_vector_footage};
-use super::frames::{blend_frames, content_bounds, field_frame, frame_blend_mode, frame_position, frame_size, interpret_pixels, roi_inside};
+use super::frames::{blend_frames, cineon_frame, content_bounds, field_frame, frame_blend_mode, frame_position, frame_size, interpret_pixels, roi_inside};
 use super::fx_host::{FxHost, essential_overrides};
 use super::opts::{Collapse3d, LayerTiming, MAX_THROUGH, RenderOpts, Through};
 use super::{
@@ -829,16 +829,17 @@ impl<'a> Renderer<'a> {
         if f.fields != effectcraft_project::FieldOrder::Off && matches!(f.kind, FootageKind::Video | FootageKind::Sequence) {
             let field_rate = FrameRate::new(f.frame_rate.num * 2, f.frame_rate.den);
             let i = field_rate.frame_at(t).max(0);
-            let img = self.footage.frame_with(item, f, f.frame_rate.tick_of(i / 2), None, self.pipe.float_curve(f))?;
+            let img = cineon_frame(self.footage.frame_with(item, f, f.frame_rate.tick_of(i / 2), None, self.pipe.float_curve(f))?, f);
             let dominant_upper = f.fields == effectcraft_project::FieldOrder::UpperFirst;
             // Upper field = even lines (0, 2, …).
             let parity = if (i % 2 == 0) == dominant_upper { 0 } else { 1 };
             return Some(Arc::new(interpret_pixels(&field_frame(&img, parity), f, self.pipe.linear_footage_space(f))));
         }
         // Interpretation is per pixel but not linear: it runs on the frame before resampling.
-        let size = size.filter(|_| !(f.invert_alpha || f.linear_light_applies()));
+        let per_pixel = f.invert_alpha || f.linear_light_applies();
+        let size = size.filter(|_| !(per_pixel || f.cineon_applies()));
         let img = self.footage_frame_raw(ctx, layer, item, f, t, size)?;
-        if f.invert_alpha || f.linear_light_applies() { Some(Arc::new(interpret_pixels(&img, f, self.pipe.linear_footage_space(f)))) } else { Some(img) }
+        if per_pixel { Some(Arc::new(interpret_pixels(&img, f, self.pipe.linear_footage_space(f)))) } else { Some(img) }
     }
 
     fn footage_frame_raw(&self, ctx: &EvalCtx, layer: &Layer, item: ItemId, f: &Footage, t: Tick, size: Option<(u32, u32)>) -> Option<Arc<Image>> {
@@ -856,6 +857,10 @@ impl<'a> Renderer<'a> {
                     if f.alpha == effectcraft_project::AlphaMode::Premultiplied {
                         f.premul_color.map(f32::to_bits).hash(&mut h);
                     }
+                    if f.cineon_applies() {
+                        let c = &f.cineon;
+                        [c.converted_black, c.converted_white, c.black, c.white, c.gamma, c.rolloff].map(f32::to_bits).hash(&mut h);
+                    }
                     h.finish()
                 });
                 if let (Some(c), Some(k)) = (self.cache, key)
@@ -863,8 +868,9 @@ impl<'a> Renderer<'a> {
                 {
                     return Some(Arc::new(b.img.clone()));
                 }
-                let a = self.footage.frame_with(item, f, f.frame_rate.tick_of(i), None, float);
-                let b = self.footage.frame_with(item, f, f.frame_rate.tick_of(i + 1), None, float);
+                // Log scans are converted before they blend: the conversion is not linear.
+                let a = self.footage.frame_with(item, f, f.frame_rate.tick_of(i), None, float).map(|a| cineon_frame(a, f));
+                let b = self.footage.frame_with(item, f, f.frame_rate.tick_of(i + 1), None, float).map(|b| cineon_frame(b, f));
                 if let (Some(a), Some(b)) = (a, b) {
                     let img = blend_frames(mode, &a, &b, w as f32);
                     if let (Some(c), Some(k)) = (self.cache_to_keep(), key) {
@@ -874,7 +880,7 @@ impl<'a> Renderer<'a> {
                 }
             }
         }
-        self.footage.frame_with(item, f, t, size, float)
+        self.footage.frame_with(item, f, t, size, float).map(|img| cineon_frame(img, f))
     }
 
     /// Source → masks, clamped/quantised to the project depth.
