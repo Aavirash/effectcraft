@@ -1460,6 +1460,7 @@ mod tests {
             assert!(!saved.objects.contains_key(&1));
             params.values.insert(TRACKED.into(), Value::Str(saved.to_json()));
             params.values.insert("rotoBrushMatte/object".into(), Value::Scalar(1.0));
+            forget(chain.keys.values().map(|key| object_key(*key, 0)));
             let reopened = Chain::new(&params, [100.0, 80.0], 25.0, 1.0);
             assert_eq!(reopened.object_seg(1, 0).unwrap().matte, matte.matte);
             assert_eq!(reopened.ensure(1, &mut |_| None, &|| false).unwrap().matte, matte.matte);
