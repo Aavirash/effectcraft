@@ -125,8 +125,7 @@ fn color_pick_preview(app: &EffectcraftApp, painter: &egui::Painter, map: &crate
     painter.rect_filled(chip, 11.0, Color32::from_black_alpha(180));
     painter.text(chip.center(), Align2::CENTER_CENTER, hint, Tokens::ui(11.5), app.tokens.text);
     if let Some(pos) = pointer
-        && let Some(img) = &app.viewer_image
-        && let Some(sample) = fw::sample_frame(img, crate::panels::viewer_tools::shown_region(painter.ctx(), map.comp), map.to_comp(pos))
+        && let Some(sample) = crate::panels::viewer_tools::sample_displayed(app, painter.ctx(), map.to_comp(pos))
     {
         let swatch = Rect::from_min_size(pos + vec2(14.0, 14.0), vec2(26.0, 18.0));
         painter.rect_filled(swatch, 2.0, Color32::from_rgb((sample[0] * 255.0) as u8, (sample[1] * 255.0) as u8, (sample[2] * 255.0) as u8));
@@ -162,8 +161,7 @@ fn text_color_pick(
         }
         if resp.clicked()
             && let Some(pos) = resp.interact_pointer_pos()
-            && let Some(img) = &app.viewer_image
-            && let Some(s) = fw::sample_frame(img, crate::panels::viewer_tools::shown_region(&ctx, map.comp), map.to_comp(pos))
+            && let Some(s) = crate::panels::viewer_tools::sample_displayed(app, &ctx, map.to_comp(pos))
         {
             let mut params = json!({"layer": pick.layer});
             params[&pick.field] = json!([s[0], s[1], s[2]]);
@@ -196,8 +194,7 @@ fn popup_eyedropper(app: &mut EffectcraftApp, ui: &mut egui::Ui, painter: &egui:
     app.viewer_pixels();
     color_pick_preview(app, painter, map, crate::i18n::tr("Click to sample color"), crate::color_picker::eyedropper_point(&ctx));
     if let Some(pos) = crate::color_picker::sample_press(&ctx)
-        && let Some(img) = &app.viewer_image
-        && let Some(s) = fw::sample_frame(img, crate::panels::viewer_tools::shown_region(&ctx, map.comp), map.to_comp(pos))
+        && let Some(s) = crate::panels::viewer_tools::sample_displayed(app, &ctx, map.to_comp(pos))
     {
         crate::color_picker::deliver_sample(&ctx, [s[0], s[1], s[2]]);
     }
