@@ -2,6 +2,7 @@
 //! interest drawing, rulers and guides, snapping, the shape Pen and motion-path key drags
 //! (egui_kittest, UI logic only).
 
+use crate::gpu_test::RenderSerial;
 use effectcraft_engine::Session;
 use effectcraft_engine::commands::shape_tool::PaintKind;
 use effectcraft_engine::project::LayerId;
@@ -448,7 +449,7 @@ fn mid_drag(h: &mut Harness<'_, EffectcraftApp>, from: Pos2, to: Pos2, mods: egu
         h.input_mut().events.push(Event::PointerMoved(from + (to - from) * (i as f32 / 8.0)));
         h.step();
     }
-    h.render().expect("the mid-drag frame")
+    h.render_serialized().expect("the mid-drag frame")
 }
 
 /// Release the button where the drag left it.
@@ -490,7 +491,7 @@ fn shape_drag_ghost_shows_the_tools_own_shape_while_dragging() {
         h.state_mut().ui.tool = tool;
         settle_viewer(&mut h);
         let (a, b) = (screen(&h, from), screen(&h, to));
-        let before = h.render().expect("the frame before the drag");
+        let before = h.render_serialized().expect("the frame before the drag");
         let mid = mid_drag(&mut h, a, b, egui::Modifiers::default());
         let fill = fill_rgb(&h);
 
@@ -526,7 +527,7 @@ fn shape_drag_ghost_normalises_the_same_way_as_the_release() {
         h.state_mut().ui.tool = Tool::Ellipse;
         settle_viewer(&mut h);
         let (a, b) = (screen(&h, from.map(|v| v as f32)), screen(&h, to.map(|v| v as f32)));
-        let before = h.render().expect("the frame before the drag");
+        let before = h.render_serialized().expect("the frame before the drag");
         // Measured with the button down, so this is the ghost and not the committed shape.
         let mid = mid_drag(&mut h, a, b, mods);
         let on = [centre[0] as f32 + size[0] as f32 / 4.0, centre[1] as f32 + size[1] as f32 / 4.0];
@@ -595,7 +596,7 @@ fn a_layer_drag_moves_the_picture_while_the_button_is_down() {
     h.input_mut().events.push(Event::PointerButton { pos: from, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
     h.step();
     // Where the layer is not (yet): the plate behind it.
-    let plate = px_at(&h.render().unwrap(), &h, [440.0, 200.0]);
+    let plate = px_at(&h.render_serialized().unwrap(), &h, [440.0, 200.0]);
 
     // Drag in small steps, still holding the button, and give the renders a chance to land.
     let mut moved = false;
@@ -606,7 +607,7 @@ fn a_layer_drag_moves_the_picture_while_the_button_is_down() {
         std::thread::sleep(std::time::Duration::from_millis(15));
         // 30 comp px behind the pointer: inside the layer, well away from its outline, its anchor
         // icon and where it started.
-        let at = px_at(&h.render().expect("mid-drag frame"), &h, [320.0 + 200.0 * (i as f32 / 40.0) - 30.0, 200.0]);
+        let at = px_at(&h.render_serialized().expect("mid-drag frame"), &h, [320.0 + 200.0 * (i as f32 / 40.0) - 30.0, 200.0]);
         if i >= 30 && delta(at, plate) > 30 {
             moved = true;
             break;
