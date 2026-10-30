@@ -8,6 +8,7 @@ use effectcraft_ui_egui::EffectcraftApp;
 use effectcraft_ui_egui::dock::PanelKind;
 use egui::{Event, Key, Modifiers, PointerButton, Pos2};
 use egui_kittest::Harness;
+use egui_kittest::kittest::Queryable;
 use serde_json::json;
 
 fn app() -> EffectcraftApp {
@@ -1853,4 +1854,20 @@ fn character_panel_line_join_buttons_set_the_join() {
     let bevel = rect(&h, "character.lineJoin.bevel").center();
     click(&mut h, bevel, Modifiers::NONE);
     assert_eq!(join(&h), effectcraft_engine::keyframe::LineJoin::Bevel);
+}
+
+/// #2075: the Character panel's stroke width has a presets menu (0.25 … 100 px) beside its value.
+#[test]
+fn character_panel_stroke_width_presets_set_the_width() {
+    let mut s = Session::default();
+    s.execute("comp.new", json!({"name": "Type", "width": 640, "height": 360, "duration": 2})).unwrap();
+    let lid = s.execute("layer.newText", json!({"text": "Stroke", "size": 80, "applyStroke": true, "strokeWidth": 8})).unwrap()["layer"].as_u64().unwrap();
+    let mut h = harness(EffectcraftApp::new(s));
+    h.state_mut().show_panel(PanelKind::Character);
+    h.run_steps(3);
+    let arrow = rect(&h, "character.strokeWidth.presets").center();
+    click(&mut h, arrow, Modifiers::NONE);
+    let entry = h.get_by_label("0.5 px").rect().center();
+    click(&mut h, entry, Modifiers::NONE);
+    assert_eq!(layer_doc(&h.state().session, LayerId(lid)).unwrap().stroke_width, 0.5);
 }
