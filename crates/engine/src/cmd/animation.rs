@@ -271,7 +271,8 @@ fn add_keyframe(s: &mut Session, _: &Value) -> Result<Value> {
 /// Selected keys grouped by (layer, property).
 fn keys_by_prop(s: &Session) -> BTreeMap<(LayerId, Uid), Vec<Tick>> {
     let mut m: BTreeMap<(LayerId, Uid), Vec<Tick>> = BTreeMap::new();
-    for k in &s.state.selected_keys {
+    let Some(comp) = s.active_comp() else { return m };
+    for k in super::prop::editable_keys(comp, &s.state.selected_keys) {
         m.entry((k.layer, k.prop)).or_default().push(k.time);
     }
     m
