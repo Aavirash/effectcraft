@@ -267,7 +267,7 @@ enum Target {
     File { key: String, identity: Option<String> },
     /// The numbered files `first..end` of a sequence: `key` is its pattern, with the width the
     /// frame numbers are padded to.
-    Frames { key: String, first: i64, end: i64 },
+    Frames { key: String, width: usize, first: i64, end: i64 },
 }
 
 impl Target {
@@ -281,8 +281,8 @@ impl Target {
     /// The `count` files of the sequence `path` (its frame-number pattern) from frame `first`.
     fn frames(path: &str, first: i64, count: u64) -> Target {
         let (before, width, after) = sequence_parts(path);
-        let key = format!("{width}:{}", key(Path::new(&format!("{before}{FRAME}{after}"))));
-        Target::Frames { key, first, end: first.saturating_add(i64::try_from(count).unwrap_or(i64::MAX)) }
+        let key = key(Path::new(&format!("{before}{FRAME}{after}")));
+        Target::Frames { key, width, first, end: first.saturating_add(i64::try_from(count).unwrap_or(i64::MAX)) }
     }
 }
 
@@ -316,8 +316,22 @@ struct Writes {
     files: HashMap<String, usize>,
     /// ... and by what the file is on its volume.
     identities: HashMap<String, usize>,
-    /// Every output that writes the frames of a sequence pattern.
-    frames: HashMap<String, Vec<usize>>,
+}
+
+/// The common range whose formatted numbers agree. Once the number (including a minus sign)
+/// fills the larger padding width, different widths produce the same file name.
+fn common_frames(first: i64, end: i64, from: i64, to: i64, width: usize, other_width: usize) -> Option<(u64, i64)> {
+    let (start, end) = (first.max(from), end.min(to));
+    let count = |a: i64, b: i64| u64::try_from(b.saturating_sub(a)).unwrap_or(0);
+    if width == other_width {
+        return (end > start).then(|| (count(start, end), start));
+    }
+    let width = width.max(other_width);
+    let power = |digits: usize| u32::try_from(digits).ok().and_then(|digits| 10i64.checked_pow(digits));
+    let negative = power(width.saturating_sub(2)).map(|n| end.min((-n).saturating_add(1))).filter(|to| *to > start);
+    let positive = power(width.saturating_sub(1)).map(|n| start.max(n)).filter(|from| *from < end);
+    let files = negative.map_or(0, |to| count(start, to)).saturating_add(positive.map_or(0, |from| count(from, end)));
+    (files > 0).then(|| (files, if negative.is_some() { start } else { positive.unwrap_or(start) }))
 }
 
 impl Writes {
@@ -329,16 +343,32 @@ impl Writes {
     fn clash(&self, later: &Write) -> Option<Clash<'_>> {
         match &later.target {
             Target::File { key, identity } => {
-                let at = self.files.get(key).or_else(|| identity.as_ref().and_then(|id| self.identities.get(id)))?;
-                Some(Clash { earlier: self.all.get(*at)?, files: 1, first: 0 })
+                if let Some(at) = self.files.get(key).or_else(|| identity.as_ref().and_then(|id| self.identities.get(id))) {
+                    return Some(Clash { earlier: self.all.get(*at)?, files: 1, first: 0 });
+                }
+                self.all.iter().find_map(|earlier| {
+                    let Target::Frames { first, end, .. } = earlier.target else { return None };
+                    let frame = sequence_frame(&crate::output_guard::key(Path::new(&earlier.path)), key)?;
+                    (first..end).contains(&frame).then_some(Clash { earlier, files: 1, first: frame })
+                })
             }
             // A frame that is there already is left alone, so a later output that skips existing
             // frames replaces none of an earlier one's.
             Target::Frames { .. } if later.skips => None,
-            Target::Frames { key, first, end } => self.frames.get(key)?.iter().filter_map(|at| self.all.get(*at)).find_map(|earlier| {
-                let Target::Frames { first: from, end: to, .. } = &earlier.target else { return None };
-                let start = (*first).max(*from);
-                let files = u64::try_from((*end).min(*to).saturating_sub(start)).ok().filter(|n| *n > 0)?;
+            Target::Frames { key, width, first, end } => self.all.iter().find_map(|earlier| {
+                let (files, start) = match &earlier.target {
+                    Target::Frames { key: other, width: other_width, first: from, end: to } if key == other => {
+                        common_frames(*first, *end, *from, *to, *width, *other_width)?
+                    }
+                    Target::File { key, .. } => {
+                        let frame = sequence_frame(&crate::output_guard::key(Path::new(&later.path)), key)?;
+                        if !(*first..*end).contains(&frame) {
+                            return None;
+                        }
+                        (1, frame)
+                    }
+                    _ => return None,
+                };
                 Some(Clash { earlier, files, first: start })
             }),
         }
@@ -353,7 +383,7 @@ impl Writes {
                     self.identities.entry(identity.clone()).or_insert(at);
                 }
             }
-            Target::Frames { key, .. } => self.frames.entry(key.clone()).or_default().push(at),
+            Target::Frames { .. } => {}
         }
         self.all.push(write);
     }
@@ -644,6 +674,21 @@ mod tests {
         let job = job_of([frames(1, "out/[##].png", 0, 5)]);
         assert_eq!(clash(&job, &frames(2, "out[##].png", 0, 5)), None);
         assert_eq!(clash(&job, &frames(2, "out/[##].png", 0, 5)), Some((1, 5, 0)));
+    }
+
+    #[test]
+    fn padding_widths_can_name_the_same_frame_and_files_can_name_sequence_frames() {
+        let job = job_of([frames(1, "out/a_[####].png", 9999, 3)]);
+        assert_eq!(clash(&job, &frames(2, "out/a_[#####].png", 9999, 3)), Some((1, 2, 10000)));
+        let job = job_of([frames(1, "out/a_[##].png", -12, 15)]);
+        assert_eq!(clash(&job, &frames(2, "out/a_[###].png", -12, 15)), Some((1, 3, -12)));
+        let job = job_of([frames(1, "out/a_[#####].png", 0, 5)]);
+        assert_eq!(clash(&job, &movie(2, "out/a_00002.png")), Some((1, 1, 2)));
+        let job = job_of([movie(1, "out/a_00002.png")]);
+        assert_eq!(clash(&job, &frames(2, "out/a_[#####].png", 0, 5)), Some((1, 1, 2)));
+        let mut skipping = frames(2, "out/a_[#####].png", 0, 5);
+        skipping.skips = true;
+        assert_eq!(clash(&job, &skipping), None);
     }
 
     /// Skip Existing Files leaves a frame that is there alone: it matters for the output that

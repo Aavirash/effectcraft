@@ -889,6 +889,17 @@ fn sequences_clash_only_on_the_frames_they_both_write() {
     assert!(f.exported().is_empty());
 }
 
+#[test]
+fn differently_padded_sequences_cannot_replace_the_same_frames() {
+    let mut f = Fixture::new("padding-width-clash");
+    f.s.execute("comp.new", json!({"name": "Main", "width": 16, "height": 16, "frameRate": 10, "duration": 2})).unwrap();
+    f.add(span(&f.text("seq_[#].png"), 0.9, 1.2));
+    f.add(span(&f.text("seq_[##].png"), 0.9, 1.2));
+    assert_eq!(f.clashes(), [(2, 1, 2)]);
+    assert!(f.render(json!({})).is_err());
+    assert!(f.exported().is_empty());
+}
+
 /// Skip Existing Files leaves a frame alone when it is there: the item that skips and comes second
 /// writes only what the first did not. The item that skips and comes first is written over.
 #[test]
