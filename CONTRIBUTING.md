@@ -76,8 +76,6 @@ linker = "rust-lld"
 rustflags = ["-C", "link-self-contained=yes", "-L", "native=C:/gnu-import-libs"]
 ```
 
-The `Windows toolchains` workflow builds the app and the CLI each of these three ways every night.
-
 ## Ground rules
 
 - **Clean room.** Work from After Effects' public documentation and its observable behaviour only.
