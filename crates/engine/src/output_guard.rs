@@ -494,7 +494,8 @@ impl Session {
         } else {
             Target::file(Path::new(path), by_identity)
         };
-        Write { item: m.id, path: path.to_string(), target, skips: m.settings.skip_existing }
+        let skips = m.settings.skip_existing && self.exporter.as_ref().is_some_and(|exporter| exporter.supports_skip_existing());
+        Write { item: m.id, path: path.to_string(), target, skips }
     }
 
     /// The report of `later` writing over `clash`.

@@ -28,6 +28,9 @@ impl Exporter for Writer {
     fn formats(&self) -> Vec<OutputFormat> {
         OutputFormat::ALL.to_vec()
     }
+    fn supports_skip_existing(&self) -> bool {
+        true
+    }
     fn export(&self, job: &ExportJob, _: &mut dyn FnMut(u64, u64) -> bool) -> Result<ExportResult, String> {
         self.jobs.lock().unwrap().push(job.path.to_string());
         let comp = job.project.comp(job.item.comp).ok_or("no comp")?;

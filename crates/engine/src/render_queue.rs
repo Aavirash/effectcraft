@@ -57,6 +57,11 @@ pub struct ExportResult {
 pub trait Exporter: Send + Sync {
     /// Formats this build can write.
     fn formats(&self) -> Vec<OutputFormat>;
+    /// Whether Skip Existing Files preserves sequence frames written by earlier items. Exporters
+    /// without an existence check (such as memory sinks) must keep the conservative default.
+    fn supports_skip_existing(&self) -> bool {
+        false
+    }
     /// Render and write one item (blocking). `progress(done, total)` returns `false` to cancel;
     /// a cancelled export removes the files it opened for that output and returns `Err("cancelled")`.
     /// Completed earlier queue items and unrelated files must be preserved.

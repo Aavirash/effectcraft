@@ -33,6 +33,9 @@ impl Exporter for FileExporter {
     fn formats(&self) -> Vec<OutputFormat> {
         effectcraft_export::available_formats()
     }
+    fn supports_skip_existing(&self) -> bool {
+        self.sink.is_none() && !cfg!(target_arch = "wasm32")
+    }
     fn export(&self, job: &ExportJob, progress: &mut dyn FnMut(u64, u64) -> bool) -> Result<ExportResult, String> {
         effectcraft_engine::render::passes::block_on(self.export_async(job, progress))
     }
