@@ -175,6 +175,30 @@ fn layer_style_buttons_stay_in_view() {
     }
 }
 
+/// #2057: Gradient Overlay's gradient has an Edit Gradient… button in the Layer Style dialog. It
+/// opens the Gradient Editor on that property, and closing the editor goes back to the dialog.
+#[test]
+fn layer_style_gradient_opens_the_gradient_editor() {
+    for ok in [true, false] {
+        let mut h = harness(1400.0);
+        let lid = h.state().session.active_comp().unwrap().layers[0].id.0;
+        h.state_mut().session.execute("layer.select", json!({"layers": [lid]})).unwrap();
+        let ctx = h.ctx.clone();
+        effectcraft_ui_egui::menus::invoke(h.state_mut(), &ctx, "layer.style.gradientOverlay", json!({})).unwrap();
+        h.run_steps(5);
+        let edit = in_view(&h, "dialog.layerStyle.value.gradientOverlay/colors");
+        click(&mut h, edit);
+        assert_eq!(h.state().dialog, Some(effectcraft_ui_egui::Dialog::GradientEditor), "Edit Gradient… opened the editor");
+        effectcraft_ui_egui::panels::gradient_editor::finish(h.state_mut(), ok, &ctx);
+        h.run_steps(2);
+        assert_eq!(h.state().dialog, Some(effectcraft_ui_egui::Dialog::LayerStyles), "closing the editor (OK {ok}) went back to the dialog");
+        // The dialog closes as before once the editor is gone.
+        effectcraft_ui_egui::panels::layer_styles_dialog::finish(h.state_mut(), true);
+        h.run_steps(2);
+        assert_eq!(h.state().dialog, None);
+    }
+}
+
 /// #1062: with the buttons kept at the bottom, the style's controls still scroll both ways, so
 /// every one of them can be reached in the smallest window (960×600) at 200 % UI Scale, and in a
 /// dialog opened in a large window that then narrows: here Noise, near the end of Drop Shadow,
