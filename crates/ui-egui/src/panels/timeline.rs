@@ -3058,7 +3058,7 @@ fn layer_mode_cell(app: &mut EffectcraftApp, ui: &mut egui::Ui, g: &mut Rw, rc: 
     }
     let tr = Rect::from_center_size(pos2(cw.mode + 76.0 + 6.0, cy), vec2(14.0, 14.0));
     app.auto.add(&format!("timeline.layer.{}.preserveTransparency", layer.id.0), tr, "Preserve Transparency");
-    if widgets::checkbox(ui, tr, layer.preserve_transparency, &t, egui::Id::unique(("pt", layer.id.0))).clicked() {
+    if widgets::checkbox(ui, tr, layer.preserve_transparency, &t, egui::Id::unique(("pt", layer.id.0))).changed() {
         // The click gives the selection the state the clicked row toggles to,
         // whatever the first selected layer's value (as the switches do).
         actions.push((
@@ -3565,7 +3565,7 @@ fn group_mask_mode(ui: &mut egui::Ui, g: &mut Rw, rc: &RowCtx<'_>) {
             actions.push(("layer.setMask".into(), json!({"layer": layer.id.0, "mask": uid, "mode": opts[i]})));
         }
         let ir = Rect::from_min_size(pos2(mr.max.x + 8.0, cy - 8.0), vec2(16.0, 16.0));
-        if widgets::checkbox(ui, ir, inverted, &t, egui::Id::unique(("minv", uid))).clicked() {
+        if widgets::checkbox(ui, ir, inverted, &t, egui::Id::unique(("minv", uid))).changed() {
             actions.push(("layer.setMask".into(), json!({"layer": layer.id.0, "mask": uid, "inverted": !inverted})));
         }
         lp.text(pos2(ir.max.x + 4.0, cy), Align2::LEFT_CENTER, crate::i18n::tr("Inverted"), Tokens::ui(11.0), t.text_dim);
@@ -5773,7 +5773,7 @@ fn bool_editor(app: &mut EffectcraftApp, ui: &mut egui::Ui, ve: &ValueEdit<'_>, 
     let t = app.tokens;
     let x = at.x;
     let r = Rect::from_min_size(pos2(x, at.y - 8.0), vec2(16.0, 16.0));
-    if widgets::checkbox(ui, r, *b, &t, egui::Id::unique(("cb", uid))).clicked() {
+    if widgets::checkbox(ui, r, *b, &t, egui::Id::unique(("cb", uid))).changed() {
         ve.set(actions, json!(!b));
     }
     app.auto.add(&format!("timeline.prop.{uid}.value"), r, &prop.name);
