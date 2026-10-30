@@ -2,6 +2,7 @@
 //! windows (clicks reach the script's handlers), the branching History panel, and the Window /
 //! File ▸ Scripts menus listing scripts (egui_kittest, UI logic only).
 
+use crate::gpu_test::RenderSerial;
 use effectcraft_ui_egui::EffectcraftApp;
 use effectcraft_ui_egui::dock::PanelKind;
 use effectcraft_ui_egui::dock::WorkspaceExt as _;
@@ -210,6 +211,7 @@ fn history_panel_jumps_between_branches() {
 /// onDraw fills of concave paths and real images (drawImage, image controls), rendered.
 #[test]
 fn on_draw_concave_fills_and_images_render() {
+    let _device = crate::gpu_test::lock();
     let dir = std::env::temp_dir().join(format!("effectcraft-scriptui-img-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let png = dir.join("green.png");
@@ -244,7 +246,7 @@ fn on_draw_concave_fills_and_images_render() {
     let g = &win.root.children[0];
     assert!(matches!(&g.draw[1], effectcraft_engine::scriptui::DrawOp::Image { image: Some(i), .. } if i.src.as_deref() == Some(png.as_str())));
     assert_eq!(win.root.children[1].image.as_ref().and_then(|i| i.src.clone()).as_deref(), Some(png.as_str()));
-    let img = h.render().expect("render");
+    let img = h.render_serialized().expect("render");
     if let Ok(d) = std::env::var("EC_SNAPSHOT_DIR") {
         img.save(format!("{d}/scriptui_paint.png")).unwrap();
     }

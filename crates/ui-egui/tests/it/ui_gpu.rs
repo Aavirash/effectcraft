@@ -41,6 +41,7 @@ fn same_adapter(name: String) -> eframe::egui_wgpu::WgpuSetup {
 
 #[test]
 fn viewer_draws_gpu_frames_that_match_the_cpu() {
+    let _device = crate::gpu_test::lock();
     let Some(probe) = effectcraft_gpu::Gpu::headless() else {
         eprintln!("no GPU adapter: skipping");
         return;
