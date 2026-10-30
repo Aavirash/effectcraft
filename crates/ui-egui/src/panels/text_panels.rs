@@ -127,21 +127,46 @@ fn numeric_fields(app: &mut EffectcraftApp, ui: &mut egui::Ui, p: &egui::Painter
         let row = i / 2;
         let fx = x0 + col as f32 * (w / 2.0);
         let fy = y + row as f32 * 28.0;
-        p.text(pos2(fx, fy + 9.0), Align2::LEFT_CENTER, glyph, Tokens::semibold(11.0), t.text_dim);
-        let (r, nv, _) = widgets::hot_number_at(
-            ui,
-            pos2(fx + 26.0, fy),
-            egui::Id::unique(("char", key)),
-            v,
-            &widgets::HotSpec { speed: 0.5, range, decimals: 0, suffix },
-            &t,
-        );
+        let stroke = key == "strokeWidth";
+        if stroke {
+            // The stroke-width icon, as in After Effects, not a letter that reads as "width".
+            crate::icons::paint(p, Rect::from_min_size(pos2(fx, fy + 1.0), vec2(18.0, 18.0)), crate::icons::Icon::StrokeWidth, t.text_dim);
+        } else {
+            p.text(pos2(fx, fy + 9.0), Align2::LEFT_CENTER, glyph, Tokens::semibold(11.0), t.text_dim);
+        }
+        // Fractional stroke widths (the 0.25 / 0.5 / 0.75 presets) show their decimals.
+        let decimals = if stroke && v.fract().abs() > 1e-9 { 2 } else { 0 };
+        let (r, nv, _) =
+            widgets::hot_number_at(ui, pos2(fx + 26.0, fy), egui::Id::unique(("char", key)), v, &widgets::HotSpec { speed: 0.5, range, decimals, suffix }, &t);
         app.auto.add(&format!("character.{key}"), r, key);
+        if stroke {
+            stroke_width_presets(app, ui, r, enabled, actions);
+        }
         if let Some(nv) = nv
             && enabled
         {
             actions.push(json!({key: nv, "merge": format!("char-{key}")}));
         }
+    }
+}
+
+/// The stroke width's presets menu beside its value (`r`), as in After Effects.
+fn stroke_width_presets(app: &mut EffectcraftApp, ui: &mut egui::Ui, r: Rect, enabled: bool, actions: &mut Vec<serde_json::Value>) {
+    const PRESETS: [f64; 22] = [0.25, 0.5, 0.75, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0, 90.0, 100.0];
+    let t = app.tokens;
+    let br = Rect::from_min_size(pos2(r.max.x + 4.0, r.min.y + 2.0), vec2(16.0, 16.0));
+    let pop = egui::Id::unique("char-stroke-width-pop");
+    if widgets::icon_button(ui, br, crate::icons::Icon::ChevronDown, false, &t, egui::Id::unique("char-stroke-width-presets"))
+        .on_hover_text(tr("Stroke width presets"))
+        .clicked()
+        && enabled
+    {
+        widgets::open_popup(ui, pop);
+    }
+    app.auto.add("character.strokeWidth.presets", br, "Stroke width presets");
+    let labels: Vec<String> = PRESETS.iter().map(|v| format!("{v} px")).collect();
+    if let Some(v) = widgets::popup_menu(ui, pop, br.left_bottom(), &labels, None).and_then(|i| PRESETS.get(i)) {
+        actions.push(json!({"strokeWidth": v}));
     }
 }
 
