@@ -821,3 +821,42 @@ fn polystar_multi_property_expression_clear_resolves_targets_before_removing_con
     assert!(s.redo());
     assert_eq!(group(&s), after);
 }
+
+/// Undo must discard removed controls before their UIDs can name newly allocated properties.
+#[test]
+fn polystar_undo_sanitizes_live_and_parked_property_selections_before_uid_reuse() {
+    for parked in [false, true] {
+        let mut s = comp();
+        let cid = s.active_comp_id().unwrap();
+        let lid = s.execute("layer.newShape", json!({"kind": "polygon"})).unwrap()["layer"].as_u64().unwrap();
+        let polygon = layer(&s, lid).props.group("contents/group/contents/star").unwrap().clone();
+        let type_uid = polygon.get("type").unwrap().uid;
+        s.execute("comp.new", json!({"width": 100, "height": 100, "duration": 2})).unwrap();
+        let other = s.active_comp_id().unwrap();
+        s.activate_comp(cid);
+        s.state.selected_props = vec![(LayerId(lid), type_uid)];
+        s.execute("anim.addKeyframe", json!({})).unwrap();
+        let inner = layer(&s, lid).props.group("contents/group/contents/star").unwrap().get("innerRadius").unwrap().uid;
+        let valid = vec![(LayerId(lid), type_uid), (LayerId(lid), polygon.uid)];
+        s.state.selected_props = valid.iter().copied().chain([(LayerId(lid), inner)]).collect();
+        s.state.selected_keys = vec![crate::KeyRef { layer: LayerId(lid), prop: inner, time: Tick::ZERO }];
+        if parked {
+            s.activate_comp(other);
+        }
+        assert!(s.undo());
+        let (props, keys) = if parked {
+            let selection = s.state.comp_selections.get(&cid).unwrap();
+            (&selection.props, &selection.keys)
+        } else {
+            (&s.state.selected_props, &s.state.selected_keys)
+        };
+        assert_eq!(props, &valid, "remove stale leaves while preserving property and group selections");
+        assert!(keys.is_empty());
+        s.activate_comp(cid);
+        s.execute("prop.separateDimensions", json!({"layer": lid, "value": true})).unwrap();
+        let position_z = layer(&s, lid).props.prop("transform/positionZ").unwrap().clone();
+        assert_eq!(position_z.uid, inner, "the removed control's UID was actually reused");
+        s.execute("prop.setExpression", json!({"expression": "1"})).unwrap();
+        assert_eq!(layer(&s, lid).props.prop("transform/positionZ").unwrap(), &position_z, "the reused UID must not become an implicit expression target");
+    }
+}
