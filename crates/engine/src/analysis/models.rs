@@ -33,10 +33,12 @@ pub struct Status {
     pub active: Option<String>,
     /// The last failure, for the Settings page.
     pub error: Option<String>,
+    /// Failure of the selected model's load; downloads cannot block or retry that load.
+    pub load_error: Option<String>,
     /// A finished job's message and whether it failed, for a toast (taken by
     /// [`Session::poll_models`]).
     pub done: Option<(String, bool)>,
-    /// Counts selection changes: a load started under an older count is stale and its model is discarded.
+    /// Counts selection and selected-weight changes: an older load is stale and its model is discarded.
     pub generation: u64,
 }
 
@@ -204,6 +206,7 @@ impl Session {
             }
             // Selecting the same model explicitly retries a failed load.
             s.error = None;
+            s.load_error = None;
         });
     }
 
@@ -226,7 +229,7 @@ impl Session {
             }
             return;
         };
-        if st.active.as_deref() == Some(info.id) || st.busy.is_some() || st.error.is_some() {
+        if st.active.as_deref() == Some(info.id) || st.busy.is_some() || st.load_error.is_some() {
             return;
         }
         let Some(path) = self.model_path(info) else {
@@ -250,6 +253,21 @@ impl Session {
         self.models.status(Task::Mask).active
     }
 
+    /// Only installing the chosen model is a retry of that model's failed load.
+    fn retry_installed_model(&mut self, task: Task, id: &str, wait: bool) -> bool {
+        if self.chosen_model(task) != id {
+            return false;
+        }
+        set(self.models.lane(task), |s| {
+            s.error = None;
+            s.load_error = None;
+            // A load that read the old file must not report failure after these weights replaced it.
+            s.generation = s.generation.wrapping_add(1);
+        });
+        self.apply_model(task, wait);
+        true
+    }
+
     /// The Roto Brush model Settings chose, when it is one (not the classic engine).
     fn roto_model_info(&self) -> Option<&'static ModelInfo> {
         seg::info(self.chosen_model(Task::Mask)).filter(|m| m.task == Task::Mask)
@@ -268,7 +286,7 @@ impl Session {
             "installed": self.roto_model_info().is_none_or(|m| self.model_path(m).is_some()),
             "active": st.active,
             "loading": st.busy.is_some(),
-            "error": st.error,
+            "error": st.load_error.or(st.error),
         })
     }
 
@@ -284,7 +302,7 @@ impl Session {
             None
         } else if self.model_path(info).is_none() {
             Some(format!("{} is selected but not installed: propagate refuses until it is installed or Classic is chosen", info.name))
-        } else if let Some(e) = st.error {
+        } else if let Some(e) = st.load_error {
             Some(format!("{} is selected but failed to load ({e}): propagate refuses until it is selected again", info.name))
         } else {
             Some(format!("{} is selected but not loaded yet: propagate loads it first with wait: true, and refuses without it", info.name))
@@ -328,14 +346,14 @@ impl Session {
             return Err(format!("{} is selected for Roto Brush but not installed: install or download it, or choose {}", info.name, ROTO.classic_name));
         }
         let st = self.models.status(Task::Mask);
-        if st.active.as_deref() != Some(info.id) && st.busy.is_none() && st.error.is_none() {
+        if st.active.as_deref() != Some(info.id) && st.busy.is_none() && st.load_error.is_none() {
             self.apply_model(Task::Mask, wait);
         }
         let st = self.models.status(Task::Mask);
         if st.active.as_deref() == Some(info.id) {
             return Ok(());
         }
-        if let Some(e) = st.error {
+        if let Some(e) = st.load_error {
             return Err(format!("{} failed to load: {e}", info.name));
         }
         Err(format!("{} is still loading: try again when it is ready, or pass wait: true", info.name))
@@ -366,7 +384,7 @@ impl Session {
     pub fn reload_roto_model(&mut self) {
         let chosen = self.chosen_model(Task::Mask).to_string();
         let st = self.models.status(Task::Mask);
-        if chosen != seg::CLASSICAL && st.active.is_none() && st.busy.is_none() && st.error.is_none() {
+        if chosen != seg::CLASSICAL && st.active.is_none() && st.busy.is_none() && st.load_error.is_none() {
             self.apply_model(Task::Mask, false);
         }
     }
@@ -408,7 +426,13 @@ fn spawn(
     job: impl FnOnce(&Arc<Mutex<Status>>) -> std::result::Result<String, String> + Send + 'static,
 ) {
     if cfg!(target_arch = "wasm32") {
-        set(status, |s| s.error = Some("trained models are available in the desktop app".into()));
+        set(status, |s| {
+            let message = "trained models are available in the desktop app".to_string();
+            if generation.is_some() {
+                s.load_error = Some(message.clone());
+            }
+            s.error = Some(message);
+        });
         return;
     }
     set(status, |s| {
@@ -429,6 +453,9 @@ fn spawn(
                 Ok(msg) => s.done = Some((msg, false)),
                 Err(e) => {
                     s.done = Some((format!("{label} model: {e}"), true));
+                    if generation.is_some() {
+                        s.load_error = Some(e.clone());
+                    }
                     s.error = Some(e);
                 }
             }
@@ -439,7 +466,11 @@ fn spawn(
     } else if let Err(e) = std::thread::Builder::new().name("ec-model".into()).spawn(run) {
         set(status, |s| {
             s.busy = None;
-            s.error = Some(format!("cannot start: {e}"));
+            let message = format!("cannot start: {e}");
+            if generation.is_some() {
+                s.load_error = Some(message.clone());
+            }
+            s.error = Some(message);
         });
     }
 }
@@ -556,10 +587,7 @@ fn install(s: &mut Session, p: &Value, task: Task) -> Result<Value> {
     };
     let dest = install_bytes(&dir, m, &bytes).map_err(|e| bad(&cmd, e))?;
     let wait = b_p(p, "wait").unwrap_or(false);
-    // Installing verified weights is an explicit retry, like selecting the model again.
-    set(s.models.lane(task), |s| s.error = None);
-    s.apply_model(task, wait);
-    if wait {
+    if s.retry_installed_model(task, m.id, wait) && wait {
         waited(s, task, &cmd)?;
     }
     Ok(json!({"id": m.id, "path": dest.display().to_string()}))
@@ -694,6 +722,7 @@ mod availability_tests {
             let status = lane.lock().unwrap();
             assert!(status.busy.is_none());
             assert!(status.error.is_none(), "an obsolete worker must not block the current model");
+            assert!(status.load_error.is_none());
             assert_eq!(status.done, Some((String::new(), false)), "polling must still retry the current choice");
         }
     }
@@ -712,6 +741,7 @@ mod availability_tests {
             let status = lane.lock().unwrap();
             assert!(status.busy.is_none());
             assert_eq!(status.error.as_deref(), Some("current operation failed"));
+            assert_eq!(status.load_error.as_deref(), generation.map(|_| "current operation failed"));
             assert_eq!(status.done, Some(("Roto Brush model: current operation failed".into(), true)));
         }
     }
@@ -722,10 +752,14 @@ mod availability_tests {
         for id in ["mobilesam", "mobilesam", seg::CLASSICAL] {
             let previous = session.chosen_model(Task::Mask).to_string();
             let generation = session.models.status(Task::Mask).generation;
-            set(session.models.lane(Task::Mask), |s| s.error = Some("previous load failed".into()));
+            set(session.models.lane(Task::Mask), |s| {
+                s.error = Some("previous load failed".into());
+                s.load_error = s.error.clone();
+            });
             session.choose_model(Task::Mask, id);
             let status = session.models.status(Task::Mask);
             assert!(status.error.is_none());
+            assert!(status.load_error.is_none());
             assert_eq!(status.generation, generation + u64::from(previous != id));
         }
     }
@@ -747,6 +781,61 @@ mod availability_tests {
         });
         assert_eq!(session.ensure_roto_model(false), Ok(()));
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn downloads_do_not_block_an_inactive_model_or_retry_a_failed_load() {
+        crate::tests::roto::hold_roto_cache_test_lock();
+        let dir = std::env::temp_dir().join(format!("ec-model-download-state-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let info = seg::info("mobilesam").unwrap();
+        std::fs::File::create(dir.join(info.file_name)).unwrap().set_len(info.size).unwrap();
+        let mut session = Session { models_dir: Some(dir.clone()), ..Default::default() };
+        session.choose_model(Task::Mask, info.id);
+        let lane = session.models.lane(Task::Mask).clone();
+        spawn(&lane, "Roto Brush", "Downloading another model".into(), true, None, |_| Err("download failed".into()));
+        assert_eq!(session.models.status(Task::Mask).error.as_deref(), Some("download failed"));
+        assert!(session.models.status(Task::Mask).load_error.is_none());
+        let error = session.ensure_roto_model(true).unwrap_err();
+        assert!(!error.contains("download failed"), "the installed model must be loaded despite a download failure");
+        let failure = session.models.status(Task::Mask).load_error;
+        assert!(failure.is_some(), "the synthetic weights were actually loaded and rejected");
+        for download_failed in [true, false] {
+            spawn(&lane, "Roto Brush", "Downloading another model".into(), true, None, move |_| {
+                if download_failed { Err("download failed".into()) } else { Ok("downloaded".into()) }
+            });
+            session.poll_models();
+            session.reload_roto_model();
+            let status = session.models.status(Task::Mask);
+            assert_eq!(status.load_error, failure, "a download must not clear the selected model's load failure");
+            assert!(status.busy.is_none(), "polling and strokes must not retry a failed model");
+            assert!(session.ensure_roto_model(true).unwrap_err().contains(failure.as_deref().unwrap()));
+            assert!(session.roto_model_notice(true).unwrap().contains(failure.as_deref().unwrap()));
+        }
+        crate::effects::roto::set_model(None);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn installing_an_unselected_model_keeps_the_selected_models_load_failure() {
+        crate::tests::roto::hold_roto_cache_test_lock();
+        let mut session = Session::default();
+        session.choose_model(Task::Mask, "mobilesam");
+        set(session.models.lane(Task::Mask), |s| {
+            s.error = Some("selected model failed".into());
+            s.load_error = s.error.clone();
+        });
+        let before = session.models.status(Task::Mask);
+        for wait in [false, true] {
+            assert!(!session.retry_installed_model(Task::Mask, "sam2.1-hiera-tiny", wait));
+            assert_eq!(session.models.status(Task::Mask), before);
+        }
+        // Installing the selected weights is an explicit retry, even if the installed path
+        // has since gone away (no load is started from this session's missing model folder).
+        assert!(session.retry_installed_model(Task::Mask, "mobilesam", false));
+        assert!(session.models.status(Task::Mask).load_error.is_none());
+        assert!(session.models.status(Task::Mask).error.is_none());
     }
 
     #[test]
