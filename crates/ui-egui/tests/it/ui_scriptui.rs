@@ -264,6 +264,47 @@ fn script_windows_send_mouse_events_to_listeners() {
     h.state_mut().session.execute("scriptui.close", json!({})).unwrap();
 }
 
+/// #2584: a drag that starts on a control keeps reaching it outside the script window (moves and
+/// the release), and `MouseEvent.buttons` tells a drag from a hover.
+#[test]
+fn a_drag_keeps_its_control_past_the_window_edge() {
+    let mut h = harness();
+    let code = r#"
+      var w = new Window("palette", "Drag");
+      var pad = w.add("group", undefined, undefined, { name: "pad" });
+      pad.preferredSize = [120, 80];
+      var log = w.add("statictext", undefined, "", { name: "log" });
+      log.preferredSize = [400, 20];
+      var seen = [];
+      var rec = function (e) { seen.push(e.type + (e.clientX < 0 ? " out" : " in") + " B" + e.buttons); log.text = seen.join("|"); };
+      pad.addEventListener("mousedown", rec);
+      pad.addEventListener("mousemove", rec);
+      pad.addEventListener("mouseup", rec);
+      w.show();
+    "#;
+    let r = h.state_mut().session.execute("script.run", json!({"code": code, "name": "drag.jsx"})).unwrap();
+    assert_eq!(r["ok"], true, "{r}");
+    h.run_steps(3);
+    let win = h.state().session.script_ui.windows[0].id;
+    let pad = rect(&h, &format!("scriptui.{win}.pad"));
+    let (from, to) = (pad.min + vec2(10.0, 20.0), pad.min + vec2(-300.0, 20.0));
+    h.input_mut().events.push(Event::PointerMoved(from));
+    h.run_steps(1);
+    h.input_mut().events.push(Event::PointerButton { pos: from, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
+    h.run_steps(1);
+    for k in 1..=4 {
+        h.input_mut().events.push(Event::PointerMoved(from + (to - from) * (k as f32 / 4.0)));
+        h.run_steps(1);
+    }
+    h.input_mut().events.push(Event::PointerButton { pos: to, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
+    h.run_steps(3);
+    let log = h.state().session.script_ui.windows[0].root.lookup(&json!("log")).cloned().unwrap().text;
+    assert!(log.starts_with("mousemove in B0|mousedown in B1|"), "a hover move has no button held: {log}");
+    assert!(log.contains("mousedown in B1|mousemove out B1"), "moves outside the window still arrive, with the button held: {log}");
+    assert!(log.ends_with("|mouseup out B0"), "the release outside reaches the control: {log}");
+    h.state_mut().session.execute("scriptui.close", json!({})).unwrap();
+}
+
 fn click_at(h: &mut Harness<'_, EffectcraftApp>, c: egui::Pos2) {
     h.input_mut().events.push(Event::PointerMoved(c));
     h.run_steps(1);

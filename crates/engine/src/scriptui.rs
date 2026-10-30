@@ -755,6 +755,7 @@ pub(crate) fn mouse(s: &mut Session, p: &Value) -> Result<Value> {
         "screenX": num("screenX", -FAR, FAR, 0.0),
         "screenY": num("screenY", -FAR, FAR, 0.0),
         "button": num("button", 0.0, 2.0, 0.0).round(),
+        "buttons": num("buttons", 0.0, 7.0, 0.0).round(),
         "detail": num("detail", 0.0, 1000.0, clicks).round(),
         "altKey": flag("altKey"),
         "ctrlKey": flag("ctrlKey"),
