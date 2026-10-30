@@ -916,17 +916,8 @@ fn phase_hover(app: &mut EffectcraftApp, ui: &mut egui::Ui, ectx: &EvalCtx, resp
     let pin_hits = std::mem::take(&mut v.pin_hits);
     let comp = v.comp;
     // Path vertices and tangent handles take the press before the bounding-box handles (#1042).
-    let vertex_at = |pos: Pos2, tangents: bool| -> Option<VertexHit> {
-        let reach = vertex_grab_radius(pos, handle_hits.iter().map(|(_, _, h, _)| *h));
-        // The nearest candidate wins, not the last one drawn: overlapping points and handles
-        // (several layers, a tangent beside its vertex) must not steal each other's clicks.
-        vertex_hits
-            .iter()
-            .filter(|h| h.tangent.is_some() == tangents)
-            .filter(|h| h.pos.distance(pos) < reach)
-            .min_by(|a, b| a.pos.distance(pos).total_cmp(&b.pos.distance(pos)))
-            .copied()
-    };
+    let vertex_at =
+        |pos: Pos2, tangents: bool| -> Option<VertexHit> { gesture::vertex_at(&vertex_hits, handle_hits.iter().map(|(_, _, h, _)| *h), pos, tangents) };
     let gid = egui::Id::unique("viewer-gesture");
     // An overlay on top of the viewer (e.g. the camera tracker points) takes the hover, but the pointer is still over the viewer: keep wheel zoom working.
     let hover_pos = resp.hover_pos().or_else(|| if resp.contains_pointer() { ui.input(|i| i.pointer.hover_pos()) } else { None });
@@ -1080,17 +1071,8 @@ fn phase_dragstart(app: &mut EffectcraftApp, ui: &mut egui::Ui, ectx: &EvalCtx, 
     let pin_hits = std::mem::take(&mut v.pin_hits);
     let puppet_layers = std::mem::take(&mut v.puppet_layers);
     let comp = v.comp;
-    let vertex_at = |pos: Pos2, tangents: bool| -> Option<VertexHit> {
-        let reach = vertex_grab_radius(pos, handle_hits.iter().map(|(_, _, h, _)| *h));
-        // The nearest candidate wins, not the last one drawn: overlapping points and handles
-        // (several layers, a tangent beside its vertex) must not steal each other's clicks.
-        vertex_hits
-            .iter()
-            .filter(|h| h.tangent.is_some() == tangents)
-            .filter(|h| h.pos.distance(pos) < reach)
-            .min_by(|a, b| a.pos.distance(pos).total_cmp(&b.pos.distance(pos)))
-            .copied()
-    };
+    let vertex_at =
+        |pos: Pos2, tangents: bool| -> Option<VertexHit> { gesture::vertex_at(&vertex_hits, handle_hits.iter().map(|(_, _, h, _)| *h), pos, tangents) };
     let puppet_layer = |app: &mut EffectcraftApp, cpt: [f64; 2]| -> Option<LayerId> {
         if puppet_layers.is_empty() {
             return pick(app, ectx, cpt, false);
@@ -1678,17 +1660,8 @@ fn phase_clicked(app: &mut EffectcraftApp, ectx: &EvalCtx, resp: &egui::Response
     let pin_hits = std::mem::take(&mut v.pin_hits);
     let puppet_layers = std::mem::take(&mut v.puppet_layers);
     let comp = v.comp;
-    let vertex_at = |pos: Pos2, tangents: bool| -> Option<VertexHit> {
-        let reach = vertex_grab_radius(pos, handle_hits.iter().map(|(_, _, h, _)| *h));
-        // The nearest candidate wins, not the last one drawn: overlapping points and handles
-        // (several layers, a tangent beside its vertex) must not steal each other's clicks.
-        vertex_hits
-            .iter()
-            .filter(|h| h.tangent.is_some() == tangents)
-            .filter(|h| h.pos.distance(pos) < reach)
-            .min_by(|a, b| a.pos.distance(pos).total_cmp(&b.pos.distance(pos)))
-            .copied()
-    };
+    let vertex_at =
+        |pos: Pos2, tangents: bool| -> Option<VertexHit> { gesture::vertex_at(&vertex_hits, handle_hits.iter().map(|(_, _, h, _)| *h), pos, tangents) };
     let puppet_layer = |app: &mut EffectcraftApp, cpt: [f64; 2]| -> Option<LayerId> {
         if puppet_layers.is_empty() {
             return pick(app, ectx, cpt, false);
@@ -1823,17 +1796,8 @@ fn phase_dblclick(app: &mut EffectcraftApp, ectx: &EvalCtx, resp: &egui::Respons
     let vertex_hits = std::mem::take(&mut v.vertex_hits);
     let paths = std::mem::take(&mut v.paths);
     let comp = v.comp;
-    let vertex_at = |pos: Pos2, tangents: bool| -> Option<VertexHit> {
-        let reach = vertex_grab_radius(pos, handle_hits.iter().map(|(_, _, h, _)| *h));
-        // The nearest candidate wins, not the last one drawn: overlapping points and handles
-        // (several layers, a tangent beside its vertex) must not steal each other's clicks.
-        vertex_hits
-            .iter()
-            .filter(|h| h.tangent.is_some() == tangents)
-            .filter(|h| h.pos.distance(pos) < reach)
-            .min_by(|a, b| a.pos.distance(pos).total_cmp(&b.pos.distance(pos)))
-            .copied()
-    };
+    let vertex_at =
+        |pos: Pos2, tangents: bool| -> Option<VertexHit> { gesture::vertex_at(&vertex_hits, handle_hits.iter().map(|(_, _, h, _)| *h), pos, tangents) };
     // The editable path under the pointer: its point or segment, or (for a shape path) anywhere
     // inside its fill, so a double-click on the shape enters point editing as in After Effects.
     let path_at = |pos: Pos2| -> Option<(LayerId, u64)> {
@@ -1990,7 +1954,9 @@ use geometry::{
     snap_handle, top_level_selected, turn_delta, with_descendants,
 };
 pub(crate) use geometry::{from_effect_space, fx2c, l2c, layer_outline, layer_quad};
-use gesture::{Gesture, HANDLE, ROTO_HINT, pen_id, roi_drag, roi_handles, vertex_grab_radius};
+#[cfg(test)]
+use gesture::vertex_grab_radius;
+use gesture::{Gesture, HANDLE, ROTO_HINT, pen_id, roi_drag, roi_handles};
 use shapes::{create_shape, draw_shape_ghost, shape_drag};
 pub(crate) use shapes::{layer_at, layer_at_including_locked, layers_at, pick, selectable_layers};
 #[cfg(test)]
