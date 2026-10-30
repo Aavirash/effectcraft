@@ -694,6 +694,9 @@ impl Chain {
             let mut prompts = vec![];
             for f in self.data.stroke_frames().into_iter().filter(|f| self.data.in_span(*f)) {
                 let strokes = self.data.strokes_of(f, obj);
+                if !strokes.iter().any(|s| s.kind == StrokeKind::Fg) {
+                    continue;
+                }
                 let p = match frame(f) {
                     Some(img) => rb::tracker_prompt_boxed(&strokes, self.opts.scale, &rb::segment(&img, &strokes, None, &self.opts, self.refine_radius)),
                     None => return Err(format!("cannot read Roto Brush prompt frame {f}")),
@@ -1427,6 +1430,30 @@ mod tests {
             }
             Ok(())
         }
+    }
+
+    #[test]
+    fn prompt_segmentation_reads_only_frames_with_that_objects_foreground() {
+        let mut data = RotoData::default();
+        for (kind, frame, object) in [(StrokeKind::Fg, 0, 0), (StrokeKind::Refine, 1, 0), (StrokeKind::Fg, 2, 1)] {
+            data.add(Stroke { kind, frame, radius: 3.0, points: vec![[35.0, 40.0]], object }, 2, [0, 2]);
+        }
+        data.span = [0, 2];
+        let mut params = params_with(&data);
+        params.values.insert(INPUT_KEY.into(), Value::Str("foreground-only-prompts".into()));
+        let mut chain = Chain::new(&params, [100.0, 80.0], 25.0, 1.0);
+        let fake = Arc::new(TwoObjects(Default::default()));
+        chain.model = Some(fake.clone());
+        let mut prompt_reads = vec![];
+        let mut get = |f: i64| {
+            if fake.0.lock().unwrap().is_empty() {
+                prompt_reads.push(f);
+            }
+            Some(Arc::new(frame(f as f64 / 25.0)))
+        };
+        assert_eq!(chain.track(&mut get, &|| false, &mut |_| {}).unwrap().unwrap().frames, 3);
+        assert_eq!(prompt_reads, [0, 2], "shared Refine Edge and other objects' frames need no prompt graph cut");
+        assert_eq!(fake.0.lock().unwrap()[0], [1, 1]);
     }
 
     #[test]

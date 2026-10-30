@@ -689,7 +689,7 @@ fn bench_roto_runs_on_a_users_clip() {
         std::fs::create_dir_all(d).unwrap();
     }
     let (w, h) = (96u32, 72u32);
-    for f in 0..6u32 {
+    for f in 0..14u32 {
         let (cx, cy) = (30.0 + 4.0 * f as f32, 36.0f32);
         let (mut img, mut mask) = (image::RgbImage::new(w, h), image::GrayImage::new(w, h));
         for y in 0..h {
@@ -700,15 +700,23 @@ fn bench_roto_runs_on_a_users_clip() {
                 mask.put_pixel(x, y, image::Luma([if inside { 255 } else { 0 }]));
             }
         }
-        img.save(frames.join(format!("f{f:03}.png"))).unwrap();
-        mask.save(masks.join(format!("f{f:03}.png"))).unwrap();
+        let extension = if f == 0 { "jpg" } else { "png" };
+        let stem = match f {
+            0 => "a".into(),
+            1 => "a.jpg".into(),
+            _ => format!("f{f:03}"),
+        };
+        img.save(frames.join(format!("{stem}.{extension}"))).unwrap();
+        mask.save(masks.join(format!("{stem}.png"))).unwrap();
     }
     let (f, m) = (frames.to_str().unwrap(), masks.to_str().unwrap());
-    let out = bin().env("EFFECTCRAFT_CONFIG_DIR", &config).args(["bench", "--roto", "--clip", f, "--truth", m, "--frames", "6"]).output().unwrap();
+    let out = bin().env("EFFECTCRAFT_CONFIG_DIR", &config).args(["bench", "--roto", "--clip", f, "--truth", m, "--frames", "6", "--json"]).output().unwrap();
     let text = String::from_utf8_lossy(&out.stdout).to_string();
     assert!(out.status.success(), "{text}\n{}", String::from_utf8_lossy(&out.stderr));
-    let row = text.lines().find(|l| l.contains("classical")).unwrap_or_else(|| panic!("no classical row: {text}"));
-    let mean: f64 = row.split_whitespace().nth(2).unwrap().parse().unwrap();
+    let rows: Value = serde_json::from_str(&text).unwrap();
+    let row = rows.as_array().unwrap().iter().find(|row| row["tracker"] == "classical").unwrap();
+    assert_eq!(row["per_frame"].as_array().unwrap().len(), 6, "a user clip respects the requested frame limit");
+    let mean = row["mean_iou"].as_f64().unwrap();
     assert!(mean > 0.8, "classical mean IoU on the user's clip: {mean}\n{text}");
     // one mask short: refused
     std::fs::remove_file(masks.join("f005.png")).unwrap();
@@ -718,6 +726,40 @@ fn bench_roto_runs_on_a_users_clip() {
     // --clip without --truth
     let out = bin().env("EFFECTCRAFT_CONFIG_DIR", &config).args(["bench", "--roto", "--clip", f]).output().unwrap();
     assert!(!out.status.success());
+}
+
+#[test]
+fn bench_roto_rejects_mismatched_names_before_loading_images() {
+    let root = tmp("bench-clip-names");
+    let (frames, masks) = (root.join("frames"), root.join("masks"));
+    let _ = std::fs::remove_dir_all(&root);
+    for dir in [&frames, &masks] {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(dir.join("f000.png"), []).unwrap();
+    }
+    std::fs::write(frames.join("f001.png"), []).unwrap();
+    std::fs::write(masks.join("f002.png"), []).unwrap();
+    let out = bin()
+        .env("EFFECTCRAFT_CONFIG_DIR", root.join("config"))
+        .args(["bench", "--roto", "--frames", "1", "--clip"])
+        .arg(&frames)
+        .arg("--truth")
+        .arg(&masks)
+        .output()
+        .unwrap();
+    let error = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert!(error.contains("names must match"), "validate the entire name set before decoding: {error}");
+    std::fs::remove_file(frames.join("f001.png")).unwrap();
+    std::fs::remove_file(masks.join("f002.png")).unwrap();
+    for dir in [&frames, &masks] {
+        std::fs::write(dir.join("f000.jpg"), []).unwrap();
+    }
+    let out =
+        bin().env("EFFECTCRAFT_CONFIG_DIR", root.join("config")).args(["bench", "--roto", "--clip"]).arg(&frames).arg("--truth").arg(&masks).output().unwrap();
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("unique stems"));
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 /// `bench --roto --sam2 FILE` / `--mobilesam FILE` say why a file named on the command line cannot be

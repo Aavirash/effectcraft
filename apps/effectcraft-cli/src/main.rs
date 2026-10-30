@@ -1035,7 +1035,7 @@ fn bench_weights<T>(
 fn bench_roto(args: &Args) -> Result<(), Failure> {
     use effectcraft_segment::{Loaded, MOBILE_SAM, MaskModel};
     use effectcraft_track::roto::bench;
-    let frames = args.num("--frames")?.unwrap_or(24.0).clamp(12.0, 240.0) as usize;
+    let frames = args.num("--frames")?.unwrap_or(24.0).clamp(1.0, 240.0) as usize;
     let session = effectcraft_host::session();
     // `--mobilesam FILE` uses the weights at FILE (a file that cannot be used is an error);
     // otherwise the installed ones.
@@ -1060,13 +1060,14 @@ fn bench_roto(args: &Args) -> Result<(), Failure> {
     let fixes = args.flag("--fixes");
     let measure = |sc: &bench::Scenario, run: &dyn Fn(&bench::Scenario) -> Option<bench::Run>| if fixes { bench::with_fixes(sc, 0.9, 6, run) } else { run(sc) };
     let mut runs = vec![];
-    let mut scenarios = bench::scenarios(frames);
-    // `--clip FRAMES_DIR --truth MASKS_DIR`: the user's own clip (image sequences, same file order) with its true mattes.
-    if let Some(dir) = args.opt("--clip") {
+    // User clips pair unique filename stems, allowing JPEG frames with PNG truth masks.
+    let scenarios = if let Some(dir) = args.opt("--clip") {
         let truth = args.opt("--truth").ok_or_else(|| Failure::Error("--clip needs --truth MASKS_DIR".into()))?;
         let name = std::path::Path::new(dir).file_name().map_or_else(|| "clip".to_string(), |n| n.to_string_lossy().chars().take(10).collect());
-        scenarios = vec![load_bench_clip(&name, dir, truth, frames).map_err(Failure::Error)?];
-    }
+        vec![load_bench_clip(&name, dir, truth, frames).map_err(Failure::Error)?]
+    } else {
+        bench::scenarios(frames)
+    };
     for sc in scenarios {
         runs.extend(measure(&sc, &|s| Some(bench::run_flow(s, "classical", None))));
         if let Some(m) = &mobilesam {
@@ -1085,14 +1086,14 @@ fn bench_roto(args: &Args) -> Result<(), Failure> {
     Ok(())
 }
 
-/// The image files of `dir` (png, jpg, jpeg), in file-name order.
+/// The image files of `dir` (png, jpg, jpeg), ordered by stem then full file name.
 fn image_files(dir: &str) -> Result<Vec<std::path::PathBuf>, String> {
     let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(dir)
         .map_err(|e| format!("cannot read {dir}: {e}"))?
         .filter_map(|e| e.ok().map(|e| e.path()))
         .filter(|p| p.extension().and_then(|e| e.to_str()).is_some_and(|e| ["png", "jpg", "jpeg"].contains(&e.to_ascii_lowercase().as_str())))
         .collect();
-    files.sort();
+    files.sort_by(|a, b| a.file_stem().cmp(&b.file_stem()).then_with(|| a.file_name().cmp(&b.file_name())));
     Ok(files)
 }
 
@@ -1102,6 +1103,11 @@ fn load_bench_clip(name: &str, frames_dir: &str, truth_dir: &str, limit: usize) 
     let (frames, masks) = (image_files(frames_dir)?, image_files(truth_dir)?);
     if frames.is_empty() || frames.len() != masks.len() {
         return Err(format!("{} frames in {frames_dir} but {} masks in {truth_dir}: they must match one to one", frames.len(), masks.len()));
+    }
+    if frames.iter().map(|p| p.file_stem()).ne(masks.iter().map(|p| p.file_stem()))
+        || frames.windows(2).chain(masks.windows(2)).any(|pair| pair.first().and_then(|p| p.file_stem()) == pair.get(1).and_then(|p| p.file_stem()))
+    {
+        return Err("frame and truth file names must match one to one, with unique stems (extensions may differ)".into());
     }
     let n = frames.len().min(limit.clamp(1, 240));
     let (mut imgs, mut truth) = (vec![], vec![]);

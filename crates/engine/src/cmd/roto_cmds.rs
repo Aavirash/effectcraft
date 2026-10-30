@@ -378,9 +378,20 @@ fn clear_strokes(s: &mut Session, p: &Value) -> Result<Value> {
         Some(k) => Some(StrokeKind::from_name(k).ok_or_else(|| bad(cmd, format!("unknown kind `{k}`")))?),
         None => None,
     };
-    let object = f_p(p, "object").map(|v| v.round() as u32);
+    let object = match p.get("object") {
+        None => None,
+        Some(value) => {
+            let value = value
+                .as_f64()
+                .filter(|v| v.is_finite() && (0.0..=rt::MAX_OBJECT_ID as f64).contains(v))
+                .ok_or_else(|| bad(cmd, format!("`object` is 0–{}", rt::MAX_OBJECT_ID)))?;
+            Some(value.round() as u32)
+        }
+    };
     let n0 = d.strokes.len();
-    d.strokes.retain(|st| !(frame.is_none_or(|f| st.frame == f) && kind.is_none_or(|k| st.kind == k) && object.is_none_or(|o| st.object == o)));
+    d.strokes.retain(|st| {
+        !(frame.is_none_or(|f| st.frame == f) && kind.is_none_or(|k| st.kind == k) && object.is_none_or(|o| st.kind.is_segmentation() && st.object == o))
+    });
     if d.strokes.iter().all(|s| !s.kind.is_segmentation()) {
         d.base = None;
     } else if d.base.is_some_and(|b| !d.strokes.iter().any(|s| s.frame == b && s.kind.is_segmentation())) {

@@ -96,8 +96,8 @@ pub enum Backend {
     Auto,
 }
 
-/// The GPU path: kernels for the backbone and the memory attention. Any failure switches it off for good
-/// and the CPU path takes over.
+/// The GPU path: kernels for the backbone and memory attention. Device failures disable it;
+/// memory-attention budget limits fall back to the CPU for that call only.
 struct GpuParts {
     encoder: GpuEncoder,
     attention: GpuMemoryAttention,
@@ -229,6 +229,7 @@ impl VideoModel {
         if let Some(g) = self.gpu.as_ref().filter(|g| g.ok.load(Ordering::Relaxed)) {
             match g.attention.forward(current, current_pos, memory, memory_pos, pointers) {
                 Ok(t) => return Ok(t),
+                Err(Error::Budget(reason)) => log::info!("SAM 2 memory attention on the CPU for this call: {reason}"),
                 Err(e) => self.gpu_failed("memory attention", &e),
             }
         }

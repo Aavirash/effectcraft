@@ -1125,3 +1125,37 @@ fn strokes_belong_to_the_current_object() {
     let json = s.project.to_json();
     assert!(json.contains("\\\"object\\\":31"), "the project file carries the object");
 }
+
+#[test]
+fn clearing_one_object_keeps_shared_refine_edge_strokes() {
+    let mut s = Session::default();
+    s.execute("comp.new", json!({"width": 64, "height": 64, "duration": 1})).unwrap();
+    let layer = s.execute("layer.newSolid", json!({})).unwrap()["layer"].as_u64().unwrap();
+    for (object, kind) in [(0, "fg"), (0, "bg"), (0, "refine"), (0, "refineErase"), (1, "fg")] {
+        s.execute("roto.stroke", json!({"layer": layer, "object": object, "kind": kind, "points": [[20, 20]], "radius": 4})).unwrap();
+    }
+    let before = s.project.to_json();
+    let result = s.execute("roto.clearStrokes", json!({"layer": layer, "object": 0})).unwrap();
+    assert_eq!(result["removed"], 2, "only the object's foreground/background strokes are owned by it");
+    assert_eq!(result["strokes"], 3);
+    assert!(s.undo());
+    assert_eq!(s.project.to_json(), before);
+    for kind in ["refine", "refineErase"] {
+        let result = s.execute("roto.clearStrokes", json!({"layer": layer, "kind": kind})).unwrap();
+        assert_eq!(result["removed"], 1, "explicitly clearing shared {kind} still works");
+    }
+}
+
+#[test]
+fn clearing_strokes_rejects_invalid_object_filters_without_editing() {
+    let mut s = Session::default();
+    s.execute("comp.new", json!({"width": 64, "height": 64, "duration": 1})).unwrap();
+    let layer = s.execute("layer.newSolid", json!({})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("roto.stroke", json!({"layer": layer, "points": [[20, 20]], "radius": 4})).unwrap();
+    let before = s.project.to_json();
+    for object in [json!(-1), json!(-0.1), json!(32), json!(1e30), json!(null), json!("0")] {
+        let result = s.execute("roto.clearStrokes", json!({"layer": layer, "object": object}));
+        assert!(result.is_err(), "invalid object {object} must not delete object zero: {result:?}");
+        assert_eq!(s.project.to_json(), before);
+    }
+}
