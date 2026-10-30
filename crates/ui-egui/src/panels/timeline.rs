@@ -5600,11 +5600,21 @@ impl<'a> ValueEdit<'a> {
         Self { p, layer, prop, at, uid, merge: format!("scrub-{uid}"), scrub, proportional }
     }
 
-    /// Queues the `prop.set` of one edit.
+    /// Queues the `prop.set` of one edit; consecutive edits of the property (a scrub) are one undo step.
     fn set(&self, actions: &mut Vec<(String, serde_json::Value)>, v: serde_json::Value) {
+        self.push(actions, v, Some(&self.merge));
+    }
+
+    /// Queues the `prop.set` of a discrete choice (a drop-down pick, a check box): its own undo
+    /// step, never merged with the property's previous edit (#2152).
+    fn set_step(&self, actions: &mut Vec<(String, serde_json::Value)>, v: serde_json::Value) {
+        self.push(actions, v, None);
+    }
+
+    fn push(&self, actions: &mut Vec<(String, serde_json::Value)>, v: serde_json::Value, merge: Option<&str>) {
         actions.push((
             "prop.set".into(),
-            json!({"layer": self.layer.id.0, "prop": self.uid, "value": v, "merge": self.merge, "selected": true, "offset": self.scrub, "proportional": self.proportional}),
+            json!({"layer": self.layer.id.0, "prop": self.uid, "value": v, "merge": merge, "selected": true, "offset": self.scrub, "proportional": self.proportional}),
         ))
     }
 }
@@ -5785,7 +5795,7 @@ fn bool_editor(app: &mut EffectcraftApp, ui: &mut egui::Ui, ve: &ValueEdit<'_>, 
     let x = at.x;
     let r = Rect::from_min_size(pos2(x, at.y - 8.0), vec2(16.0, 16.0));
     if widgets::checkbox(ui, r, *b, &t, egui::Id::unique(("cb", uid))).changed() {
-        ve.set(actions, json!(!b));
+        ve.set_step(actions, json!(!b));
     }
     app.auto.add(&format!("timeline.prop.{uid}.value"), r, &prop.name);
 }
@@ -5805,7 +5815,7 @@ fn enum_editor(app: &mut EffectcraftApp, ui: &mut egui::Ui, ve: &ValueEdit<'_>, 
         }
         app.auto.add(&format!("timeline.prop.{uid}.value"), r, &prop.name);
         if let Some(ni) = widgets::popup_menu(ui, pop, r.left_bottom(), &options, Some(*i as usize)) {
-            ve.set(actions, json!(ni));
+            ve.set_step(actions, json!(ni));
         }
     } else {
         p.text(pos2(x, at.y), Align2::LEFT_CENTER, fmt_num(*i as f64, 0), Tokens::ui(12.0), t.for_value(prop.has_expression()).hot_text);
@@ -5825,7 +5835,7 @@ fn layer_editor(app: &mut EffectcraftApp, ui: &mut egui::Ui, ve: &ValueEdit<'_>,
     if let Some(comp) = app.session.active_comp_arc()
         && let Some(chosen) = widgets::layer_picker(ui, r, &comp.layers, *l, &t, egui::Id::unique(("tl-lay", uid)))
     {
-        ve.set(actions, chosen.map(|id| json!(id)).unwrap_or(serde_json::Value::Null));
+        ve.set_step(actions, chosen.map(|id| json!(id)).unwrap_or(serde_json::Value::Null));
     }
     app.auto.add(&format!("timeline.prop.{uid}.value"), r, &prop.name);
 }
