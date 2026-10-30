@@ -310,7 +310,7 @@ fn tab_body(
                     let r = ui.add(crate::widgets::drag_value(egui::DragValue::new(&mut d.width).range(4..=30000).suffix(" px")));
                     auto.add("dialog.comp.width", r.rect, "Width");
                     let lbl = tr_args("Lock Aspect Ratio to {}", &[&(aspect_label(ow as f64, oh as f64))]);
-                    let r = ui.checkbox(&mut d.lock_aspect, lbl);
+                    let r = crate::widgets::labelled_checkbox(ui, &mut d.lock_aspect, lbl);
                     auto.add("dialog.comp.lockAspect", r.rect, "Lock Aspect Ratio");
                     if d.lock_aspect && ow != d.width && ow > 0 {
                         d.height = ((d.width as f64) * oh as f64 / ow as f64).round().max(4.0) as u32;
@@ -330,11 +330,11 @@ fn tab_body(
                     let cur = PIXEL_ASPECTS
                         .iter()
                         .find(|(_, v)| (v - d.pixel_aspect).abs() < 1e-3)
-                        .map(|p| p.0.to_string())
+                        .map(|p| tr(p.0).to_string())
                         .unwrap_or_else(|| format!("{:.2}", d.pixel_aspect));
                     let r = craft_ui::ComboBox::from_id_salt("comp-par").width(220.0).selected_text(cur).show_ui(ui, |ui| {
                         for (name, v) in PIXEL_ASPECTS {
-                            if ui.selectable_label((v - d.pixel_aspect).abs() < 1e-3, *name).clicked() {
+                            if ui.selectable_label((v - d.pixel_aspect).abs() < 1e-3, tr(name)).clicked() {
                                 d.pixel_aspect = *v;
                             }
                         }
@@ -402,7 +402,7 @@ fn tab_body(
                 ui.horizontal(|ui| {
                     let r = crate::widgets::srgb_color_button(ui, &mut d.bg);
                     auto.add("dialog.comp.background", r.rect, "Background Color");
-                    ui.label(color_name(d.bg));
+                    ui.label(tr(color_name(d.bg)));
                 });
                 ui.end_row();
             });
@@ -426,11 +426,11 @@ fn tab_body(
                 });
                 ui.end_row();
                 ui.label("");
-                let r = ui.checkbox(&mut d.preserve_frame_rate, tr("Preserve frame rate when nested or in render queue"));
+                let r = crate::widgets::labelled_checkbox(ui, &mut d.preserve_frame_rate, tr("Preserve frame rate when nested or in render queue"));
                 auto.add("dialog.comp.preserveFrameRate", r.rect, "Preserve frame rate when nested or in render queue");
                 ui.end_row();
                 ui.label("");
-                let r = ui.checkbox(&mut d.preserve_resolution, tr("Preserve resolution when nested"));
+                let r = crate::widgets::labelled_checkbox(ui, &mut d.preserve_resolution, tr("Preserve resolution when nested"));
                 auto.add("dialog.comp.preserveResolution", r.rect, "Preserve resolution when nested");
                 ui.end_row();
                 ui.label(egui::RichText::new(tr("Motion Blur")).strong());
@@ -487,6 +487,7 @@ pub fn show(
     auto: &mut Registry,
     custom: &[CompPreset],
     cmds: &mut Vec<(&'static str, serde_json::Value)>,
+    preview: Option<&mut bool>,
 ) -> Option<serde_json::Value> {
     let mut out = None;
     ui.horizontal(|ui| {
@@ -498,7 +499,7 @@ pub fn show(
     ui.add_space(8.0);
     ui.horizontal(|ui| {
         for (tab, label, key) in [(Tab::Basic, "Basic", "basic"), (Tab::Advanced, "Advanced", "advanced"), (Tab::Renderer, "3D Renderer", "renderer")] {
-            let r = ui.selectable_label(d.tab == tab, label);
+            let r = ui.selectable_label(d.tab == tab, tr(label));
             auto.add(&format!("dialog.comp.tab.{key}"), r.rect, label);
             if r.clicked() {
                 d.tab = tab;
@@ -527,6 +528,9 @@ pub fn show(
             auto.add("dialog.comp.cancel", r.rect, "Cancel");
             if r.clicked() {
                 out = Some(serde_json::Value::Null);
+            }
+            if let Some(on) = preview {
+                super::live_preview::checkbox(ui, auto, on, "dialog.comp.preview");
             }
         });
     });

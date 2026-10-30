@@ -494,20 +494,20 @@ fn current_render_strip(app: &mut EffectcraftApp, ui: &mut egui::Ui, p: &egui::P
     let render_b = Rect::from_min_size(pos2(top.max.x - 12.0 - bw, top.min.y + 34.0), vec2(bw, 26.0));
     let stop_b = Rect::from_min_size(pos2(render_b.min.x - 8.0 - bw, render_b.min.y), vec2(bw, 26.0));
     let can_render = !rendering && queue.iter().any(RenderQueueItem::is_queued) && !available.is_empty();
-    if widgets::text_button(ui, render_b, "Render", can_render, &t, egui::Id::unique("rq-render")).clicked() && can_render {
+    if widgets::text_button(ui, render_b, crate::i18n::tr("Render"), can_render, &t, egui::Id::unique("rq-render")).clicked() && can_render {
         actions.push(("renderQueue.render", json!({"wait": false})));
     }
     app.auto.add("renderQueue.render", render_b, "Render");
     // Notify (sound + notification when the queue finishes).
     let notify = app.session.project.render_prefs.notify;
     let nb = Rect::from_min_size(pos2(render_b.min.x - 8.0 - 2.0 * bw - 8.0, render_b.min.y + 4.0), vec2(18.0, 18.0));
-    if widgets::checkbox(ui, nb, notify, &t, egui::Id::unique("rq-notify")).clicked() {
+    if widgets::checkbox(ui, nb, notify, &t, egui::Id::unique("rq-notify")).changed() {
         actions.push(("renderQueue.setNotify", json!({"notify": !notify})));
     }
     p.text(pos2(nb.max.x + 5.0, nb.center().y), Align2::LEFT_CENTER, tr("Notify"), Tokens::ui(11.5), t.text_dim);
     app.auto.add("renderQueue.notify", nb, if notify { "Notify: on" } else { "Notify: off" });
     if rendering {
-        if widgets::text_button(ui, stop_b, "Stop", false, &t, egui::Id::unique("rq-stop")).clicked() {
+        if widgets::text_button(ui, stop_b, crate::i18n::tr("Stop"), false, &t, egui::Id::unique("rq-stop")).clicked() {
             actions.push(("renderQueue.stop", json!({})));
         }
         app.auto.add("renderQueue.stop", stop_b, "Stop");
@@ -797,7 +797,7 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
         }
         app.auto.add(&aid("twirl"), tw, "Twirl");
         let cb = Rect::from_center_size(pos2(cx_render + 20.0, row.center().y), vec2(18.0, 18.0));
-        if widgets::checkbox(ui, cb, it.render, &t, egui::Id::unique(("rq-cb", it.id))).clicked() && !rendering {
+        if ui.add_enabled_ui(!rendering, |ui| widgets::checkbox(ui, cb, it.render, &t, egui::Id::unique(("rq-cb", it.id)))).inner.changed() && !rendering {
             actions.push(("renderQueue.setRender", json!({"item": it.id, "render": !it.render})));
         }
         app.auto.add(&aid("render"), cb, if it.render { "Render: on" } else { "Render: off" });

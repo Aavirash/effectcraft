@@ -890,6 +890,7 @@ fn render(args: &Args, json_out: bool) -> Result<(), Failure> {
             r["outputModuleSummary"].as_str().unwrap_or("")
         );
     }
+    let attempted: std::collections::HashSet<u64> = s.project.render_queue.iter().filter(|i| i.is_queued()).map(|i| i.id).collect();
     s.execute("renderQueue.render", json!({"wait": false})).map_err(err)?;
     let tty = std::io::IsTerminal::is_terminal(&std::io::stderr());
     // `--progress`: one line per update for a program reading stderr (a terminal gets the live line).
@@ -928,7 +929,7 @@ fn render(args: &Args, json_out: bool) -> Result<(), Failure> {
     }
     let mut results = vec![];
     let mut failed = vec![];
-    for it in s.project.render_queue.iter().filter(|i| i.render && i.started.is_some()) {
+    for it in s.project.render_queue.iter().filter(|i| attempted.contains(&i.id)) {
         let name = s.project.item(it.comp).map(|i| i.name.clone()).unwrap_or_else(|| "?".into());
         match &it.status {
             RenderStatus::Done => {
@@ -1296,7 +1297,7 @@ fn adv3d_bench_comp(p: &mut effectcraft_engine::project::Project) -> Option<Item
         set(l, "cameraOptions/highlightGain", Value::Scalar(20.0));
         set(l, "cameraOptions/highlightThreshold", Value::Scalar(200.0));
     });
-    comp.layers = layers;
+    comp.layers = layers.into();
     Some(p.add_item("Advanced 3D (bench)", effectcraft_engine::color::Label::None, None, ItemKind::Comp(comp.into())))
 }
 

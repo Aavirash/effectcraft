@@ -699,16 +699,9 @@ fn phase_scene(app: &mut EffectcraftApp, ectx: &EvalCtx, v: &mut Vw<'_>) {
         app.auto.add("viewer.warpBanner", r, &text);
     }
 
-    // Footage that can't be decoded (no decoder for its codec / profile): say why on the layer
-    // instead of leaving a black picture.
-    let mut notices = 0;
-    for layer in comp.layers.iter().filter(|l| l.is_active_at(time) && l.switches.video) {
-        let effectcraft_engine::project::LayerSource::Footage { item } = &layer.source else { continue };
-        let Some(effectcraft_engine::project::ItemKind::Footage(f)) = app.session.project.item(*item).map(|i| &i.kind) else { continue };
-        let Some(why) = app.session.footage.problem(f) else { continue };
-        if notices >= 3 {
-            break;
-        }
+    // Footage (or the proxy in use for footage or a precomp) that can't be decoded (no decoder
+    // for its codec / profile): say why on the layer instead of leaving a black picture.
+    for (notices, (layer, why)) in footage_problems(app, ectx, comp, time).into_iter().enumerate() {
         let (m, _) = l2c(ectx, layer);
         let (w, h) = effectcraft_engine::render::source_size(&app.session.project, layer);
         let c = m.apply(effectcraft_engine::geom::vec2(w as f64 / 2.0, h as f64 / 2.0));
@@ -720,12 +713,25 @@ fn phase_scene(app: &mut EffectcraftApp, ectx: &EvalCtx, v: &mut Vw<'_>) {
         painter.rect_stroke(r, 3.0, Stroke::new(1.0, t.warning), StrokeKind::Inside);
         painter.galley(pos2(r.min.x + 12.0, r.center().y - galley.size().y / 2.0), galley, Color32::WHITE);
         app.auto.add(&format!("viewer.footageProblem.{}", layer.id.0), r, &text);
-        notices += 1;
     }
     v.vertex_marks = vertex_marks;
     v.track_hits = track_hits;
     v.track_cur = track_cur;
     v.has_3d = has_3d;
+}
+
+/// Up to three layers active at `time` whose footage, or the proxy in use for footage or a
+/// precomp, can't be decoded, each with the reason.
+fn footage_problems<'c>(app: &EffectcraftApp, ectx: &EvalCtx, comp: &'c Comp, time: Tick) -> Vec<(&'c Layer, String)> {
+    comp.layers
+        .iter()
+        .filter(|l| l.is_active_at(time) && l.switches.video)
+        .filter_map(|layer| {
+            let (LayerSource::Footage { item } | LayerSource::Comp { item }) = &layer.source else { return None };
+            Some((layer, ectx.project.item(*item).and_then(|i| app.session.footage.item_problem(i))?))
+        })
+        .take(3)
+        .collect()
 }
 
 fn phase_rigs(app: &mut EffectcraftApp, ui: &mut egui::Ui, ectx: &EvalCtx, v: &mut Vw<'_>) {

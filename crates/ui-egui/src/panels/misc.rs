@@ -11,7 +11,8 @@ use crate::{EffectcraftApp, widgets};
 
 pub fn placeholder(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect, p: PanelKind) {
     let t = app.tokens;
-    ui.painter().text(rect.center(), Align2::CENTER_CENTER, tr_args("{} — coming soon", &[&(p.title())]), Tokens::ui(12.0), t.text_faint);
+    let name = crate::i18n::label(app, "window.panel", p.title());
+    ui.painter().text(rect.center(), Align2::CENTER_CENTER, tr_args("{} — coming soon", &[&name]), Tokens::ui(12.0), t.text_faint);
 }
 
 /// Preview panel: transport controls, the shortcut whose options are shown, and that
@@ -42,7 +43,10 @@ pub fn preview(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
     for (icon, cmd, tip) in buttons {
         let r = Rect::from_min_size(pos2(x, y), vec2(bw, 28.0));
         let icon = if cmd == "playback.toggle" && app.playback.playing { Icon::Pause } else { icon };
-        if widgets::icon_button(ui, r, icon, cmd == "playback.toggle" && app.playback.playing, &t, egui::Id::unique(("pv", cmd))).on_hover_text(tip).clicked() {
+        if widgets::icon_button(ui, r, icon, cmd == "playback.toggle" && app.playback.playing, &t, egui::Id::unique(("pv", cmd)))
+            .on_hover_text(tr(tip))
+            .clicked()
+        {
             // The play button plays with the options of the shortcut shown below.
             let params = if cmd == "playback.toggle" { json!({"shortcut": current.id()}) } else { json!({}) };
             let _ = crate::menus::invoke(app, &ctx, cmd, params);
@@ -260,7 +264,7 @@ fn fmt_rate(r: f64) -> String {
 fn check_row(app: &mut EffectcraftApp, ui: &mut egui::Ui, p: &egui::Painter, at: egui::Pos2, key: &str, text: &str, on: bool) -> bool {
     let t = app.tokens;
     let r = Rect::from_min_size(pos2(at.x, at.y - 8.0), vec2(16.0, 16.0));
-    let clicked = widgets::checkbox(ui, r, on, &t, egui::Id::unique(("pv-check", key))).clicked();
+    let clicked = widgets::checkbox(ui, r, on, &t, egui::Id::unique(("pv-check", key))).changed();
     p.text(pos2(r.max.x + 5.0, at.y), Align2::LEFT_CENTER, text, Tokens::ui(12.0), t.text);
     app.auto.add(&format!("preview.{key}"), r, text);
     clicked

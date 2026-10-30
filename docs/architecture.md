@@ -158,9 +158,22 @@ comp to Advanced 3D in the same undo step, as in After Effects. Shading is physi
 GGX specular, Smith–Schlick geometry, Schlick Fresnel, Lambert diffuse, after Karis 2013):
 parallel, spot and point lights with After Effects' falloffs, ambient lights, image-based
 light from an Environment light whose Source (or the comp's Environment Layer, Layer ▸
-Environment Layer) is an equirectangular image (cosine irradiance map; roughness-indexed mip
-chain with the split-sum environment BRDF fit), and percentage-closer-filtered shadow maps
-(spot: perspective, parallel: orthographic over the scene, point: six cube faces). Cards keep
+Environment Layer, or a default studio environment — bright above and toward the initial
+camera, dark below and behind, at a dim 0.3 mean level — of the light's colour × intensity
+when there is neither) is an equirectangular image (cosine irradiance map; roughness-indexed
+mip chain with the split-sum environment BRDF fit), and percentage-closer-filtered shadow maps
+(spot: perspective, parallel: orthographic over the scene, point: six cube faces, environment:
+one orthographic from the image's dominant bright region — none only when the image lacks a
+sufficiently strong dominant direction (a uniform one, or opposing bright regions that
+cancel) — the region weighted by the light's colour, so a coloured light shadows from the
+regions it actually lights (opposing red and blue regions cancel to a white light, but a red
+light's shadow comes from the red one) — occluding only the image's directional key fraction of
+the light, so the shadow stays partial like After Effects' area-light shadows, with a soft
+default penumbra of at least eight pixels or four map texels). A Source or Environment Layer
+that fails to render — a deleted layer, missing footage — lights nothing: no silent fallback
+to the default studio environment. An Environment light only lights Advanced 3D comps,
+so adding one (or changing a light's type to it) switches a Classic 3D comp to Advanced 3D,
+as model layers do. Cards keep
 Material Options (Accepts Lights/Shadows, Casts Shadows On/Only, Ambient, Diffuse, Specular);
 models and primitives add Base Color, Metallic, Roughness, Emissive. Rasterisation runs at 2×2
 supersampling with a reversed-Z depth buffer; opaque triangles resolve visibility first, the
@@ -243,7 +256,10 @@ the layer body. Interior styles are clipped to the layer: they blend onto its co
 shape and keep its alpha, so an anti-aliased edge mixes the style and the background only. Layer
 opacity fades the whole stack; Knockout and the R/G/B channel switches apply at composite time. Styled pixels are cached separately from the layer content, so editing a style
 reuses the cached source/masks/effects. Global Light is one setting per comp, mirrored into every
-layer's Blending Options and kept in step after each edit.
+layer's Blending Options and kept in step after each edit. Blending Options can be edited in the Layer Style dialog
+before any style is added: the first change creates the Layer Styles group with Blending Options
+only (`layer.style.add` with `blendingOptions`), in the same undo step as the change. Removing
+the last style keeps the group when its Advanced Blending is not at the defaults.
 
 **Paint and Puppet** are effects whose instances carry nested groups. Paint (`effects::paint`)
 holds Brush / Clone / Eraser strokes (Path, Stroke Options, Transform, hidden Duration span);

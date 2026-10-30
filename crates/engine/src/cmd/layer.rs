@@ -28,6 +28,7 @@ pub(crate) use create::{color_p, index_p, insert_layer, insert_layer_at, place, 
 pub(crate) use parent::parent_fixes;
 use parent::set_parent;
 use replace::{has_replace_source, replace_source};
+pub(crate) use select::select_only;
 use select::{select, select_next, select_prev, select_step};
 use switches::{blend, rename, set_comment, set_switch, track_matte};
 use timing::{arrange, move_frames, precompose, slip, timing};
@@ -183,7 +184,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Add (Shape)",
             [],
             None,
-            "{layer?, kind: group|rect|ellipse|star|polygon|path|fill|stroke|gfill|gstroke|trim|repeater|round|offset|pucker|twist|zigzag|wiggle|merge|frontColor|bevelColor|sideColor|backColor, group?: uid|path} → {uid, path} (frontColor…backColor: the group's Front / Bevel / Side / Back item, which colours that surface of every extruded paint in the group in Advanced 3D)",
+            "{layer?, kind: group|rect|ellipse|star|polygon|path|fill|stroke|gfill|gstroke|trim|repeater|round|offset|pucker|twist|zigzag|wiggle|wiggler|merge|frontColor|bevelColor|sideColor|backColor, group?: uid|path} → {uid, path} (frontColor…backColor: the group's Front / Bevel / Side / Back item, which colours that surface of every extruded paint in the group in Advanced 3D)",
             has_layers,
             add_shape_item
         ),

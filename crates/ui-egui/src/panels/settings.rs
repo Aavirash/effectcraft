@@ -106,7 +106,7 @@ fn page_ui(app: &mut EffectcraftApp, ui: &mut egui::Ui, page: &Page, cur: &Value
                 match kind {
                     Kind::Bool => {
                         let mut b = v.as_bool().unwrap_or(false);
-                        let r = ui.checkbox(&mut b, tr(label));
+                        let r = crate::widgets::labelled_checkbox(ui, &mut b, tr(label));
                         if r.changed() {
                             acts.push(Act::Set(key.into(), json!(b)));
                         }
@@ -117,15 +117,20 @@ fn page_ui(app: &mut EffectcraftApp, ui: &mut egui::Ui, page: &Page, cur: &Value
                             ui.add_sized(vec2(label_w, 18.0), egui::Label::new(format!("{}:", tr(label))).truncate());
                             let r = match kind {
                                 Kind::Int(lo, hi, unit) => {
-                                    let mut x = v.as_i64().unwrap_or(0);
-                                    // A typed number applies once entered: typing 85 into UI Scale
-                                    // doesn't resize the interface to 75 % at its first digit.
+                                    // A dragged value applies on release, and a typed one once
+                                    // entered: UI Scale doesn't resize the interface under the
+                                    // pointer mid-drag (#2582) or at a typed number's first digit.
+                                    let held = egui::Id::unique(("settings-drag", key));
+                                    let mut x = ui.data(|d| d.get_temp::<i64>(held)).unwrap_or_else(|| v.as_i64().unwrap_or(0));
                                     let drag = egui::DragValue::new(&mut x).range(lo..=hi).speed(0.25).update_while_editing(false);
                                     let r = ui.add(crate::widgets::drag_value(drag));
                                     if !unit.is_empty() {
                                         ui.label(RichText::new(tr(unit)).color(t.text_dim));
                                     }
-                                    if r.changed() {
+                                    if r.dragged() {
+                                        ui.data_mut(|d| d.insert_temp(held, x));
+                                    } else if r.changed() || r.drag_stopped() {
+                                        ui.data_mut(|d| d.remove::<i64>(held));
                                         acts.push(Act::Set(key.into(), json!(x)));
                                     }
                                     r
