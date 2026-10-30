@@ -254,9 +254,9 @@ impl Session {
     }
 
     /// Only installing the chosen model is a retry of that model's failed load.
-    fn retry_installed_model(&mut self, task: Task, id: &str, wait: bool) -> bool {
+    fn retry_installed_model(&mut self, task: Task, id: &str, wait: bool) -> std::result::Result<bool, String> {
         if self.chosen_model(task) != id {
-            return false;
+            return Ok(false);
         }
         set(self.models.lane(task), |s| {
             s.error = None;
@@ -264,8 +264,22 @@ impl Session {
             // A load that read the old file must not report failure after these weights replaced it.
             s.generation = s.generation.wrapping_add(1);
         });
+        if wait {
+            self.wait_model_worker(task)?;
+        }
         self.apply_model(task, wait);
-        true
+        Ok(true)
+    }
+
+    fn wait_model_worker(&self, task: Task) -> std::result::Result<(), String> {
+        let started = Instant::now();
+        while self.models.status(task).busy.is_some() {
+            if started.elapsed() >= ROTO_MODEL_WAIT {
+                return Err(format!("{} is still loading after {} minutes", self.chosen_model(task), ROTO_MODEL_WAIT.as_secs() / 60));
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        Ok(())
     }
 
     /// The Roto Brush model Settings chose, when it is one (not the classic engine).
@@ -330,14 +344,8 @@ impl Session {
         let Some(info) = self.roto_model_info() else { return Ok(()) };
         // A download or load under way (from Settings, or `select` without `wait`) finishes first.
         // Nothing is in flight in the browser build, so this never sleeps there.
-        if wait && self.models.status(Task::Mask).busy.is_some() {
-            let started = Instant::now();
-            while self.models.status(Task::Mask).busy.is_some() {
-                if started.elapsed() >= ROTO_MODEL_WAIT {
-                    return Err(format!("{} is still loading after {} minutes", info.name, ROTO_MODEL_WAIT.as_secs() / 60));
-                }
-                std::thread::sleep(Duration::from_millis(5));
-            }
+        if wait {
+            self.wait_model_worker(Task::Mask)?;
         }
         if self.model_path(info).is_none() {
             if self.models.status(Task::Mask).busy.is_some() {
@@ -587,7 +595,7 @@ fn install(s: &mut Session, p: &Value, task: Task) -> Result<Value> {
     };
     let dest = install_bytes(&dir, m, &bytes).map_err(|e| bad(&cmd, e))?;
     let wait = b_p(p, "wait").unwrap_or(false);
-    if s.retry_installed_model(task, m.id, wait) && wait {
+    if s.retry_installed_model(task, m.id, wait).map_err(|error| bad(&cmd, error))? && wait {
         waited(s, task, &cmd)?;
     }
     Ok(json!({"id": m.id, "path": dest.display().to_string()}))
@@ -828,14 +836,48 @@ mod availability_tests {
         });
         let before = session.models.status(Task::Mask);
         for wait in [false, true] {
-            assert!(!session.retry_installed_model(Task::Mask, "sam2.1-hiera-tiny", wait));
+            assert!(!session.retry_installed_model(Task::Mask, "sam2.1-hiera-tiny", wait).unwrap());
             assert_eq!(session.models.status(Task::Mask), before);
         }
         // Installing the selected weights is an explicit retry, even if the installed path
         // has since gone away (no load is started from this session's missing model folder).
-        assert!(session.retry_installed_model(Task::Mask, "mobilesam", false));
+        assert!(session.retry_installed_model(Task::Mask, "mobilesam", false).unwrap());
         assert!(session.models.status(Task::Mask).load_error.is_none());
         assert!(session.models.status(Task::Mask).error.is_none());
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn installing_selected_weights_with_wait_finishes_the_replacement_load() {
+        crate::tests::roto::hold_roto_cache_test_lock();
+        let dir = std::env::temp_dir().join(format!("ec-model-install-running-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let info = seg::info("mobilesam").unwrap();
+        std::fs::File::create(dir.join(info.file_name)).unwrap().set_len(info.size).unwrap();
+        let mut session = Session { models_dir: Some(dir.clone()), ..Default::default() };
+        session.choose_model(Task::Mask, info.id);
+        let generation = session.models.status(Task::Mask).generation;
+        let lane = session.models.lane(Task::Mask).clone();
+        spawn(&lane, "Roto Brush", "Loading the previous file".into(), false, Some(generation), move |status| {
+            let started = Instant::now();
+            while status.lock().unwrap().generation == generation {
+                if started.elapsed() > Duration::from_secs(3) {
+                    return Err("test did not start the replacement".into());
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            Err("previous file failed".into())
+        });
+        assert!(session.retry_installed_model(Task::Mask, info.id, true).unwrap());
+        let status = session.models.status(Task::Mask);
+        assert!(status.busy.is_none());
+        assert!(
+            status.load_error.as_ref().is_some_and(|error| error.contains("SHA-256")),
+            "wait must finish loading the replacement weights and report their actual validation error"
+        );
+        assert_ne!(status.error.as_deref(), Some("previous file failed"));
+        crate::effects::roto::set_model(None);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
