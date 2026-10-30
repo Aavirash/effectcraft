@@ -153,7 +153,8 @@ page!(Import {
     sequence_fps: f64 = 30.0,
     report_missing_frames: bool = true,
     /// Automatically Reload Footage whose file another app changed (size or modification time),
-    /// checked every two seconds and when the window comes back to the front: `off`,
+    /// checked every two seconds while the window is in front, every ten seconds while it is
+    /// not, and when it comes back to the front: `off`,
     /// `nonSequence` (the default, as in After Effects: image sequences are left alone) or `all`.
     auto_reload_footage: String = "nonSequence".into(),
     /// Interpret unlabeled alpha as: `ask`, `guess`, `ignore`, `straight`, `premultiplied`.
