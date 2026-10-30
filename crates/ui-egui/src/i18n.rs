@@ -266,6 +266,8 @@ pub(crate) fn entry(app: &EffectcraftApp, e: &MenuEntry, shown: String) -> Strin
         "es" => Some(("Deshacer", "No se puede deshacer", "Rehacer", "No se puede rehacer")),
         "pt-br" => Some(("Desfazer", "Não há nada para desfazer", "Refazer", "Não há nada para refazer")),
         "cs" => Some(("Zpět", "Není co vrátit", "Znovu", "Není co zopakovat")),
+        "fr" => Some(("Annuler", "Impossible d'annuler", "Rétablir", "Impossible de rétablir")),
+        "de" => Some(("Rückgängig", "Rückgängig nicht möglich", "Wiederholen", "Wiederholen nicht möglich")),
         // A colon before the history's (untranslated) action name: "დაბრუნება: Comp1".
         "ka" => Some(("დაბრუნება:", "დაბრუნება შეუძლებელია", "ხელახლა შესრულება:", "ხელახლა შესრულება შეუძლებელია")),
         // A colon before the history's (untranslated) action name: "Отменить: Comp1".
@@ -7572,6 +7574,43 @@ mod tests {
         app.session.execute("prefs.set", json!({"key":"general.language", "value":"en"})).unwrap();
         assert_eq!(label(&app, "", "Composition"), "Composition");
     }
+    /// Match System in the browser also picks the Russian, French and German catalogs, in the
+    /// order of the browser's preferences (#1700).
+    #[test]
+    fn browser_preferences_choose_russian_french_and_german() {
+        let tags = |t: &[&str]| t.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        for (locales, expected) in
+            [(vec!["de-DE", "es-ES"], "de"), (vec!["xx-XX", "fr-CA"], "fr"), (vec!["ru-RU", "cs"], "ru"), (vec!["en-US", "de-DE"], "en"), (vec!["xx-XX"], "en")]
+        {
+            assert_eq!(super::first_supported(None, &tags(&locales), super::web_draws), expected, "{locales:?}");
+        }
+    }
+
+    /// The Edit menu's Undo and Redo name the history's action in the interface language, also in
+    /// the languages added with #1700.
+    #[test]
+    fn undo_and_redo_are_localized_for_russian_french_and_german() {
+        for (language, undo, no_undo, redo, no_redo) in [
+            ("ru", "Отменить:", "Нечего отменять", "Повторить:", "Нечего повторять"),
+            ("fr", "Annuler", "Impossible d'annuler", "Rétablir", "Impossible de rétablir"),
+            ("de", "Rückgängig", "Rückgängig nicht möglich", "Wiederholen", "Wiederholen nicht möglich"),
+        ] {
+            let mut app = EffectcraftApp::new(effectcraft_engine::Session::default());
+            app.session.execute("prefs.set", json!({"key": "general.language", "value": language})).unwrap();
+            let entry_of = |app: &EffectcraftApp, command: &str| {
+                let (_, e) = effectcraft_engine::menus::entries().into_iter().find(|(_, e)| e.command == command).unwrap();
+                entry(app, e, e.label.clone())
+            };
+            assert_eq!(entry_of(&app, "edit.undo"), no_undo, "{language}");
+            assert_eq!(entry_of(&app, "edit.redo"), no_redo, "{language}");
+            app.session.execute("comp.new", json!({"name": "A", "duration": 1})).unwrap();
+            let action = app.session.history.undo.last().map(|u| u.0.clone()).unwrap();
+            assert_eq!(entry_of(&app, "edit.undo"), format!("{undo} {action}"), "{language}");
+            app.session.execute("edit.undo", json!({})).unwrap();
+            assert_eq!(entry_of(&app, "edit.redo"), format!("{redo} {action}"), "{language}");
+        }
+    }
+
     #[test]
     fn match_system_uses_the_system_language_where_there_is_a_catalog() {
         for (locale, language) in [
@@ -7698,7 +7737,7 @@ mod tests {
         app.session.execute("prefs.set", json!({"key":"general.language", "value":"ru"})).unwrap();
         assert_eq!(entry(&app, &undo, "Can't Undo".into()), "Нечего отменять");
         app.session.execute("prefs.set", json!({"key":"general.language", "value":"de"})).unwrap();
-        assert_eq!(entry(&app, &undo, "Can't Undo".into()), "Can't Undo", "no German undo wording yet: the shown label");
+        assert_eq!(entry(&app, &undo, "Can't Undo".into()), "Rückgängig nicht möglich");
         app.session.execute("prefs.set", json!({"key":"general.language", "value":"en"})).unwrap();
         assert_eq!(entry(&app, &new_comp, new_comp.label.clone()), "New Composition...");
     }
