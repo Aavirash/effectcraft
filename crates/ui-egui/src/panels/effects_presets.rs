@@ -17,6 +17,7 @@ use crate::{EffectcraftApp, widgets};
 
 const ROW_H: f32 = 21.0;
 const RECENT_MAX: usize = 8;
+pub(crate) const REVEAL_PRESETS_ID: &str = "fx-reveal-presets";
 
 /// A user animation preset file.
 #[derive(Clone, Debug, PartialEq)]
@@ -157,6 +158,24 @@ fn folder_row(
     open
 }
 
+/// Number of visible rows before Animation Presets in the current panel state.
+fn rows_before_presets(favorites: usize, recent: usize, searching: bool, favorites_open: bool, recent_open: bool) -> usize {
+    let mut rows = 0usize;
+    if favorites > 0 {
+        rows = rows.saturating_add(1);
+        if searching || favorites_open {
+            rows = rows.saturating_add(favorites);
+        }
+    }
+    if !searching && recent > 0 {
+        rows = rows.saturating_add(1);
+        if recent_open {
+            rows = rows.saturating_add(recent);
+        }
+    }
+    rows
+}
+
 /// An effect row (fx icon, highlighted name, favourite star, 32 bpc badge).
 #[allow(clippy::too_many_arguments)]
 fn effect_row(
@@ -264,32 +283,13 @@ fn user_presets(ctx: &egui::Context, force: bool, scan: impl FnOnce() -> Vec<Pre
     v
 }
 
-/// The Effects & Presets panel: search, a contents menu (colour-depth and GPU filters, whether
-/// presets show, categories or one alphabetical list, refresh and clear of the recently used
-/// list), then Favourites, Recently Used, Animation Presets and the effects by category or
-/// alphabetically, filtered by the query. Picking an effect or preset applies it to the selection
-/// (`effect.apply` or the preset's own command); applying an effect also records it as recently
-/// used and opens Effect Controls. Without a selected layer it only reports that in
-/// `app.ui.status`.
-pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
-    let t = app.tokens;
-    let ctx = ui.ctx().clone();
-    let p = ui.painter().clone();
-    // Track the last applied effect (menus, drag and drop, the control channel) as recently used.
-    if let Some(last) = app.session.state.last_effect.clone()
-        && app.ui.effects_recent.first() != Some(&last)
-    {
-        push_recent(&mut app.ui.effects_recent, &last);
-    }
-    let sr = Rect::from_min_size(rect.min + vec2(8.0, 8.0), vec2(rect.width() - 44.0, 24.0));
-    let mut q = app.ui.effects_search.clone();
-    widgets::search_field(ui, sr, &mut q, "Search effects and presets", &t);
-    app.ui.effects_search = q.clone();
-    app.auto.add("effects.search", sr, "Search");
+/// The "Effects & Presets options" hamburger menu beside the search field; returns whether
+/// "Refresh List" was picked.
+fn contents_menu(app: &mut EffectcraftApp, ui: &mut egui::Ui, ctx: &egui::Context, rect: Rect, sr: Rect, t: &Tokens) -> bool {
     // Contents menu.
     let mr = Rect::from_center_size(pos2(rect.max.x - 18.0, sr.center().y), vec2(22.0, 22.0));
     let mpop = egui::Id::unique("fx-contents-menu");
-    if widgets::icon_button(ui, mr, Icon::Hamburger, false, &t, egui::Id::unique("fx-menu")).on_hover_text(tr("Effects & Presets options")).clicked() {
+    if widgets::icon_button(ui, mr, Icon::Hamburger, false, t, egui::Id::unique("fx-menu")).on_hover_text(tr("Effects & Presets options")).clicked() {
         widgets::open_popup(ui, mpop);
     }
     app.auto.add("effects.menu", mr, "Effects & Presets options");
@@ -339,7 +339,7 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
         let v = &mut app.ui.effects_view;
         match i {
             i if menu.get(i) == Some(&copy_label) => {
-                if let Err(e) = crate::menus::invoke(app, &ctx, "effects.copyPresetsFolderPath", json!({})) {
+                if let Err(e) = crate::menus::invoke(app, ctx, "effects.copyPresetsFolderPath", json!({})) {
                     app.ui.status = e;
                 }
             }
@@ -354,10 +354,36 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
             _ => {}
         }
     }
+    force_scan
+}
+
+/// The Effects & Presets panel: search, a contents menu (colour-depth and GPU filters, whether
+/// presets show, categories or one alphabetical list, refresh and clear of the recently used
+/// list), then Favourites, Recently Used, Animation Presets and the effects by category or
+/// alphabetically, filtered by the query. Picking an effect or preset applies it to the selection
+/// (`effect.apply` or the preset's own command); applying an effect also records it as recently
+/// used and opens Effect Controls. Without a selected layer it only reports that in
+/// `app.ui.status`.
+pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
+    let t = app.tokens;
+    let ctx = ui.ctx().clone();
+    let p = ui.painter().clone();
+    // Track the last applied effect (menus, drag and drop, the control channel) as recently used.
+    if let Some(last) = app.session.state.last_effect.clone()
+        && app.ui.effects_recent.first() != Some(&last)
+    {
+        push_recent(&mut app.ui.effects_recent, &last);
+    }
+    let sr = Rect::from_min_size(rect.min + vec2(8.0, 8.0), vec2(rect.width() - 44.0, 24.0));
+    let mut q = app.ui.effects_search.clone();
+    widgets::search_field(ui, sr, &mut q, crate::i18n::tr("Search effects and presets"), &t);
+    app.ui.effects_search = q.clone();
+    app.auto.add("effects.search", sr, "Search");
+    let force_scan = contents_menu(app, ui, &ctx, rect, sr, &t);
     let view = app.ui.effects_view.clone();
     let list = Rect::from_min_max(pos2(rect.min.x, sr.max.y + 6.0), rect.max);
     let lp = p.with_clip_rect(list);
-    let scroll = widgets::PanelScroll::begin(ui, egui::Id::unique("fx-scroll"), list);
+    let mut scroll = widgets::PanelScroll::begin(ui, egui::Id::unique("fx-scroll"), list);
     let query = q.trim().to_lowercase();
     let searching = !query.is_empty();
     let mut y = list.min.y - scroll.offset;
@@ -371,6 +397,16 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
 
     // Favorites and Recently Used.
     let favs: Vec<_> = app.session.prefs.effects_favorites.iter().filter_map(|id| lookup(id)).filter(|e| keep(e)).collect();
+    let recent: Vec<_> = app.ui.effects_recent.iter().filter_map(|id| lookup(id)).filter(|e| keep(e)).collect();
+    let reveal_presets = ctx.data_mut(|data| data.remove_temp::<bool>(egui::Id::unique(REVEAL_PRESETS_ID))).unwrap_or(false);
+    if reveal_presets {
+        // These rows come before Animation Presets. Scroll past expanded lists so the section is
+        // visible even when Favorites or Recently Used is long.
+        let preceding_rows =
+            rows_before_presets(favs.len(), recent.len(), searching, app.ui.effects_open.contains("favorites"), app.ui.effects_open.contains("recent"));
+        scroll.offset = ROW_H * preceding_rows as f32;
+        y = list.min.y - scroll.offset;
+    }
     if !favs.is_empty() && folder_row(app, ui, &lp, list, &mut y, "favorites", "Favorites", 0.0, searching, Some(Icon::Star)) {
         let mut favs = favs;
         favs.sort_by_key(|e| e.name);
@@ -378,7 +414,6 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
             effect_row(app, ui, &lp, list, &mut y, e, 0.0, &query, "effects.favorites", &mut apply);
         }
     }
-    let recent: Vec<_> = app.ui.effects_recent.iter().filter_map(|id| lookup(id)).filter(|e| keep(e)).collect();
     if !recent.is_empty() && !searching && folder_row(app, ui, &lp, list, &mut y, "recent", "Recently Used", 0.0, false, None) {
         for e in recent {
             effect_row(app, ui, &lp, list, &mut y, e, 0.0, &query, "effects.recent", &mut apply);

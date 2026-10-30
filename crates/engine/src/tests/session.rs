@@ -86,7 +86,7 @@ fn imported_files_go_into_the_comp_where_they_were_dropped() {
     s.execute("file.import", params).unwrap();
     let comp = s.active_comp().unwrap();
     assert_eq!(comp.layers.iter().map(|l| l.name.as_str()).collect::<Vec<_>>(), ["a.png", "b.png", "Bg"]);
-    for l in &comp.layers[..2] {
+    for l in comp.layers.iter().take(2) {
         assert_eq!(l.props.prop("transform/position").map(|p| p.value.clone()), Some(effectcraft_keyframe::Value::Vec3([40.0, 50.0, 0.0])));
         assert_eq!(l.in_point, effectcraft_time::Tick::from_seconds_f64(1.0));
     }
@@ -157,6 +157,46 @@ fn background_imports_report_progress_and_select_what_arrived() {
     // Agents and scripts import at once by default.
     let r = s.execute("file.import", json!({"paths": ["/drop/e.png"]})).unwrap();
     assert_eq!(r["items"].as_array().map(Vec::len), Some(1));
+}
+
+/// #2573: New Composition From Footage (`file.import {newComp}`) makes one composition of what
+/// the import made, first file on top, at once or when the background job lands; an import that
+/// made nothing makes no comp.
+#[test]
+fn new_comp_from_footage_makes_a_comp_of_what_was_imported() {
+    use effectcraft_project::{Footage, FootageKind, ItemKind};
+    struct Probe;
+    impl crate::Importer for Probe {
+        fn probe(&self, path: &str) -> Result<Footage, String> {
+            if path.ends_with(".xyz") {
+                return Err("unsupported file".into());
+            }
+            Ok(Footage { path: path.into(), kind: FootageKind::Still, width: 64, height: 32, has_video: true, ..Default::default() })
+        }
+    }
+    let mut s = Session { importer: Some(std::sync::Arc::new(Probe)), ..Default::default() };
+    let comps = |s: &Session| s.project.items.values().filter(|i| matches!(i.kind, ItemKind::Comp(_))).count();
+    let layers = |s: &Session| s.active_comp().unwrap().layers.iter().map(|l| l.name.clone()).collect::<Vec<_>>();
+    // At once.
+    s.execute("file.import", json!({"paths": ["/drop/a.png", "/drop/b.xyz"], "newComp": true})).unwrap();
+    assert_eq!(comps(&s), 1);
+    assert_eq!(layers(&s), ["a.png"]);
+    assert_eq!((s.active_comp().unwrap().width, s.active_comp().unwrap().height), (64, 32));
+    // In the background: the job's own items, whatever is selected or active meanwhile; it takes
+    // precedence over `addToComp`.
+    s.execute("file.import", json!({"paths": ["/drop/c.png", "/drop/d.png"], "background": true, "newComp": true, "addToComp": true})).unwrap();
+    s.state.project_selection.clear();
+    s.execute("jobs.wait", json!({})).unwrap();
+    assert_eq!(comps(&s), 2);
+    assert_eq!(layers(&s), ["c.png", "d.png"]);
+    // Nothing imported: no comp, and the failure is reported.
+    s.execute("file.import", json!({"paths": ["/drop/e.xyz"], "background": true, "newComp": true})).unwrap();
+    s.execute("jobs.wait", json!({})).unwrap();
+    assert_eq!(comps(&s), 2);
+    assert!(s.job_log.last().unwrap().message.contains("unsupported file"));
+    let r = s.execute("file.import", json!({"paths": ["/drop/f.xyz"], "newComp": true})).unwrap();
+    assert_eq!(comps(&s), 2);
+    assert_eq!(r["errors"].as_array().map(Vec::len), Some(1));
 }
 
 /// Audio, Lock and Shy don't change pixels: toggling them keeps the cached layers (#103).
@@ -278,6 +318,31 @@ fn toolbar_fill_and_stroke_paint_selected_shape_layers() {
     }
     let cid = s.active_comp_id().unwrap();
     let _ = s.render(cid, s.time(), Default::default());
+}
+
+/// A Wiggle Paths saved without Spatial Phase gets the property, at 0°, after Temporal Phase when
+/// the project opens.
+#[test]
+fn opening_a_wiggle_paths_without_spatial_phase_adds_it() {
+    let mut s = Session::default();
+    s.execute("comp.new", json!({"width": 400, "height": 300, "duration": 2})).unwrap();
+    let sh = s.execute("layer.newShape", json!({"kind": "rect", "fill": "#ff0000"})).unwrap()["layer"].as_u64().unwrap();
+    let uid = s.execute("layer.addShapeItem", json!({"layer": sh, "kind": "wiggle"})).unwrap()["uid"].as_u64().unwrap();
+    let cid = s.active_comp_id().unwrap();
+    let mut old = effectcraft_project::Project::from_json(&s.project.to_file_json().unwrap()).unwrap();
+    let l = old.comp_mut(cid).unwrap().layer_mut(effectcraft_project::LayerId(sh)).unwrap();
+    let g = l.props.find_group_mut(uid).unwrap();
+    g.children.retain(|c| c.match_id() != "spatialPhase");
+    assert_eq!(g.children.len(), 7);
+    let next = old.next_id;
+    s.replace_project(old, None);
+    let l = s.active_comp().unwrap().layer(effectcraft_project::LayerId(sh)).unwrap().clone();
+    let g = l.props.find_group(uid).unwrap();
+    let ids: Vec<&str> = g.children.iter().map(|c| c.match_id()).collect();
+    assert_eq!(ids, ["size", "detail", "points", "speed", "correlation", "phase", "spatialPhase", "seed"]);
+    let sp = g.get("spatialPhase").unwrap();
+    assert_eq!((sp.name.as_str(), &sp.value), ("Spatial Phase", &effectcraft_keyframe::Value::Scalar(0.0)));
+    assert!(sp.uid >= next && s.project.next_id > sp.uid, "a fresh uid: {} (next {next})", sp.uid);
 }
 
 /// The toolbar's Fill Options / Stroke Options change a selected shape layer's paint kind (#732):
@@ -451,6 +516,9 @@ fn set_text_paragraph_fill_and_leading() {
     s.execute("layer.setText", json!({"layer": t, "hScale": 120, "vScale": 80, "baselineShift": 4, "smallCaps": true, "strokeOverFill": true})).unwrap();
     let d = doc(&s);
     assert_eq!((d.h_scale, d.v_scale, d.baseline_shift, d.small_caps, d.stroke_over_fill), (120.0, 80.0, 4.0, true, true));
+    s.execute("layer.setText", json!({"layer": t, "lineJoin": "bevel"})).unwrap();
+    assert_eq!(doc(&s).line_join, effectcraft_keyframe::LineJoin::Bevel);
+    assert!(s.execute("layer.setText", json!({"layer": t, "lineJoin": "square"})).is_err());
 }
 
 #[test]

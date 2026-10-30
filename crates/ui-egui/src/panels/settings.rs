@@ -117,15 +117,20 @@ fn page_ui(app: &mut EffectcraftApp, ui: &mut egui::Ui, page: &Page, cur: &Value
                             ui.add_sized(vec2(label_w, 18.0), egui::Label::new(format!("{}:", tr(label))).truncate());
                             let r = match kind {
                                 Kind::Int(lo, hi, unit) => {
-                                    let mut x = v.as_i64().unwrap_or(0);
-                                    // A typed number applies once entered: typing 85 into UI Scale
-                                    // doesn't resize the interface to 75 % at its first digit.
+                                    // A dragged value applies on release, and a typed one once
+                                    // entered: UI Scale doesn't resize the interface under the
+                                    // pointer mid-drag (#2582) or at a typed number's first digit.
+                                    let held = egui::Id::unique(("settings-drag", key));
+                                    let mut x = ui.data(|d| d.get_temp::<i64>(held)).unwrap_or_else(|| v.as_i64().unwrap_or(0));
                                     let drag = egui::DragValue::new(&mut x).range(lo..=hi).speed(0.25).update_while_editing(false);
                                     let r = ui.add(crate::widgets::drag_value(drag));
                                     if !unit.is_empty() {
                                         ui.label(RichText::new(tr(unit)).color(t.text_dim));
                                     }
-                                    if r.changed() {
+                                    if r.dragged() {
+                                        ui.data_mut(|d| d.insert_temp(held, x));
+                                    } else if r.changed() || r.drag_stopped() {
+                                        ui.data_mut(|d| d.remove::<i64>(held));
                                         acts.push(Act::Set(key.into(), json!(x)));
                                     }
                                     r
@@ -302,19 +307,20 @@ fn theme_preview(ui: &mut egui::Ui, kind: ThemeKind, width: f32) {
     painter.line_segment([pos2(cti, graph.top()), pos2(cti, graph.bottom())], egui::Stroke::new(1.0, p.cti));
 }
 
+/// What [`theme_card`] shows: the setting `key`, the translated `title`, whether the family is
+/// `active`, the `cur`rent theme and the `options` (value, label) to pick from.
+struct ThemeFamily<'a> {
+    key: &'a str,
+    title: &'a str,
+    active: bool,
+    cur: &'a str,
+    options: &'a [(&'a str, &'a str)],
+}
+
 /// One theme family's card: its (translated) name, Active when the appearance shows it now, a preview of the
 /// chosen theme and a radio button per theme.
-fn theme_card(
-    app: &mut EffectcraftApp,
-    ui: &mut egui::Ui,
-    t: &Tokens,
-    key: &str,
-    title: &str,
-    active: bool,
-    cur: &str,
-    options: &[(&str, &str)],
-    acts: &mut Vec<Act>,
-) {
+fn theme_card(app: &mut EffectcraftApp, ui: &mut egui::Ui, t: &Tokens, fam: ThemeFamily, acts: &mut Vec<Act>) {
+    let ThemeFamily { key, title, active, cur, options } = fam;
     egui::Frame::new()
         .fill(t.field_bg)
         .stroke(egui::Stroke::new(1.0, if active { t.accent } else { t.field_border }))
@@ -396,8 +402,20 @@ fn appearance_ui(app: &mut EffectcraftApp, ui: &mut egui::Ui, cur: &Value, t: &T
     let light_active = mode == "light" || (mode == "auto" && system_light == Some(true));
     ui.columns(2, |cols| {
         let [l, d] = cols else { return };
-        theme_card(app, l, t, "appearance.lightTheme", tr("Light Theme"), light_active, &light, LIGHT_THEMES, acts);
-        theme_card(app, d, t, "appearance.darkTheme", tr("Dark Theme"), !light_active, &dark, DARK_THEMES, acts);
+        theme_card(
+            app,
+            l,
+            t,
+            ThemeFamily { key: "appearance.lightTheme", title: tr("Light Theme"), active: light_active, cur: &light, options: LIGHT_THEMES },
+            acts,
+        );
+        theme_card(
+            app,
+            d,
+            t,
+            ThemeFamily { key: "appearance.darkTheme", title: tr("Dark Theme"), active: !light_active, cur: &dark, options: DARK_THEMES },
+            acts,
+        );
     });
     ui.add_space(6.0);
 }
@@ -790,9 +808,9 @@ pub fn recovery(app: &mut EffectcraftApp, ctx: &egui::Context, t: &Tokens) {
                 if m < 1 {
                     "less than a minute ago".to_string()
                 } else if m < 120 {
-                    format!("{m} minutes ago")
+                    tr_args("{} minutes ago", &[&m])
                 } else {
-                    format!("{} hours ago", m / 60)
+                    tr_args("{} hours ago", &[&(m / 60)])
                 }
             });
             ui.label(tr_args("Latest auto-save: {}", &[&a]));
