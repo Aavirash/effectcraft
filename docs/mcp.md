@@ -12,8 +12,8 @@ written only under a write root; with no write root nothing is written. Every en
 parameters must be absolute paths inside the roots (symbolic links resolved, no `..`), and so must
 any other absolute path in its parameters. Save, Increment and Save and rendering the Render
 Queue are checked against the files they write (the open project's, the queued outputs);
-`renderQueue.add` without `output` needs a saved project, since an unsaved one's default output
-would go to the home folder (#2479). Scripts
+`renderQueue.add`, `render.preRender` and `file.createProxy` without an output file need a saved
+project, since an unsaved one's default output would go to the home folder (#2479). Scripts
 (`run_script`, `file.runScript`…), Execute File, Reveal in Finder, `$N` references to file paths
 in a batch, and the bridge's UI-driving tools (`ui_click`, `ui_key`, `ui_type`, `ui_drag`,
 `ui_set`, `script_ui`, `control`) are refused while confined. Without the flags nothing changes.
