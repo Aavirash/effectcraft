@@ -308,8 +308,8 @@ impl Default for ViewerState {
 
 impl TimelineState {
     /// Whether property `uid`'s chain link (Constrain Proportions) is on. One that starts linked
-    /// (Scale, Mask Feather) records a click in `unlinked`; one that starts unlinked (Audio Levels)
-    /// records it in `linked`.
+    /// (Scale, Mask Feather) records a click in `unlinked`; one that starts unlinked (shape Size,
+    /// Audio Levels) records it in `linked`.
     pub fn is_linked(&self, uid: u64, linked_by_default: bool) -> bool {
         if linked_by_default { !self.unlinked.contains(&uid) } else { self.linked.contains(&uid) }
     }
@@ -439,7 +439,8 @@ pub struct TimelineState {
     /// was turned off.
     #[serde(default)]
     pub unlinked: BTreeSet<u64>,
-    /// Audio Levels properties whose channel link (off by default) was turned on (#2485).
+    /// Shape Rectangle and Ellipse Path Size (#2489) and Audio Levels (#2485) properties whose
+    /// chain link (off by default) was turned on.
     #[serde(default)]
     pub linked: BTreeSet<u64>,
     /// The project (its epoch) `unlinked` and `linked` belong to.
